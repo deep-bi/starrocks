@@ -688,7 +688,7 @@ ADMIN SET FRONTEND CONFIG ("key" = "value");
 
 ##### mysql_server_version
 
-- Default: 5.1.0
+- Default: 8.0.33
 - Type: String
 - Unit: -
 - Is mutable: Yes
@@ -1507,6 +1507,24 @@ Starting from version 3.3.0, the system defaults to refreshing one partition at 
 - Description: The maximum number of times that the optimizer can rewrite a scalar operator.
 - Introduced in: -
 
+##### max_scalar_operator_optimize_depth
+
+- Default：256
+- Type：Int
+- Unit：-
+- Is mutable: Yes
+- Description: The maximum depth that ScalarOperator optimization can be applied.
+- Introduced in: -
+
+##### max_scalar_operator_flat_children
+
+- Default：10000
+- Type：Int
+- Unit：-
+- Is mutable: Yes
+- Description：The maximum number of flat children for ScalarOperator. You can set this limit to prevent the optimizer from using too much memory.
+- Introduced in: -
+
 ##### enable_statistic_collect
 
 - Default: true
@@ -2254,6 +2272,24 @@ Starting from version 3.3.0, the system defaults to refreshing one partition at 
 - Description: Routine Load job is set to the UNSTABLE state if any task within the Routine Load job lags. To be specific, the difference between the timestamp of the message being consumed and the current time exceeds this threshold, and unconsumed messages exist in the data source.
 - Introduced in: -
 
+##### enable_routine_load_lag_metrics
+
+- Default: false
+- Type: Boolean
+- Unit: -
+- Is mutable: Yes
+- Description: Whether to collect Routine Load Kafka partition offset lag metrics. Please note that set this item to `true` will call the Kafka API to get the partition's latest offset.
+- Introduced in: -
+
+##### min_routine_load_lag_for_metrics
+
+- Default: 10000
+- Type: INT
+- Unit: -
+- Is mutable: Yes
+- Description: The minimum offset lag of Routine Load jobs to be shown in monitoring metrics. Routine Load jobs whose offset lags are greater than this value will be displayed in the metrics.
+- Introduced in: -
+
 ##### max_tolerable_backend_down_num
 
 - Default: 0
@@ -2899,27 +2935,6 @@ Starting from version 3.3.0, the system defaults to refreshing one partition at 
 
 - Introduced in: -
 
-<!--
-##### shard_group_clean_threshold_sec
-
-- Default: 3600
-- Type: Long
-- Unit: Seconds
-- Is mutable: No
-- Description:
-- Introduced in: -
--->
-
-<!--
-##### star_mgr_meta_sync_interval_sec
-
-- Default: 600
-- Type: Long
-- Unit: Seconds
-- Is mutable: No
-- Description:
-- Introduced in: -
--->
 
 ##### cloud_native_meta_port
 
@@ -3116,6 +3131,42 @@ Starting from version 3.3.0, the system defaults to refreshing one partition at 
 - Description: The shared access signatures (SAS) used to authorize requests for your Azure Data Lake Storage Gen2.
 - Introduced in: v3.4.1
 
+##### azure_adls2_oauth2_use_managed_identity
+
+- Default: false
+- Type: Boolean
+- Unit: -
+- Is mutable: No
+- Description: Whether to use Managed Identity to authorize requests for your Azure Data Lake Storage Gen2.
+- Introduced in: v3.4.4
+
+##### azure_adls2_oauth2_tenant_id
+
+- Default: Empty string
+- Type: String
+- Unit: -
+- Is mutable: No
+- Description: The Tenant ID of the Managed Identity used to authorize requests for your Azure Data Lake Storage Gen2.
+- Introduced in: v3.4.4
+
+##### azure_adls2_oauth2_client_id
+
+- Default: Empty string
+- Type: String
+- Unit: -
+- Is mutable: No
+- Description: The Client ID of the Managed Identity used to authorize requests for your Azure Data Lake Storage Gen2.
+- Introduced in: v3.4.4
+
+##### azure_use_native_sdk
+
+- Default: true
+- Type: Boolean
+- Unit: -
+- Is mutable: Yes
+- Description: Whether to use the native SDK to access Azure Blob Storage, thus allowing authentication with Managed Identities and Service Principals. If this item is set to `false`, only authentication with Shared Key and SAS Token is allowed.
+- Introduced in: v3.4.4
+
 <!--
 ##### starmgr_grpc_timeout_seconds
 
@@ -3286,6 +3337,15 @@ Starting from version 3.3.0, the system defaults to refreshing one partition at 
 - Description: The table or partition list of which compaction is disabled in shared-data mode. The format is `tableId1;partitionId2`, seperated by semicolon, for example, `12345;98765`.
 - Introduced in: v3.4.4
 
+##### lake_compaction_allow_partial_success
+
+- Default: true
+- Type: Boolean
+- Unit: -
+- Is mutable: Yes
+- Description: If this item is set to `true`, the system will consider the Compaction operation in a shared-data cluster as successful when one of the sub-tasks succeeds.
+- Introduced in: v3.5.2
+
 ##### lake_enable_balance_tablets_between_workers
 
 - Default: false
@@ -3303,6 +3363,33 @@ Starting from version 3.3.0, the system defaults to refreshing one partition at 
 - Is mutable: Yes
 - Description: The threshold the system used to judge the tablet balance among workers in a shared-data cluster, The imbalance factor is calculated as `f = (MAX(tablets) - MIN(tablets)) / AVERAGE(tablets)`. If the factor is greater than `lake_balance_tablets_threshold`, a tablet balance will be triggered. This item takes effect only when `lake_enable_balance_tablets_between_workers` is set to `true`.
 - Introduced in: v3.3.4
+
+##### shard_group_clean_threshold_sec
+
+- Default: 3600
+- Type: Long
+- Unit: Seconds
+- Is mutable: Yes
+- Description: The time before FE cleans the unused tablet and shard groups in a shared-data cluster. Tablets and shard groups created within this threshold will not be cleaned.
+- Introduced in: -
+
+##### star_mgr_meta_sync_interval_sec
+
+- Default: 600
+- Type: Long
+- Unit: Seconds
+- Is mutable: No
+- Description: The interval at which FE runs the periodical metadata synchronization with StarMgr in a shared-data cluster.
+- Introduced in: -
+
+##### meta_sync_force_delete_shard_meta
+
+- Default: false
+- Type: Boolean
+- Unit: -
+- Is mutable: Yes
+- Description: Whether to allow deleting the metadata of the shared-data cluster directly, bypassing cleaning the remote storage files. It is recommended to set this item to `true` only when there is an excessive number of shards to be cleaned, which leads to extreme memory pressure on the FE JVM. Note that the data files belonging to the shards or tablets cannot be automatically cleaned after this feature is enabled.
+- Introduced in: v3.2.10, v3.3.3
 
 ### Other
 
@@ -4868,6 +4955,15 @@ Starting from version 3.3.0, the system defaults to refreshing one partition at 
 - Is mutable: Yes
 - Description: Whether to enable query-level materialized view rewrite cache to improve query rewrite performance.
 - Introduced in: v3.3
+
+##### enable_materialized_view_concurrent_prepare
+
+- Default: true
+- Type: Boolean
+- Unit:
+- Is mutable: Yes
+- Description: Prepare materialized view concurrently to improve performance
+- Introduced in: v3.4.4
 
 ##### mv_query_context_cache_max_size
 

@@ -24,6 +24,7 @@
 #include "column/vectorized_fwd.h"
 #include "common/config.h"
 #include "common/status.h"
+#include "exec/agg_runtime_filter_builder.h"
 #include "exec/aggregate/agg_profile.h"
 #include "exec/exec_node.h"
 #include "exec/limited_pipeline_chunk_buffer.h"
@@ -877,6 +878,13 @@ Status Aggregator::compute_batch_agg_states_with_selection(Chunk* chunk, size_t 
     return Status::OK();
 }
 
+RuntimeFilter* Aggregator::build_in_filters(RuntimeState* state, RuntimeFilterBuildDescriptor* desc) {
+    int expr_order = desc->build_expr_order();
+    const auto& group_type_type = _group_by_types[expr_order].result_type.type;
+    AggInRuntimeFilterBuilder in_builder(desc, group_type_type);
+    return in_builder.build(this, state->obj_pool());
+}
+
 Status Aggregator::_evaluate_const_columns(int i) {
     // used for const columns.
     Columns const_columns;
@@ -1143,7 +1151,7 @@ Columns Aggregator::_create_agg_result_columns(size_t num_rows, bool use_interme
     return agg_result_columns;
 }
 
-Columns Aggregator::_create_group_by_columns(size_t num_rows) {
+Columns Aggregator::_create_group_by_columns(size_t num_rows) const {
     Columns group_by_columns(_group_by_types.size());
     for (size_t i = 0; i < _group_by_types.size(); ++i) {
         group_by_columns[i] =
@@ -1278,86 +1286,12 @@ bool is_group_columns_fixed_size(std::vector<ExprContext*>& group_by_expr_ctxs, 
     return true;
 }
 
-#define CHECK_AGGR_PHASE_DEFAULT()                                                                                    \
-    {                                                                                                                 \
-        type = _aggr_phase == AggrPhase1 ? HashVariantType::Type::phase1_slice : HashVariantType::Type::phase2_slice; \
-        break;                                                                                                        \
-    }
-
 template <typename HashVariantType>
 void Aggregator::_init_agg_hash_variant(HashVariantType& hash_variant) {
     auto type = _aggr_phase == AggrPhase1 ? HashVariantType::Type::phase1_slice : HashVariantType::Type::phase2_slice;
-    if (_has_nullable_key) {
-        switch (_group_by_expr_ctxs.size()) {
-        case 0:
-            break;
-        case 1: {
-            auto group_by_expr = _group_by_expr_ctxs[0];
-            switch (group_by_expr->root()->type().type) {
-#define CHECK_AGGR_PHASE(TYPE, VALUE)                                                  \
-    case TYPE: {                                                                       \
-        type = _aggr_phase == AggrPhase1 ? HashVariantType::Type::phase1_null_##VALUE  \
-                                         : HashVariantType::Type::phase2_null_##VALUE; \
-        break;                                                                         \
-    }
-                CHECK_AGGR_PHASE(TYPE_BOOLEAN, uint8);
-                CHECK_AGGR_PHASE(TYPE_TINYINT, int8);
-                CHECK_AGGR_PHASE(TYPE_SMALLINT, int16);
-                CHECK_AGGR_PHASE(TYPE_INT, int32);
-                CHECK_AGGR_PHASE(TYPE_DECIMAL32, decimal32);
-                CHECK_AGGR_PHASE(TYPE_BIGINT, int64);
-                CHECK_AGGR_PHASE(TYPE_DECIMAL64, decimal64);
-                CHECK_AGGR_PHASE(TYPE_DATE, date);
-                CHECK_AGGR_PHASE(TYPE_DATETIME, timestamp);
-                CHECK_AGGR_PHASE(TYPE_DECIMAL128, decimal128);
-                CHECK_AGGR_PHASE(TYPE_LARGEINT, int128);
-                CHECK_AGGR_PHASE(TYPE_CHAR, string);
-                CHECK_AGGR_PHASE(TYPE_VARCHAR, string);
-
-#undef CHECK_AGGR_PHASE
-            default:
-                CHECK_AGGR_PHASE_DEFAULT();
-            }
-        } break;
-        default:
-            CHECK_AGGR_PHASE_DEFAULT();
-        }
-    } else {
-        switch (_group_by_expr_ctxs.size()) {
-        case 0:
-            break;
-        case 1: {
-            auto group_by_expr = _group_by_expr_ctxs[0];
-            switch (group_by_expr->root()->type().type) {
-#define CHECK_AGGR_PHASE(TYPE, VALUE)                                             \
-    case TYPE: {                                                                  \
-        type = _aggr_phase == AggrPhase1 ? HashVariantType::Type::phase1_##VALUE  \
-                                         : HashVariantType::Type::phase2_##VALUE; \
-        break;                                                                    \
-    }
-                CHECK_AGGR_PHASE(TYPE_BOOLEAN, uint8);
-                CHECK_AGGR_PHASE(TYPE_TINYINT, int8);
-                CHECK_AGGR_PHASE(TYPE_SMALLINT, int16);
-                CHECK_AGGR_PHASE(TYPE_INT, int32);
-                CHECK_AGGR_PHASE(TYPE_DECIMAL32, decimal32);
-                CHECK_AGGR_PHASE(TYPE_BIGINT, int64);
-                CHECK_AGGR_PHASE(TYPE_DECIMAL64, decimal64);
-                CHECK_AGGR_PHASE(TYPE_DATE, date);
-                CHECK_AGGR_PHASE(TYPE_DATETIME, timestamp);
-                CHECK_AGGR_PHASE(TYPE_LARGEINT, int128);
-                CHECK_AGGR_PHASE(TYPE_DECIMAL128, decimal128);
-                CHECK_AGGR_PHASE(TYPE_CHAR, string);
-                CHECK_AGGR_PHASE(TYPE_VARCHAR, string);
-
-#undef CHECK_AGGR_PHASE
-
-            default:
-                CHECK_AGGR_PHASE_DEFAULT();
-            }
-        } break;
-        default:
-            CHECK_AGGR_PHASE_DEFAULT();
-        }
+    if (_group_by_expr_ctxs.size() == 1) {
+        type = HashVariantResolver<HashVariantType>::instance().get_unary_type(
+                _aggr_phase, _group_by_types[0].result_type.type, _has_nullable_key);
     }
 
     bool has_null_column = false;
@@ -1428,12 +1362,13 @@ void Aggregator::_build_hash_map_with_shared_limit(size_t chunk_size, std::atomi
         build_hash_map_with_selection(chunk_size);
         return;
     } else {
-        _streaming_selection.assign(chunk_size, 0);
+        _streaming_selection.resize(chunk_size);
     }
     _hash_map_variant.visit([&](auto& hash_map_with_key) {
         using MapType = std::remove_reference_t<decltype(*hash_map_with_key)>;
-        hash_map_with_key->build_hash_map(chunk_size, _group_by_columns, _mem_pool.get(), AllocateState<MapType>(this),
-                                          &_tmp_agg_states);
+        hash_map_with_key->build_hash_map_with_limit(chunk_size, _group_by_columns, _mem_pool.get(),
+                                                     AllocateState<MapType>(this), &_tmp_agg_states,
+                                                     &_streaming_selection, _limit);
     });
     shared_limit_countdown.fetch_sub(_hash_map_variant.size() - start_size, std::memory_order_relaxed);
 }

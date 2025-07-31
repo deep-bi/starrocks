@@ -84,7 +84,6 @@ import com.starrocks.qe.scheduler.slot.DeployState;
 import com.starrocks.qe.scheduler.slot.LogicalSlot;
 import com.starrocks.rpc.RpcException;
 import com.starrocks.server.GlobalStateMgr;
-import com.starrocks.service.arrow.flight.sql.ArrowFlightSqlConnectContext;
 import com.starrocks.sql.LoadPlanner;
 import com.starrocks.sql.ast.UserIdentity;
 import com.starrocks.sql.plan.ExecPlan;
@@ -283,7 +282,8 @@ public class DefaultCoordinator extends Coordinator {
         queryProfile.attachInstances(Collections.singletonList(queryId));
         queryProfile.attachExecutionProfiles(executionDAG.getExecutions());
 
-        this.coordinatorPreprocessor = null;
+        this.coordinatorPreprocessor = new CoordinatorPreprocessor(connectContext, jobSpec, false);
+        this.scheduler = new AllAtOnceExecutionSchedule();
     }
 
     DefaultCoordinator(ConnectContext context, JobSpec jobSpec) {
@@ -597,8 +597,8 @@ public class DefaultCoordinator extends Coordinator {
                 "predicted memory cost: " + getPredictedCost() + "\n" : "";
         return predict +
                 executionDAG.getFragmentsInPreorder().stream()
-                .map(ExecutionFragment::getExplainString)
-                .collect(Collectors.joining("\n"));
+                        .map(ExecutionFragment::getExplainString)
+                        .collect(Collectors.joining("\n"));
     }
 
     private void prepareProfile() {
@@ -1268,12 +1268,8 @@ public class DefaultCoordinator extends Coordinator {
         }
     }
 
+    @Override
     public boolean tryProcessProfileAsync(Consumer<Boolean> task) {
-        if (connectContext instanceof ArrowFlightSqlConnectContext) {
-            queryProfile.addListener(task);
-            return true;
-        }
-
         if (executionDAG.getExecutions().isEmpty() && (!isShortCircuit)) {
             return false;
         }

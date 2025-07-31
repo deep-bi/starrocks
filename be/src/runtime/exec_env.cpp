@@ -465,6 +465,18 @@ Status CacheEnv::_init_datacache() {
             total_quota_bytes += disk_size;
         }
 
+        // Automatically clean the old stale datacache to free disk space.
+        if (!config::block_cache_disk_path.empty()) {
+            LOG(WARNING) << "The `datacache_disk_path` and `block_cache_disk_path` have been deprecated and will be "
+                         << "ignored, currently the cache data is located in `${storage_root_path}/datacache`.";
+            std::vector<std::string> cur_cache_paths;
+            cur_cache_paths.reserve(cache_options.disk_spaces.size());
+            for (auto& space : cache_options.disk_spaces) {
+                cur_cache_paths.push_back(space.path);
+            }
+            DataCacheUtils::clean_stale_datacache(config::block_cache_disk_path, cur_cache_paths);
+        }
+
         if (cache_options.disk_spaces.empty() || total_quota_bytes != 0) {
             config::datacache_auto_adjust_enable = false;
         }
@@ -602,6 +614,13 @@ Status ExecEnv::init(const std::vector<StorePath>& store_paths, bool as_cn) {
         query_rpc_threads = CpuInfo::num_cores();
     }
     _query_rpc_pool = new PriorityThreadPool("query_rpc", query_rpc_threads, std::numeric_limits<uint32_t>::max());
+
+    int datacache_rpc_threads = config::internal_service_datacache_rpc_thread_num;
+    if (datacache_rpc_threads <= 0) {
+        datacache_rpc_threads = CpuInfo::num_cores();
+    }
+    _datacache_rpc_pool =
+            new PriorityThreadPool("datacache_rpc", datacache_rpc_threads, std::numeric_limits<uint32_t>::max());
 
     // The _load_rpc_pool now handles routine load RPC and table function RPC.
     RETURN_IF_ERROR(ThreadPoolBuilder("load_rpc") // thread pool for load rpc
@@ -858,6 +877,10 @@ void ExecEnv::stop() {
         _query_rpc_pool->shutdown();
     }
 
+    if (_datacache_rpc_pool) {
+        _datacache_rpc_pool->shutdown();
+    }
+
     if (_load_rpc_pool) {
         _load_rpc_pool->shutdown();
     }
@@ -926,6 +949,7 @@ void ExecEnv::destroy() {
     SAFE_DELETE(_pipeline_prepare_pool);
     SAFE_DELETE(_pipeline_sink_io_pool);
     SAFE_DELETE(_query_rpc_pool);
+    SAFE_DELETE(_datacache_rpc_pool);
     _load_rpc_pool.reset();
     _workgroup_manager->destroy();
     _workgroup_manager.reset();
@@ -1054,6 +1078,10 @@ void ExecEnv::try_release_resource_before_core_dump() {
     }
     if (_query_rpc_pool != nullptr && need_release("query_rpc_thread_pool")) {
         _query_rpc_pool->shutdown();
+    }
+    if (_datacache_rpc_pool != nullptr && need_release("datacache_rpc_thread_pool")) {
+        _datacache_rpc_pool->shutdown();
+        LOG(INFO) << "shutdown datacache rpc thread pool";
     }
     if (_agent_server != nullptr && need_release("publish_version_worker_pool")) {
         _agent_server->stop_task_worker_pool(TaskWorkerType::PUBLISH_VERSION);

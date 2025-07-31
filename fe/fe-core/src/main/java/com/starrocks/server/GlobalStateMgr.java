@@ -228,6 +228,7 @@ import com.starrocks.system.Backend;
 import com.starrocks.system.ComputeNode;
 import com.starrocks.system.Frontend;
 import com.starrocks.system.HeartbeatMgr;
+import com.starrocks.system.HistoricalNodeMgr;
 import com.starrocks.system.PortConnectivityChecker;
 import com.starrocks.system.SystemInfoService;
 import com.starrocks.task.LeaderTaskExecutor;
@@ -251,9 +252,9 @@ import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.EOFException;
 import java.io.File;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.OutputStream;
 import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -467,6 +468,8 @@ public class GlobalStateMgr {
     private final CompactionControlScheduler compactionControlScheduler;
 
     private final WarehouseManager warehouseMgr;
+
+    private final HistoricalNodeMgr historicalNodeMgr;
 
     private final ConfigRefreshDaemon configRefreshDaemon;
 
@@ -740,6 +743,7 @@ public class GlobalStateMgr {
         this.localMetastore = new LocalMetastore(this, recycleBin, colocateTableIndex);
         this.temporaryTableMgr = new TemporaryTableMgr();
         this.warehouseMgr = new WarehouseManager();
+        this.historicalNodeMgr = new HistoricalNodeMgr();
         this.connectorMgr = new ConnectorMgr();
         this.connectorTblMetaInfoMgr = new ConnectorTblMetaInfoMgr();
         this.metadataMgr = new MetadataMgr(localMetastore, temporaryTableMgr, connectorMgr, connectorTblMetaInfoMgr);
@@ -1014,6 +1018,10 @@ public class GlobalStateMgr {
         return warehouseMgr;
     }
 
+    public HistoricalNodeMgr getHistoricalNodeMgr() {
+        return historicalNodeMgr;
+    }
+
     public List<QueryStatisticsInfo> getQueryStatisticsInfoFromOtherFEs() {
         return nodeMgr.getQueryStatisticsInfoFromOtherFEs();
     }
@@ -1251,6 +1259,11 @@ public class GlobalStateMgr {
             replayer = null;
         }
 
+        if (!isDefaultWarehouseCreated) {
+            // A brand-new cluster was up for the first time, the leader node initializes its default warehouse here.
+            initDefaultWarehouse();
+        }
+
         // set this after replay thread stopped. to avoid replay thread modify them.
         isReady.set(false);
 
@@ -1291,10 +1304,6 @@ public class GlobalStateMgr {
             // start other daemon threads that should run on all FEs
             startAllNodeTypeDaemonThreads();
             insertOverwriteJobMgr.cancelRunningJobs();
-
-            if (!isDefaultWarehouseCreated) {
-                initDefaultWarehouse();
-            }
 
             MetricRepo.init();
 
@@ -1368,11 +1377,13 @@ public class GlobalStateMgr {
         // Export checker
         ExportChecker.init(Config.export_checker_interval_second * 1000L);
         ExportChecker.startAll();
-        // Tablet checker and scheduler
-        tabletChecker.start();
-        tabletScheduler.start();
-        // Colocate tables balancer
-        ColocateTableBalancer.getInstance().start();
+        if (!RunMode.isSharedDataMode()) {
+            // Tablet checker and scheduler
+            tabletChecker.start();
+            tabletScheduler.start();
+            // Colocate tables balancer
+            ColocateTableBalancer.getInstance().start();
+        }
         // Publish Version Daemon
         publishVersionDaemon.start();
         // Start txn timeout checker
@@ -1503,18 +1514,18 @@ public class GlobalStateMgr {
             return;
         }
 
-        // transfer from INIT/UNKNOWN to OBSERVER/FOLLOWER
+        if (!isDefaultWarehouseCreated) {
+            // A brand-new cluster was up for the first time, the follower/observer node initializes its default warehouse here.
+            initDefaultWarehouse();
+        }
 
+        // transfer from INIT/UNKNOWN to OBSERVER/FOLLOWER
         if (replayer == null) {
             createReplayer();
             replayer.start();
         }
 
         startAllNodeTypeDaemonThreads();
-
-        if (!isDefaultWarehouseCreated) {
-            initDefaultWarehouse();
-        }
 
         MetricRepo.init();
 
@@ -1571,6 +1582,7 @@ public class GlobalStateMgr {
                 .put(SRMetaBlockID.WAREHOUSE_MGR, warehouseMgr::load)
                 .put(SRMetaBlockID.CLUSTER_SNAPSHOT_MGR, clusterSnapshotMgr::load)
                 .put(SRMetaBlockID.BLACKLIST_MGR, sqlBlackList::load)
+                .put(SRMetaBlockID.HISTORICAL_NODE_MGR, historicalNodeMgr::load)
                 .build();
 
         Set<SRMetaBlockID> metaMgrMustExists = new HashSet<>(loadImages.keySet());
@@ -1749,7 +1761,7 @@ public class GlobalStateMgr {
         LOG.info("start save image to {}. is ckpt: {}", curFile.getAbsolutePath(), GlobalStateMgr.isCheckpointThread());
 
         long saveImageStartTime = System.currentTimeMillis();
-        try (OutputStream outputStream = Files.newOutputStream(curFile.toPath())) {
+        try (FileOutputStream outputStream = new FileOutputStream(curFile)) {
             imageWriter.setOutputStream(outputStream);
             try {
                 saveHeader(imageWriter.getDataOutputStream());
@@ -1787,10 +1799,14 @@ public class GlobalStateMgr {
                 warehouseMgr.save(imageWriter);
                 sqlBlackList.save(imageWriter);
                 clusterSnapshotMgr.save(imageWriter);
+                historicalNodeMgr.save(imageWriter);
             } catch (SRMetaBlockException e) {
                 LOG.error("Save meta block failed ", e);
                 throw new IOException("Save meta block failed ", e);
             }
+
+            imageWriter.getDataOutputStream().flush();
+            outputStream.getChannel().force(true);
 
             imageWriter.saveChecksum();
 

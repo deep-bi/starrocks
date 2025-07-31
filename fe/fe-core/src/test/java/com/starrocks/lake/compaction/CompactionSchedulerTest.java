@@ -17,11 +17,14 @@ package com.starrocks.lake.compaction;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Sets;
 import com.starrocks.catalog.Database;
+import com.starrocks.catalog.MaterializedIndex;
+import com.starrocks.catalog.OlapTable;
 import com.starrocks.catalog.PhysicalPartition;
 import com.starrocks.catalog.Table;
 import com.starrocks.common.Config;
 import com.starrocks.lake.LakeTable;
 import com.starrocks.server.GlobalStateMgr;
+import com.starrocks.server.LocalMetastore;
 import com.starrocks.server.WarehouseManager;
 import com.starrocks.sql.common.MetaUtils;
 import com.starrocks.system.Backend;
@@ -32,8 +35,8 @@ import com.starrocks.utframe.MockedWarehouseManager;
 import mockit.Mock;
 import mockit.MockUp;
 import mockit.Mocked;
-import org.junit.Assert;
-import org.junit.Test;
+import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.Test;
 
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
@@ -55,19 +58,58 @@ public class CompactionSchedulerTest {
                         GlobalStateMgr.getCurrentState().getGlobalTransactionMgr(), GlobalStateMgr.getCurrentState(),
                         Config.lake_compaction_disable_ids);
 
-        Assert.assertTrue(compactionScheduler.isTableDisabled(23456L));
-        Assert.assertTrue(compactionScheduler.isPartitionDisabled(23456L));
+        Assertions.assertTrue(compactionScheduler.isTableDisabled(23456L));
+        Assertions.assertTrue(compactionScheduler.isPartitionDisabled(23456L));
 
         compactionScheduler.disableTableOrPartitionId("34567;45678;56789");
 
-        Assert.assertFalse(compactionScheduler.isPartitionDisabled(23456L));
-        Assert.assertTrue(compactionScheduler.isTableDisabled(34567L));
-        Assert.assertTrue(compactionScheduler.isTableDisabled(45678L));
-        Assert.assertTrue(compactionScheduler.isPartitionDisabled(56789L));
+        Assertions.assertFalse(compactionScheduler.isPartitionDisabled(23456L));
+        Assertions.assertTrue(compactionScheduler.isTableDisabled(34567L));
+        Assertions.assertTrue(compactionScheduler.isTableDisabled(45678L));
+        Assertions.assertTrue(compactionScheduler.isPartitionDisabled(56789L));
 
         compactionScheduler.disableTableOrPartitionId("");
-        Assert.assertFalse(compactionScheduler.isTableDisabled(34567L));
+        Assertions.assertFalse(compactionScheduler.isTableDisabled(34567L));
         Config.lake_compaction_disable_ids = "";
+    }
+
+    @Test
+    public void testStartCompaction() {
+        OlapTable table = new LakeTable();
+        CompactionMgr compactionManager = new CompactionMgr();
+        PartitionIdentifier partition = new PartitionIdentifier(1, 2, 3);
+        PartitionStatistics statistics = new PartitionStatistics(partition);
+        Quantiles q = new Quantiles(1.0, 2.0, 3.0);
+        statistics.setCompactionScore(q);
+        PartitionStatisticsSnapshot snapshot = new PartitionStatisticsSnapshot(statistics);
+        CompactionScheduler compactionScheduler = new CompactionScheduler(compactionManager, null, globalTransactionMgr,
+                globalStateMgr, "");
+        new MockUp<GlobalStateMgr>() {
+            @Mock
+            public LocalMetastore getLocalMetastore() {
+                return new LocalMetastore(globalStateMgr, null, null);
+            }
+        };
+        new MockUp<LocalMetastore>() {
+            @Mock
+            public Database getDb(long dbId) {
+                return new Database(100, "aaa");
+            }
+            @Mock
+            public Table getTable(Long dbId, Long tableId) {
+                return table;
+            }
+        };
+        new MockUp<OlapTable>() {
+            @Mock
+            public PhysicalPartition getPhysicalPartition(long physicalPartitionId) {
+                return new PhysicalPartition(123, "aaa", 123, new MaterializedIndex());
+            }
+        };
+        table.setState(OlapTable.OlapTableState.SCHEMA_CHANGE);
+        Assertions.assertNull(compactionScheduler.startCompaction(snapshot));
+        table.setState(OlapTable.OlapTableState.NORMAL);
+        Assertions.assertNull(compactionScheduler.startCompaction(snapshot));
     }
 
     @Test
@@ -99,8 +141,8 @@ public class CompactionSchedulerTest {
         };
 
         List<CompactionRecord> list = compactionScheduler.getHistory();
-        Assert.assertEquals(2, list.size());
-        Assert.assertTrue(list.get(0).getStartTs() >= list.get(1).getStartTs());
+        Assertions.assertEquals(2, list.size());
+        Assertions.assertTrue(list.get(0).getStartTs() <= list.get(1).getStartTs());
     }
 
     @Test
@@ -110,7 +152,7 @@ public class CompactionSchedulerTest {
         int defaultValue = Config.lake_compaction_max_tasks;
         // explicitly set config to a value bigger than default -1
         Config.lake_compaction_max_tasks = 10;
-        Assert.assertEquals(10, compactionScheduler.compactionTaskLimit());
+        Assertions.assertEquals(10, compactionScheduler.compactionTaskLimit());
 
         // reset config to default value
         Config.lake_compaction_max_tasks = defaultValue;
@@ -127,7 +169,7 @@ public class CompactionSchedulerTest {
             }
         };
         mockedWarehouseManager.setComputeNodesAssignedToTablet(Sets.newHashSet(b1, c1, c2));
-        Assert.assertEquals(3 * 16, compactionScheduler.compactionTaskLimit());
+        Assertions.assertEquals(3 * 16, compactionScheduler.compactionTaskLimit());
     }
 
     @Test
@@ -176,7 +218,7 @@ public class CompactionSchedulerTest {
             }
         };
         compactionScheduler.runOneCycle();
-        Assert.assertEquals(2, compactionScheduler.getRunningCompactions().size());
+        Assertions.assertEquals(2, compactionScheduler.getRunningCompactions().size());
 
         CompactionScheduler.PARTITION_CLEAN_INTERVAL_SECOND = 0;
         new MockUp<MetaUtils>() {
@@ -196,6 +238,6 @@ public class CompactionSchedulerTest {
             }
         };
         compactionScheduler.runOneCycle();
-        Assert.assertEquals(0, compactionScheduler.getRunningCompactions().size());
+        Assertions.assertEquals(0, compactionScheduler.getRunningCompactions().size());
     }
 }

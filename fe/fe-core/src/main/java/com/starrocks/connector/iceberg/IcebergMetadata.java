@@ -831,19 +831,26 @@ public class IcebergMetadata implements ConnectorMetadata {
         }
 
         IcebergTable icebergTable = (IcebergTable) table;
-        List<ScalarOperator> scalarOperators = Utils.extractConjuncts(params.getPredicate());
-        ScalarOperatorToIcebergExpr.IcebergContext icebergContext = new ScalarOperatorToIcebergExpr.IcebergContext(
-                icebergTable.getNativeTable().schema().asStruct());
-        Expression icebergPredicate = new ScalarOperatorToIcebergExpr().convert(scalarOperators, icebergContext);
-        RemoteFileInfoSource baseSource = buildRemoteInfoSource(icebergTable, icebergPredicate, snapshotId.get());
+
+        String dbName = table.getCatalogDBName();
+        String tableName = table.getCatalogTableName();
+        PredicateSearchKey predicateSearchKey = PredicateSearchKey.of(dbName, tableName, snapshotId.get(), param.getPredicate());
+        RemoteFileInfoSource baseSource;
+        if (splitTasks.containsKey(predicateSearchKey)) {
+            baseSource = buildRemoteInfoSource(splitTasks.get(predicateSearchKey));
+        } else {
+            List<ScalarOperator> scalarOperators = Utils.extractConjuncts(params.getPredicate());
+            ScalarOperatorToIcebergExpr.IcebergContext icebergContext = new ScalarOperatorToIcebergExpr.IcebergContext(
+                    icebergTable.getNativeTable().schema().asStruct());
+            Expression icebergPredicate = new ScalarOperatorToIcebergExpr().convert(scalarOperators, icebergContext);
+            baseSource = buildRemoteInfoSource(icebergTable, icebergPredicate, snapshotId.get(), params);
+        }
 
         IcebergTableMORParams tableFullMORParams = param.getTableFullMORParams();
         if (tableFullMORParams.isEmpty()) {
             return baseSource;
         } else {
             // build remote file info source for table with equality delete files.
-            String dbName = icebergTable.getCatalogDBName();
-            String tableName = icebergTable.getCatalogTableName();
             IcebergRemoteFileInfoSourceKey remoteFileInfoSourceKey = IcebergRemoteFileInfoSourceKey.of(
                     dbName, tableName, snapshotId.get(), param.getPredicate(), tableFullMORParams.getMORId(),
                     param.getMORParams());
@@ -868,9 +875,26 @@ public class IcebergMetadata implements ConnectorMetadata {
 
     private RemoteFileInfoSource buildRemoteInfoSource(IcebergTable table,
                                                        Expression icebergPredicate,
-                                                       Long snapshotId) {
+                                                       Long snapshotId,
+                                                       GetRemoteFilesParams params) {
         Iterator<FileScanTask> iterator =
-                buildFileScanTaskIterator(table, icebergPredicate, snapshotId, ConnectContext.get(), false);
+                buildFileScanTaskIterator(table, icebergPredicate, snapshotId, ConnectContext.get(),
+                        params.isEnableColumnStats());
+        return new RemoteFileInfoSource() {
+            @Override
+            public RemoteFileInfo getOutput() {
+                return new IcebergRemoteFileInfo(iterator.next());
+            }
+
+            @Override
+            public boolean hasMoreOutput() {
+                return iterator.hasNext();
+            }
+        };
+    }
+
+    private RemoteFileInfoSource buildRemoteInfoSource(List<FileScanTask> tasks) {
+        Iterator<FileScanTask> iterator = tasks.iterator();
         return new RemoteFileInfoSource() {
             @Override
             public RemoteFileInfo getOutput() {

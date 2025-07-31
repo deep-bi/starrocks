@@ -781,6 +781,7 @@ struct TAuditStatistics {
     6: optional i64 cpu_cost_ns
     7: optional i64 mem_cost_bytes
     8: optional i64 spill_bytes
+    10: optional i64 transmitted_bytes
     9: optional list<TAuditStatisticsItem> stats_items
 }
 
@@ -2254,5 +2255,6 @@ service FrontendService {
     TGetWarehouseMetricsRespone getWarehouseMetrics(1: TGetWarehouseMetricsRequest request)
 
     TGetWarehouseQueriesResponse getWarehouseQueries(1: TGetWarehouseQueriesRequest request)
+
 }
 

@@ -1209,6 +1209,7 @@ CONF_Int32(internal_service_query_rpc_thread_num, "-1");
 // Report exec rpc request is important for load job, if one fragment instance finish report failed,
 // the load job will be hang until timeout.
 CONF_mInt32(report_exec_rpc_request_retry_num, "10");
+CONF_Int32(internal_service_datacache_rpc_thread_num, "-1");
 
 /*
  * When compile with ENABLE_STATUS_FAILED, every use of RETURN_INJECT has probability of 1/cardinality_of_inject
@@ -1310,7 +1311,10 @@ CONF_String(datacache_eviction_policy, "slru");
 // the old configuration files.
 CONF_Bool(block_cache_enable, "false");
 CONF_Int64(block_cache_disk_size, "0");
-CONF_String(block_cache_disk_path, "${STARROCKS_HOME}/block_cache/");
+// The `block_cache_disk_path` and `datacache_disk_path` has been deprecated,
+// users should not configure it.
+CONF_String(block_cache_disk_path, "");
+CONF_Alias(block_cache_disk_path, datacache_disk_path);
 CONF_String(block_cache_meta_path, "${STARROCKS_HOME}/block_cache/");
 CONF_Int64(block_cache_block_size, "262144");   // 256K
 CONF_Int64(block_cache_mem_size, "2147483648"); // 2GB
@@ -1503,6 +1507,9 @@ CONF_mBool(enable_json_flat_remain_filter, "true");
 // enable flat complex type (/array/object/hyper type), diables for save storage
 CONF_mBool(enable_json_flat_complex_type, "false");
 
+// flat json use dict-encoding
+CONF_mBool(json_flat_use_dict_encoding, "true");
+
 // if disable flat complex type, check complex type rate in hyper-type column
 CONF_mDouble(json_flat_complex_type_factor, "0.3");
 
@@ -1569,7 +1576,7 @@ CONF_Bool(report_python_worker_error, "true");
 CONF_Bool(python_worker_reuse, "true");
 CONF_Int32(python_worker_expire_time_sec, "300");
 CONF_mBool(enable_pk_strict_memcheck, "true");
-CONF_mBool(skip_pk_preload, "false");
+CONF_mBool(skip_pk_preload, "true");
 // Reduce core file size by not dumping jemalloc retain pages
 CONF_mBool(enable_core_file_size_optimization, "true");
 // Current supported modules:

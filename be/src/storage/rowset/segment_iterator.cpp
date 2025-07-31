@@ -705,13 +705,13 @@ Status SegmentIterator::_try_to_update_ranges_by_runtime_filter() {
 
                 RETURN_IF_ERROR(_column_iterators[cid]->get_row_ranges_by_zone_map(predicates, del_pred, &r,
                                                                                    CompoundNodeType::AND));
-                size_t prev_size = _scan_range.span_size();
+                size_t prev_size = _range_iter.remaining_rows();
                 SparseRange<> res;
                 res.set_sorted(_scan_range.is_sorted());
                 _range_iter = _range_iter.intersection(r, &res);
                 std::swap(res, _scan_range);
                 _range_iter.set_range(&_scan_range);
-                _opts.stats->runtime_stats_filtered += (prev_size - _scan_range.span_size());
+                _opts.stats->runtime_stats_filtered += (prev_size - _range_iter.remaining_rows());
                 return Status::OK();
             },
             false, _opts.stats->raw_rows_read);
@@ -804,7 +804,7 @@ Status SegmentIterator::_init_column_iterator_by_cid(const ColumnId cid, const C
         if (encryption_info) {
             opts.encryption_info = *encryption_info;
         }
-        ASSIGN_OR_RETURN(auto rfile, _opts.fs->new_random_access_file(opts, _segment->file_info()));
+        ASSIGN_OR_RETURN(auto rfile, _opts.fs->new_random_access_file_with_bundling(opts, _segment->file_info()));
         if (config::io_coalesce_lake_read_enable && !_segment->is_default_column(col) &&
             _segment->lake_tablet_manager() != nullptr) {
             ASSIGN_OR_RETURN(auto file_size, rfile->get_size());

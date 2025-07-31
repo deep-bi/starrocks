@@ -64,6 +64,8 @@ set(EXEC_FILES
         ./exec/pipeline/table_function_operator_test.cpp
         ./exec/pipeline/sink/export_sink_operator_test.cpp
         ./exec/pipeline/sink/table_function_table_sink_operator_test.cpp
+        ./exec/pipeline/sink/memory_scratch_sink_operator_test.cpp
+        ./exec/pipeline/limit_operator_test.cpp
         ./exec/pipeline/mem_limited_chunk_queue_test.cpp
         ./exec/query_cache/query_cache_test.cpp
         ./exec/query_cache/transform_operator.cpp
@@ -76,6 +78,7 @@ set(EXEC_FILES
         ./exec/stream/stream_pipeline_test.cpp
         ./exec/tablet_info_test.cpp
         ./exec/agg_hash_map_test.cpp
+        ./exec/hash_variant_test.cpp
         ./exec/pipeline/olap_scan_operator_test.cpp
         ./exec/analytor_test.cpp
         ./exec/analytor_test.cpp
@@ -389,6 +392,7 @@ set(EXEC_FILES
         ./storage/column_and_predicate_test.cpp
         ./storage/olap_runtime_range_pruner_test.cpp
         ./runtime/agg_state_desc_test.cpp
+        ./runtime/arrow_result_writer_test.cpp
         ./runtime/buffer_control_block_test.cpp
         ./runtime/data_stream_mgr_test.cpp
         ./runtime/datetime_value_test.cpp
@@ -497,6 +501,7 @@ set(EXEC_FILES
         ./util/utf8_check_test.cpp
         ./util/int96_test.cpp
         ./util/internal_service_recoverable_stub_test.cpp
+        ./util/internal_service_recoverable_stub_parallel_test.cpp
         ./util/bit_packing_test.cpp
         ./util/bit_packing_simd_test.cpp
         ./util/gc_helper_test.cpp
@@ -513,10 +518,12 @@ set(EXEC_FILES
         ./util/download_util_test.cpp
         ./util/numeric_types_test.cpp
         ./util/stack_util_test.cpp
+        ./util/url_coding_test.cpp
         ./gutil/cpu_test.cc
         ./gutil/sysinfo-test.cc
         ./service/lake_service_test.cpp
         ./service/mem_hook_test.cpp
+        ./service/service_be/arrow_flight_call_header_utils_test.cpp
         ./service/service_be/internal_service_test.cpp
         ./service/staros_worker_test.cpp
         ./storage/metadata_util_test.cpp
@@ -530,6 +537,7 @@ set(EXEC_FILES
         ./storage/lake/write_combined_txn_log_test.cpp
         ./cache/block_cache/datacache_utils_test.cpp
         ./cache/block_cache/block_cache_hit_rate_counter_test.cpp
+        ./cache/block_cache/peer_cache_test.cpp
         ./cache/object_cache/lrucache_module_test.cpp
         ./cache/object_cache/object_cache_test.cpp
         ./util/thrift_rpc_helper_test.cpp

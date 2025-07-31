@@ -25,7 +25,6 @@ import com.starrocks.catalog.ColumnAccessPath;
 import com.starrocks.catalog.FunctionSet;
 import com.starrocks.catalog.HiveTable;
 import com.starrocks.catalog.IcebergTable;
-import com.starrocks.catalog.KeysType;
 import com.starrocks.catalog.OlapTable;
 import com.starrocks.catalog.Table;
 import com.starrocks.catalog.Type;
@@ -392,6 +391,16 @@ public class DecodeCollector extends OptExpressionVisitor<DecodeInfo, DecodeInfo
     }
 
     @Override
+    public DecodeInfo visitPhysicalCTEAnchor(OptExpression optExpression, DecodeInfo context) {
+        return context.createOutputInfo();
+    }
+
+    @Override
+    public DecodeInfo visitPhysicalNoCTE(OptExpression optExpression, DecodeInfo context) {
+        return context.createOutputInfo();
+    }
+
+    @Override
     public DecodeInfo visitPhysicalLimit(OptExpression optExpression, DecodeInfo context) {
         return context.createOutputInfo();
     }
@@ -532,7 +541,7 @@ public class DecodeCollector extends OptExpressionVisitor<DecodeInfo, DecodeInfo
                 info.outputStringColumns.union(key.getId());
                 stringRefToDefineExprMap.putIfAbsent(key.getId(), value);
                 expressionStringRefCounter.put(key.getId(), 1);
-            } else if (aggregate.getType().isLocal() || aggregate.getType().isDistinctLocal()) {
+            } else if (aggregate.getType().isLocal() || aggregate.getType().isDistinct()) {
                 // count/count distinct, need output dict-set in 1st stage
                 info.outputStringColumns.union(key.getId());
             }
@@ -608,9 +617,6 @@ public class DecodeCollector extends OptExpressionVisitor<DecodeInfo, DecodeInfo
         long version = table.getPartitions().stream().map(p -> p.getDefaultPhysicalPartition().getVisibleVersionTime())
                 .max(Long::compareTo).orElse(0L);
 
-        if ((table.getKeysType().equals(KeysType.PRIMARY_KEYS))) {
-            return DecodeInfo.EMPTY;
-        }
         if (table.hasForbiddenGlobalDict()) {
             return DecodeInfo.EMPTY;
         }

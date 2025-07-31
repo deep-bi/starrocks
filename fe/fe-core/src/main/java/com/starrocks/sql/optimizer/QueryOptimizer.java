@@ -46,6 +46,7 @@ import com.starrocks.sql.optimizer.rule.transformation.ArrayDistinctAfterAggRule
 import com.starrocks.sql.optimizer.rule.transformation.CTEProduceAddProjectionRule;
 import com.starrocks.sql.optimizer.rule.transformation.ConvertToEqualForNullRule;
 import com.starrocks.sql.optimizer.rule.transformation.DeriveRangeJoinPredicateRule;
+import com.starrocks.sql.optimizer.rule.transformation.EliminateAggFunctionRule;
 import com.starrocks.sql.optimizer.rule.transformation.EliminateAggRule;
 import com.starrocks.sql.optimizer.rule.transformation.EliminateConstantCTERule;
 import com.starrocks.sql.optimizer.rule.transformation.EliminateSortColumnWithEqualityPredicateRule;
@@ -392,6 +393,7 @@ public class QueryOptimizer extends Optimizer {
         scheduler.rewriteOnce(tree, rootTaskContext, new MaterializedViewTransparentRewriteRule());
         if (Utils.isOptHasAppliedRule(tree, OP_MV_TRANSPARENT_REWRITE)) {
             tree = new SeparateProjectRule().rewrite(tree, rootTaskContext);
+            deriveLogicalProperty(tree);
         }
         return tree;
     }
@@ -544,6 +546,7 @@ public class QueryOptimizer extends Optimizer {
         scheduler.rewriteOnce(tree, rootTaskContext, RuleSet.PRUNE_COLUMNS_RULES);
         // Put EliminateAggRule after PRUNE_COLUMNS to give a chance to prune group bys before eliminate aggregations.
         scheduler.rewriteOnce(tree, rootTaskContext, EliminateAggRule.getInstance());
+        scheduler.rewriteOnce(tree, rootTaskContext, EliminateAggFunctionRule.getInstance());
         scheduler.rewriteIterative(tree, rootTaskContext, RuleSet.PRUNE_UKFK_JOIN_RULES);
         deriveLogicalProperty(tree);
 
@@ -659,6 +662,7 @@ public class QueryOptimizer extends Optimizer {
 
         scheduler.rewriteIterative(tree, rootTaskContext, new MergeTwoProjectRule());
         scheduler.rewriteOnce(tree, rootTaskContext, RuleSet.META_SCAN_REWRITE_RULES);
+        scheduler.rewriteOnce(tree, rootTaskContext, new MergeTwoProjectRule());
         scheduler.rewriteOnce(tree, rootTaskContext, new PartitionColumnValueOnlyOnScanRule());
         // before MergeProjectWithChildRule, after INLINE_CTE and MergeApplyWithTableFunction
         scheduler.rewriteIterative(tree, rootTaskContext, RewriteUnnestBitmapRule.getInstance());
@@ -809,6 +813,7 @@ public class QueryOptimizer extends Optimizer {
             rootTaskContext.setRequiredColumns(requiredColumns.clone());
             scheduler.rewriteOnce(tree, rootTaskContext, RuleSet.PRUNE_COLUMNS_RULES);
             scheduler.rewriteOnce(tree, rootTaskContext, EliminateAggRule.getInstance());
+            scheduler.rewriteOnce(tree, rootTaskContext, EliminateAggFunctionRule.getInstance());
         }
 
         return tree;

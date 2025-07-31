@@ -18,8 +18,8 @@ import com.starrocks.common.FeConstants;
 import com.starrocks.qe.RowBatch;
 import com.starrocks.qe.scheduler.FeExecuteCoordinator;
 import com.starrocks.thrift.TResultBatch;
-import org.junit.Assert;
-import org.junit.Test;
+import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.Test;
 
 import java.nio.charset.StandardCharsets;
 
@@ -233,7 +233,7 @@ public class SelectConstTest extends PlanTestBase {
         try {
             RowBatch rowBatch = coordinator.getNext();
         } catch (Exception e) {
-            Assert.fail(e.getMessage());
+            Assertions.fail(e.getMessage());
         }
     }
 
@@ -243,7 +243,7 @@ public class SelectConstTest extends PlanTestBase {
         RowBatch rowBatch = coordinator.getNext();
         TResultBatch tResultBatch = rowBatch.getBatch();
         if (tResultBatch.rows.isEmpty()) {
-            Assert.assertNull(expected);
+            Assertions.assertNull(expected);
         } else {
             byte[] bytes = tResultBatch.getRows().get(0).array();
             int lengthOffset = getOffset(bytes);
@@ -254,7 +254,7 @@ public class SelectConstTest extends PlanTestBase {
                 value = new String(bytes, lengthOffset, bytes.length - lengthOffset, StandardCharsets.UTF_8);
             }
             System.out.println(value);
-            Assert.assertEquals(expected, value);
+            Assertions.assertEquals(expected, value);
         }
     }
 
@@ -299,5 +299,30 @@ public class SelectConstTest extends PlanTestBase {
         FeConstants.enablePruneEmptyOutputScan = true;
         assertFeExecuteResult(sql, null);
         FeConstants.enablePruneEmptyOutputScan = false;
+    }
+
+    @Test
+    public void testUnionWithUnAlignedValues() throws Exception {
+        String sql = "WITH temp AS (\n" +
+                "  SELECT 'test' AS c1, 'test' AS c2, 'test' AS c3\n" +
+                "  UNION ALL\n" +
+                "  SELECT 'test' AS c1, 'test' AS c2, 'test' AS c3\n" +
+                " )\n" +
+                "SELECT c1, c2, c3\n" +
+                "FROM (\n" +
+                " SELECT c1, c2, c3\n" +
+                " FROM temp\n" +
+                " UNION ALL\n" +
+                " SELECT 'test1' AS c1, 'test1' AS c2, 'test1' AS c3\n" +
+                " UNION ALL\n" +
+                " SELECT 'test1' AS c1, 'test2' AS c2, 'test3' AS c3\n" +
+                ") t;";
+        String plan = getFragmentPlan(sql);
+        PlanTestBase.assertContains(plan, "     constant exprs: \n" +
+                        "         'test1' | 'test1' | 'test1'\n" +
+                        "         'test1' | 'test2' | 'test3'",
+                "     constant exprs: \n" +
+                        "         'test' | 'test' | 'test'\n" +
+                        "         'test' | 'test' | 'test'");
     }
 }

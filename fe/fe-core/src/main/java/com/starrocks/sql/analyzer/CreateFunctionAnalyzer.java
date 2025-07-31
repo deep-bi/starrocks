@@ -72,7 +72,7 @@ public class CreateFunctionAnalyzer {
         } else if (CreateFunctionStmt.TYPE_STARROCKS_PYTHON.equalsIgnoreCase(langType)) {
             analyzePython(stmt);
         } else {
-            ErrorReport.reportSemanticException(ErrorCode.ERR_WRONG_OBJECT, "unknown lang type");
+            ErrorReport.reportSemanticException(ErrorCode.ERR_COMMON_ERROR, "unknown lang type");
         }
         // build function
     }
@@ -157,13 +157,13 @@ public class CreateFunctionAnalyzer {
                 }
 
             } catch (IOException e) {
-                ErrorReport.reportSemanticException(ErrorCode.ERR_WRONG_OBJECT,
+                ErrorReport.reportSemanticException(ErrorCode.ERR_COMMON_ERROR,
                         "Failed to load object_file: " + objectFile, e);
             } catch (ClassNotFoundException e) {
-                ErrorReport.reportSemanticException(ErrorCode.ERR_WRONG_OBJECT,
+                ErrorReport.reportSemanticException(ErrorCode.ERR_COMMON_ERROR,
                         "Class '" + className + "' not found in object_file :" + objectFile, e);
             } catch (Exception e) {
-                ErrorReport.reportSemanticException(ErrorCode.ERR_WRONG_OBJECT,
+                ErrorReport.reportSemanticException(ErrorCode.ERR_COMMON_ERROR,
                         "other exception when load class. exception:", e);
             }
         } finally {
@@ -578,12 +578,15 @@ public class CreateFunctionAnalyzer {
         String inputType = properties.getOrDefault(CreateFunctionStmt.INPUT_TYPE, "scalar");
         String objectFile = stmt.getProperties().get(CreateFunctionStmt.FILE_KEY);
 
-        if (isInline && !StringUtils.equals(objectFile, "inline")) {
-            ErrorReport.reportSemanticException(ErrorCode.ERR_WRONG_OBJECT, "inline function file should be 'inline'");
+        if (isInline && !StringUtils.equalsIgnoreCase(objectFile, "inline")) {
+            ErrorReport.reportSemanticException(ErrorCode.ERR_COMMON_ERROR, "inline function file should be 'inline'");
+        }
+        if (isInline) {
+            objectFile = "inline";
         }
 
         if (!inputType.equalsIgnoreCase("arrow") && !inputType.equalsIgnoreCase("scalar")) {
-            ErrorReport.reportSemanticException(ErrorCode.ERR_WRONG_OBJECT, "unknown input type:", inputType);
+            ErrorReport.reportSemanticException(ErrorCode.ERR_COMMON_ERROR, "unknown input type:" + inputType);
         }
 
         FunctionName functionName = stmt.getFunctionName();

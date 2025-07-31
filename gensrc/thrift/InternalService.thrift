@@ -171,6 +171,10 @@ struct TSpillOptions {
   23: optional bool enable_spill_buffer_read;
   24: optional i64 max_spill_read_buffer_bytes_per_driver;
   25: optional i64 spill_hash_join_probe_op_max_bytes;
+
+  26: optional bool spill_partitionwise_agg;
+  27: optional i32 spill_partitionwise_agg_partition_num;
+  28: optional bool spill_partitionwise_agg_skew_elimination;
 }
 
 // Query options with their respective defaults
@@ -318,6 +322,7 @@ struct TQueryOptions {
   134: optional i32 datacache_priority;
   135: optional i64 datacache_ttl_seconds;
   136: optional bool enable_cache_select;
+  137: optional i64 datacache_sharing_work_period;
 
   140: optional string catalog;
 

@@ -180,6 +180,9 @@ public class Config extends ConfigBase {
     @ConfField(mutable = true)
     public static int slow_lock_stack_trace_reserve_levels = 15;
 
+    @ConfField(mutable = true)
+    public static boolean slow_lock_print_stack = true;
+
     @ConfField
     public static String custom_config_dir = "/conf";
 
@@ -1918,6 +1921,16 @@ public class Config extends ConfigBase {
     @ConfField(mutable = true)
     public static int authentication_ldap_simple_server_port = 389;
 
+    @ConfField(mutable = true, comment = "false to enable ssl connection")
+    public static boolean authentication_ldap_simple_ssl_conn_allow_insecure = true;
+
+    @ConfField(mutable = true, comment = "ldap ssl trust store file path, supports perm and jks formats")
+    public static String authentication_ldap_simple_ssl_conn_trust_store_path = "";
+
+    @ConfField(mutable = true, comment = "LDAP SSL trust store file password; " +
+            "no password is required for files in PEM format.")
+    public static String authentication_ldap_simple_ssl_conn_trust_store_pwd = "";
+
     /**
      * users search base in ldap directory for authentication_ldap_simple
      */
@@ -2213,6 +2226,12 @@ public class Config extends ConfigBase {
 
     @ConfField(mutable = true, comment = "collect multi-column combined statistics max column nums")
     public static int statistics_max_multi_column_combined_num = 10;
+
+    @ConfField(mutable = true, comment = "Whether to allow manual collection of the NDV of array columns")
+    public static boolean enable_manual_collect_array_ndv = false;
+
+    @ConfField(mutable = true, comment = "Whether to allow auto collection of the NDV of array columns")
+    public static boolean enable_auto_collect_array_ndv = false;
 
     /**
      * default bucket size of histogram statistics
@@ -2688,7 +2707,7 @@ public class Config extends ConfigBase {
     public static boolean enable_load_volume_from_conf = false;
     // remote storage related configuration
     @ConfField(comment = "storage type for cloud native table. Available options: " +
-            "\"S3\", \"HDFS\", \"AZBLOB\", \"ADLS2\". case-insensitive")
+            "\"S3\", \"HDFS\", \"AZBLOB\", \"ADLS2\", \"GS\". case-insensitive")
     public static String cloud_native_storage_type = "S3";
 
     // HDFS storage configuration
@@ -2755,6 +2774,22 @@ public class Config extends ConfigBase {
     public static String azure_adls2_oauth2_client_secret = "";
     @ConfField
     public static String azure_adls2_oauth2_oauth2_client_endpoint = "";
+
+    // gcp gs
+    @ConfField
+    public static String gcp_gcs_endpoint = "";
+    @ConfField
+    public static String gcp_gcs_path = "";
+    @ConfField
+    public static String gcp_gcs_use_compute_engine_service_account = "true";
+    @ConfField
+    public static String gcp_gcs_service_account_email = "";
+    @ConfField
+    public static String gcp_gcs_service_account_private_key = "";
+    @ConfField
+    public static String gcp_gcs_service_account_private_key_id = "";
+    @ConfField
+    public static String gcp_gcs_impersonation_service_account = "";
 
     @ConfField(mutable = true)
     public static int starmgr_grpc_timeout_seconds = 5;
@@ -2890,20 +2925,17 @@ public class Config extends ConfigBase {
     @ConfField(mutable = true)
     public static int lake_compaction_history_size = 20;
 
-    @ConfField(mutable = true)
-    public static long lake_min_compaction_interval_ms_on_success = 10000;
+    @ConfField(mutable = true, aliases = {"lake_min_compaction_interval_ms_on_success"})
+    public static long lake_compaction_interval_ms_on_success = 10000;
 
-    @ConfField(mutable = true)
-    public static long lake_min_compaction_interval_ms_on_failure = 60000;
+    @ConfField(mutable = true, aliases = {"lake_min_compaction_interval_ms_on_failure"})
+    public static long lake_compaction_interval_ms_on_failure = 60000;
 
     @ConfField(mutable = true)
     public static String lake_compaction_warehouse = "default_warehouse";
 
     @ConfField(mutable = true)
     public static String lake_background_warehouse = "default_warehouse";
-
-    @ConfField(mutable = true)
-    public static String statistics_collect_warehouse = "default_warehouse";
 
     @ConfField(mutable = true)
     public static int lake_warehouse_max_compute_replica = 3;
@@ -2943,7 +2975,7 @@ public class Config extends ConfigBase {
     public static int lake_compaction_default_timeout_second = 86400; // 1 day
 
     @ConfField(mutable = true)
-    public static boolean lake_compaction_allow_partial_success = false;
+    public static boolean lake_compaction_allow_partial_success = true;
 
     @ConfField(mutable = true, comment = "the max number of previous version files to keep")
     public static int lake_autovacuum_max_previous_versions = 0;
@@ -3378,6 +3410,9 @@ public class Config extends ConfigBase {
             "materialized views(>10) or query is complex(multi table joins).")
     public static long mv_query_context_cache_max_size = 1000;
 
+    @ConfField(mutable = true)
+    public static boolean enable_materialized_view_concurrent_prepare = true;
+
     /**
      * Checking the connectivity of port opened by FE,
      * mainly used for checking edit log port currently.
@@ -3557,8 +3592,13 @@ public class Config extends ConfigBase {
     @ConfField(mutable = true)
     public static int arrow_token_cache_size = 1024;
 
+    // Expiration time (in seconds) for Arrow Flight SQL tokens. Default is 3 days.
+    // Expired tokens will be removed from the cache and the associated connection will be closed.
     @ConfField(mutable = true)
-    public static int arrow_token_cache_expire = 3600;
+    public static int arrow_token_cache_expire_second = 3600 * 24 * 3;
+
+    @ConfField(mutable = true)
+    public static int arrow_max_service_task_threads_num = 4096;
 
     @ConfField(mutable = false)
     public static int query_deploy_threadpool_size = max(50, getRuntime().availableProcessors() * 10);
@@ -3704,4 +3744,10 @@ public class Config extends ConfigBase {
      */
     @ConfField(mutable = true)
     public static long max_graceful_exit_time_second = 60;
+
+    /**
+     * Whether to enable tracing historical nodes when cluster scale
+     */
+    @ConfField(mutable = true)
+    public static boolean enable_trace_historical_node = false;
 }

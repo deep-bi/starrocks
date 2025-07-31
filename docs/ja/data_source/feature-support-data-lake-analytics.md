@@ -189,12 +189,6 @@ Iceberg Catalog は、HMS、Glue、および Tabular をメタストアとして
 
 StarRocks は v3.3.2 以降、Iceberg ビューのクエリをサポートしています。現在、StarRocks を通じて作成された Iceberg ビューのみがサポートされています。
 
-:::note
-
-StarRocks が Iceberg ビューに対してクエリを実行する際、StarRocks および Trino の構文を使用してビューの定義を解析しようとします。StarRocks がビューの定義を解析できない場合、エラーが返されます。StarRocks が Iceberg または Spark に特有の関数で作成された Iceberg ビューの解析に失敗する可能性があります。
-
-:::
-
 ### クエリ統計インターフェース
 
 | 機能                                                       | サポートバージョン |
@@ -225,6 +219,7 @@ StarRocks が Iceberg ビューに対してクエリを実行する際、StarRoc
 - StarRocks は、Hudi の Parquet 形式のデータのクエリをサポートし、Parquet ファイルのために SNAPPY、LZ4、ZSTD、GZIP、および NO_COMPRESSION 圧縮フォーマットをサポートします。
 - StarRocks は、Hudi の Copy On Write (COW) テーブルと Merge On Read (MOR) テーブルを完全にサポートします。
 - StarRocks は v3.0.0 以降、SHOW CREATE TABLE をサポートして Hudi テーブルスキーマを表示します。
+- StarRocks v3.5.0 は Hudi 0.15.0 をサポートしています。
 
 ## Delta Lake Catalog
 

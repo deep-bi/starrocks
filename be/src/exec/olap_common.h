@@ -70,6 +70,7 @@ namespace starrocks {
 template <class T>
 class ColumnValueRange {
 public:
+    using RangeValueType = T;
     using ValuesContainer = boost::container::flat_set<T>;
     using iterator_type = typename ValuesContainer::iterator;
 
@@ -92,6 +93,8 @@ public:
     bool is_fixed_value_range() const;
 
     bool is_empty_value_range() const;
+
+    bool is_full_value_range() const;
 
     bool is_init_state() const { return _is_init_state; }
 
