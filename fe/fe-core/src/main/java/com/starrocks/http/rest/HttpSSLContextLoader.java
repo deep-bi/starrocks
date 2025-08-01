@@ -40,6 +40,7 @@ import com.starrocks.http.SslUtil;
 import io.netty.handler.ssl.OpenSsl;
 import io.netty.handler.ssl.SslContext;
 import io.netty.handler.ssl.SslContextBuilder;
+import io.netty.handler.ssl.SslProvider;
 
 import java.io.FileInputStream;
 import java.io.InputStream;
@@ -74,6 +75,6 @@ public class HttpSSLContextLoader {
                 : ((SSLServerSocketFactory) SSLServerSocketFactory.getDefault())
                 .getSupportedCipherSuites();
         String[] filteredCiphers = SslUtil.filterCipherSuites(supportedCiphers);
-        return SslContextBuilder.forServer(kmf).ciphers(Arrays.asList(filteredCiphers)).build();
+        return SslContextBuilder.forServer(kmf).sslProvider(SslProvider.JDK).ciphers(Arrays.asList(filteredCiphers)).build();
     }
 }
