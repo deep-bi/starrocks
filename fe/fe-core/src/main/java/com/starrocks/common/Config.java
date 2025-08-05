@@ -722,6 +722,12 @@ public class Config extends ConfigBase {
     @ConfField
     public static boolean enable_https = false;
 
+    @ConfField
+    public static String sslCipherWhitelist = "";
+
+    @ConfField
+    public static String sslCipherBlacklist = "";
+
     /**
      * format of the keystore, JKS by default
      */
