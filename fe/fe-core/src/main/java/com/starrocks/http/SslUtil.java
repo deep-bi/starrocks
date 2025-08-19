@@ -42,31 +42,48 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
+import java.util.function.Predicate;
 import java.util.regex.Pattern;
 
 public class SslUtil {
 
     private static final Logger LOG = LogManager.getLogger(SslUtil.class);
+    private static final Pattern COMMA = Pattern.compile("\\s*,\\s*");
+
+    private static List<Pattern> parsePatterns(String cfg) {
+        if (cfg == null || cfg.isBlank()) {
+            return Collections.emptyList();
+        }
+        return Arrays.stream(COMMA.split(cfg))
+                .filter(s -> !s.isEmpty())
+                .map(Pattern::compile)
+                .toList();
+    }
+
+    private static boolean matchesAny(List<Pattern> ps, String s) {
+        for (Pattern p : ps) {
+            if (p.matcher(s).matches()) {
+                return true;
+            }
+        }
+        return false;
+    }
 
     public static String[] filterCipherSuites(String[] defaults) {
-        List<Pattern> whitelist = Config.sslCipherWhitelist.isEmpty()
-                ? Collections.emptyList()
-                : Arrays.stream(Config.sslCipherWhitelist.split("\\s*,\\s*"))
-                .filter(s -> !s.isEmpty())
-                .map(Pattern::compile)
-                .toList();
-        List<Pattern> blacklist = Config.sslCipherBlacklist.isEmpty()
-                ? Collections.emptyList()
-                : Arrays.stream(Config.sslCipherBlacklist.split("\\s*,\\s*"))
-                .filter(s -> !s.isEmpty())
-                .map(Pattern::compile)
-                .toList();
-        String[] filtered = Arrays.stream(defaults)
+        List<Pattern> whitelist = parsePatterns(Config.sslCipherWhitelist);
+        List<Pattern> blacklist = parsePatterns(Config.sslCipherBlacklist);
+
+        if (whitelist.isEmpty() && blacklist.isEmpty()) {
+            return defaults;
+        }
+
+        Predicate<String> allow = whitelist.isEmpty() ? x -> true  : c -> matchesAny(whitelist, c);
+        Predicate<String> deny  = blacklist.isEmpty() ? x -> false : c -> matchesAny(blacklist, c);
+
+        String[] filtered = Arrays.stream(defaults == null ? new String[0] : defaults)
                 .filter(Objects::nonNull)
-                .filter(c -> whitelist.isEmpty() || whitelist.stream()
-                        .anyMatch(p -> p.matcher(c).matches()))
-                .filter(c -> blacklist.stream()
-                        .noneMatch(p -> p.matcher(c).matches()))
+                .filter(allow)
+                .filter(deny.negate())
                 .toArray(String[]::new);
 
         if (filtered.length == 0) {

@@ -37,7 +37,6 @@ package com.starrocks.http.rest;
 import com.google.common.base.Strings;
 import com.starrocks.common.Config;
 import com.starrocks.http.SslUtil;
-import io.netty.handler.ssl.OpenSsl;
 import io.netty.handler.ssl.SslContext;
 import io.netty.handler.ssl.SslContextBuilder;
 import io.netty.handler.ssl.SslProvider;
@@ -70,9 +69,7 @@ public class HttpSSLContextLoader {
         KeyManagerFactory kmf = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm());
         kmf.init(keyStore, Config.ssl_key_password.toCharArray());
 
-        String[] supportedCiphers = OpenSsl.isAvailable()
-                ? OpenSsl.availableJavaCipherSuites().toArray(new String[0])
-                : ((SSLServerSocketFactory) SSLServerSocketFactory.getDefault())
+        String[] supportedCiphers = ((SSLServerSocketFactory) SSLServerSocketFactory.getDefault())
                 .getSupportedCipherSuites();
         String[] filteredCiphers = SslUtil.filterCipherSuites(supportedCiphers);
         return SslContextBuilder.forServer(kmf).sslProvider(SslProvider.JDK).ciphers(Arrays.asList(filteredCiphers)).build();
