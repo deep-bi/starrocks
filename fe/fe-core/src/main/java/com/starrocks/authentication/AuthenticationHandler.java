@@ -24,6 +24,7 @@ import com.starrocks.mysql.privilege.AuthPlugin;
 import com.starrocks.qe.ConnectContext;
 import com.starrocks.server.GlobalStateMgr;
 import com.starrocks.sql.ast.UserIdentity;
+import com.starrocks.sql.ast.UserIdentityWithDnName;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -127,15 +128,16 @@ public class AuthenticationHandler {
             }
 
             AuthenticationProvider provider = securityIntegration.getAuthenticationProvider();
+            UserIdentity userIdentity = UserIdentityWithDnName.createEphemeralUserIdent(user, remoteHost);
+
             try {
-                provider.authenticate(context, UserIdentity.createEphemeralUserIdent(user, remoteHost), authResponse);
+                provider.authenticate(context, userIdentity, authResponse);
             } catch (AuthenticationException e) {
                 exceptions.add(new Pair<>(authMechanism, e));
                 continue;
             }
 
-            authenticationResult = new AuthenticationResult(
-                    UserIdentity.createEphemeralUserIdent(user, remoteHost),
+            authenticationResult = new AuthenticationResult(userIdentity,
                     securityIntegration.getGroupProviderName() == null ?
                             List.of(Config.group_provider) : securityIntegration.getGroupProviderName(),
                     securityIntegration.getGroupAllowedLoginList());
@@ -155,13 +157,6 @@ public class AuthenticationHandler {
         String user = authenticationResult.authenticatedUser.getUser();
 
         context.setCurrentUserIdentity(authenticationResult.authenticatedUser);
-        if (!authenticationResult.authenticatedUser.isEphemeral()) {
-            context.setCurrentRoleIds(authenticationResult.authenticatedUser);
-
-            UserProperty userProperty = GlobalStateMgr.getCurrentState().getAuthenticationMgr()
-                    .getUserProperty(authenticationResult.authenticatedUser.getUser());
-            context.updateByUserProperty(userProperty);
-        }
         context.setQualifiedUser(user);
 
         Set<String> groups = getGroups(authenticationResult.authenticatedUser, authenticationResult.groupProviderName);
@@ -173,6 +168,13 @@ public class AuthenticationHandler {
             if (intersection.isEmpty()) {
                 throw new AuthenticationException(ErrorCode.ERR_GROUP_ACCESS_DENY, user, Joiner.on(",").join(groups));
             }
+        }
+
+        context.setCurrentRoleIds(authenticationResult.authenticatedUser);
+
+        if (!authenticationResult.authenticatedUser.isEphemeral()) {
+            UserProperty userProperty = GlobalStateMgr.getCurrentState().getAuthenticationMgr().getUserProperty(user);
+            context.updateByUserProperty(userProperty);
         }
     }
 

@@ -18,6 +18,7 @@ import com.google.common.base.Strings;
 import com.starrocks.common.util.NetUtils;
 import com.starrocks.qe.ConnectContext;
 import com.starrocks.sql.ast.UserIdentity;
+import com.starrocks.sql.ast.UserIdentityWithDnName;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -81,8 +82,12 @@ public class LDAPAuthProvider implements AuthenticationProvider {
         try {
             if (!Strings.isNullOrEmpty(ldapUserDN)) {
                 checkPassword(ldapUserDN, new String(clearPassword, StandardCharsets.UTF_8));
+
+                if (userIdentity instanceof UserIdentityWithDnName identityWithDnName) {
+                    identityWithDnName.setDnName(ldapUserDN);
+                }
             } else {
-                checkPasswordByRoot(userIdentity.getUser(), new String(clearPassword, StandardCharsets.UTF_8));
+                checkPasswordByRoot(userIdentity, new String(clearPassword, StandardCharsets.UTF_8));
             }
         } catch (Exception e) {
             LOG.warn("check password failed for user: {}", userIdentity.getUser(), e);
@@ -143,11 +148,12 @@ public class LDAPAuthProvider implements AuthenticationProvider {
     //1. bind ldap server by root dn
     //2. search user
     //3. if match exactly one, check password
-    public void checkPasswordByRoot(String user, String password) throws Exception {
+    public void checkPasswordByRoot(UserIdentity userIdentity, String password) throws Exception {
         if (Strings.isNullOrEmpty(ldapBindRootPwd)) {
             throw new AuthenticationException("empty password is not allowed for simple authentication");
         }
 
+        String user = userIdentity.getUser();
         String url = getURL();
         Hashtable<String, String> env = new Hashtable<>();
         //dn contains '=', so we should use ' or " to wrap the value in config file
@@ -197,6 +203,10 @@ public class LDAPAuthProvider implements AuthenticationProvider {
             }
 
             checkPassword(userDN, password);
+
+            if (userIdentity instanceof UserIdentityWithDnName identityWithDnName) {
+                identityWithDnName.setDnName(userDN);
+            }
         } finally {
             if (ctx != null) {
                 try {
