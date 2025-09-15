@@ -72,7 +72,11 @@ public class AuthenticationHandler {
 
         Map.Entry<UserIdentity, UserAuthenticationInfo> matchedUserIdentity =
                 authenticationMgr.getBestMatchedUserIdentity(user, remoteHost);
-        if (matchedUserIdentity == null) {
+        if (matchedUserIdentity == null
+                || matchedUserIdentity
+                    .getValue()
+                    .getAuthPlugin()
+                    .equalsIgnoreCase(AuthPlugin.Server.SECURITY_INTEGRATION.name())) {
             if (Config.enable_auth_check) {
                 LOG.debug("cannot find user {}@{}", user, remoteHost);
                 return null;
@@ -182,7 +186,7 @@ public class AuthenticationHandler {
                 authenticationResult.groupProviderName);
         context.setGroups(groups);
         // Set current role IDs based on the authenticated user and groups
-        context.setCurrentRoleIds(authenticationResult.authenticatedUser, groups);
+        context.setCurrentRoleIds(authenticationResult.authenticatedUser);
 
         // Step 5: Validate group access permissions
         // If authentication result specifies allowed groups, verify user belongs to at least one
