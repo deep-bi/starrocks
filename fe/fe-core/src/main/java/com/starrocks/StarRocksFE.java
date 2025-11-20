@@ -303,8 +303,10 @@ public class StarRocksFE {
     }
 
     private static boolean isNewLeaderReady(String leaderHost) {
-        String accessibleHostPort = NetUtils.getHostPortInAccessibleFormat(leaderHost, Config.http_port);
-        String url = "http://" + accessibleHostPort
+        int port = Config.enable_https ? Config.https_port : Config.http_port;
+        String scheme = Config.enable_https ? "https://" : "http://";
+        String accessibleHostPort = NetUtils.getHostPortInAccessibleFormat(leaderHost, port);
+        String url = scheme + accessibleHostPort
                 + "/api/bootstrap"
                 + "?cluster_id=" + GlobalStateMgr.getCurrentState().getNodeMgr().getClusterId()
                 + "&token=" +  GlobalStateMgr.getCurrentState().getNodeMgr().getToken();

@@ -399,7 +399,7 @@ public class CheckpointController extends FrontendDaemon {
             String scheme = Config.enable_https ? "https://" : "http://";
             String url = scheme + NetUtils.getHostPortInAccessibleFormat(frontend.getHost(), port)
                     + "/put?version=" + imageVersion
-                    + "&port=" + Config.http_port
+                    + "&port=" + port
                     + "&subdir=" + subDir
                     + "&for_global_state=" + belongToGlobalStateMgr
                     + "&image_format_version=" + formatVersion.toString();

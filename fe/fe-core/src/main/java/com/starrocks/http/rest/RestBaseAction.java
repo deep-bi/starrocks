@@ -200,11 +200,12 @@ public class RestBaseAction extends BaseAction {
     public void redirectTo(BaseRequest request, BaseResponse response, TNetworkAddress addr)
             throws DdlException {
         String urlStr = request.getRequest().uri();
+        String scheme = urlStr.startsWith("https://") ? "https" : "http";
         URI urlObj;
         URI resultUriObj;
         try {
             urlObj = new URI(urlStr);
-            resultUriObj = new URI("http", null, addr.getHostname(),
+            resultUriObj = new URI(scheme, null, addr.getHostname(),
                     addr.getPort(), urlObj.getPath(), urlObj.getQuery(), null);
         } catch (URISyntaxException e) {
             LOG.warn(e.getMessage(), e);
