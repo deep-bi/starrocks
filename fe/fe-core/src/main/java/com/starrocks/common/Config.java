@@ -723,6 +723,9 @@ public class Config extends ConfigBase {
     public static boolean enable_https = false;
 
     @ConfField
+    public static boolean be_https_enabled = false;
+
+    @ConfField
     public static String sslCipherWhitelist = "";
 
     @ConfField
