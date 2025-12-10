@@ -248,6 +248,7 @@ statement
     | cancelRestoreStatement
     | showRestoreStatement
     | showSnapshotStatement
+    | dropSnapshotStatement
     | createRepositoryStatement
     | dropRepositoryStatement
 
@@ -1982,6 +1983,11 @@ showRestoreStatement
 showSnapshotStatement
     : SHOW SNAPSHOT ON identifier
     (WHERE expression)?
+    ;
+
+dropSnapshotStatement
+    : DROP SNAPSHOT ON repoName=identifier
+    WHERE expression
     ;
 
 createRepositoryStatement
