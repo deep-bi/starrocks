@@ -1341,7 +1341,7 @@ public class Config extends ConfigBase {
     public static int qe_max_connection = 4096;
 
     @ConfField
-    public static String qe_role_connection_limits;
+    public static String qe_role_connection_limits = "";
 
     /**
      * Used to limit element num of InPredicate in delete statement.

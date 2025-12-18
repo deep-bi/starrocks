@@ -37,6 +37,7 @@ package com.starrocks.qe;
 import com.google.common.collect.Maps;
 import com.starrocks.authentication.AuthenticationException;
 import com.starrocks.authorization.RolePrivilegeCollectionV2;
+import com.starrocks.common.CloseableLock;
 import com.starrocks.common.ErrorCode;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.logging.log4j.LogManager;
@@ -48,6 +49,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -55,6 +57,7 @@ import java.util.stream.Stream;
 public class RoleConnectionManager {
     private static final Logger LOG = LogManager.getLogger(RoleConnectionManager.class);
     private final Map<String, Integer> connCountByRole = Maps.newConcurrentMap();
+    private final ReentrantLock connLock = new ReentrantLock();
     private final List<RoleConnectionLimit> roleConnectionLimits;
     private final Integer maxConnections;
 
@@ -64,7 +67,9 @@ public class RoleConnectionManager {
     }
 
     public void unregisterConnection(ConnectContext context) {
-        getUserRoles(context).forEach(role -> connCountByRole.computeIfPresent(role, (k, v) -> v > 1 ? v - 1 : null));
+        try (CloseableLock ignored = CloseableLock.lock(this.connLock)) {
+            getUserRoles(context).forEach(role -> connCountByRole.computeIfPresent(role, (k, v) -> v > 1 ? v - 1 : null));
+        }
     }
 
     public void registerConnection(ConnectContext ctx) throws AuthenticationException {
@@ -76,12 +81,13 @@ public class RoleConnectionManager {
 
         Map<String, Integer> maxLimitForRoles = getMaxLimitForRoles(userRoles);
 
-        for (String role : userRoles) {
-            Integer currentConnection = getCurrentConnection(role);
-            Integer limit = maxLimitForRoles.get(role);
+        try (CloseableLock ignored = CloseableLock.lock(this.connLock)) {
+            for (String role : userRoles) {
+                Integer currentConnection = getCurrentConnection(role);
+                Integer limit = maxLimitForRoles.get(role);
 
-            if (currentConnection >= limit) {
-                String userErrMsg = String.format("Role-based connection limit reached "
+                if (currentConnection >= limit) {
+                    String userErrMsg = String.format("Role-based connection limit reached "
                                 + "[user=%s, role=%s, maxAllowed=%s, activeConnections=%s, node=%s, connectionId=%s]",
                             ctx.getQualifiedUser(),
                             role,
@@ -89,12 +95,13 @@ public class RoleConnectionManager {
                             currentConnection,
                             ctx.getGlobalStateMgr().getNodeMgr().getSelfNode(),
                             ctx.getConnectionId());
-                LOG.info("{}, details: connectionId={}, connByRole{}", userErrMsg, ctx.getConnectionId(), connCountByRole);
-                throw new AuthenticationException(ErrorCode.ERR_GROUP_MAX_CONNECTION, role, limit, currentConnection);
+                    LOG.info("{}, details: userRoles={}", userErrMsg, userRoles);
+                    throw new AuthenticationException(ErrorCode.ERR_GROUP_MAX_CONNECTION, role, limit, currentConnection);
+                }
             }
-        }
 
-        this.registerConnection(userRoles);
+            this.registerConnection(userRoles);
+        }
     }
 
     private Map<String, Integer> getMaxLimitForRoles(Set<String> userRoles) {
@@ -103,9 +110,10 @@ public class RoleConnectionManager {
         for (String role : userRoles) {
             result.put(role, maxConnections);
 
-            for (RoleConnectionLimit limit : roleConnectionLimits) {
-                if (limit.matches(role)) {
-                    result.put(role, limit.maxConnections);
+            for (RoleConnectionLimit rcl : roleConnectionLimits) {
+                if (rcl.matches(role)) {
+                    result.put(role, rcl.maxConnections);
+                    break;
                 }
             }
         }
