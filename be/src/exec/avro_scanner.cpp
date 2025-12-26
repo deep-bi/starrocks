@@ -54,6 +54,12 @@ extern "C" {
 }
 #endif
 
+namespace {
+constexpr std::string_view SSL_CA_LOCATION_KEY = "schema.registry.ssl.ca.location";
+constexpr std::string_view SSL_CERTIFICATE_LOCATION_KEY = "schema.registry.ssl.certificate.location";
+constexpr std::string_view SSL_KEY_LOCATION_KEY = "schema.registry.ssl.key.location";
+constexpr std::string_view SSL_KEY_PASSWORD_KEY = "schema.registry.ssl.key.password";
+
 void replaceAll(std::string& str, const std::string& from, const std::string& to) {
     if (from.empty()) return;
     size_t start_pos = 0;
@@ -62,6 +68,7 @@ void replaceAll(std::string& str, const std::string& from, const std::string& to
         start_pos += to.length(); // In case 'to' contains 'from', like replacing 'x' with 'yx'
     }
 }
+} // namespace
 
 namespace starrocks {
 
@@ -145,6 +152,20 @@ Status AvroScanner::open() {
 
         serdes_conf_t* sconf =
                 serdes_conf_new(nullptr, 0, "schema.registry.url", confluent_schema_registry_url.c_str(), NULL);
+
+        if (_scan_range.params.__isset.properties) {
+            const auto& props = _scan_range.params.properties;
+
+            auto get_property = [&props](std::string_view key) -> const char* {
+                auto it = props.find(std::string(key));
+                return it != props.end() ? it->second.c_str() : nullptr;
+            };
+
+            serdes_conf_set_client_cert(sconf, get_property(SSL_CA_LOCATION_KEY),
+                                        get_property(SSL_CERTIFICATE_LOCATION_KEY), get_property(SSL_KEY_LOCATION_KEY),
+                                        get_property(SSL_KEY_PASSWORD_KEY), nullptr, 0);
+        }
+
         _serdes = serdes_new(sconf, _err_buf, sizeof(_err_buf));
         if (!_serdes) {
             LOG(ERROR) << "failed to create serdes handle: " << _err_buf;
