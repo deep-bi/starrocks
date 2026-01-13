@@ -74,6 +74,9 @@ else
     PARALLEL=$[$(nproc)/4+1]
 fi
 
+echo "Building libevent with OpenSSL ..."
+./thirdparty/build-libevent.sh
+
 # Check args
 usage() {
   echo "
