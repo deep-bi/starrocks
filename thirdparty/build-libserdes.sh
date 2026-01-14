@@ -102,22 +102,9 @@ check_prerequest "libtoolize --version" "libtool"
 
 BUILD_SYSTEM=${BUILD_SYSTEM:-make}
 
-# sudo apt-get install binutils-dev
-# sudo yum install binutils-devel
-#check_prerequest "locate libbfd.a" "binutils-dev"
-
-# sudo apt-get install libiberty-dev
-# no need in centos 7.1
-#check_prerequest "locate libiberty.a" "libiberty-dev"
-
-# sudo apt-get install bison
-# sudo yum install bison
-#check_prerequest "bison --version" "bison"
-
-#########################
-# build all thirdparties
-#########################
-
+####################################
+# build libserdes & its dependencies
+####################################
 
 # Name of cmake build directory in each thirdpary project.
 # Do not use `build`, because many projects contained a file named `BUILD`
