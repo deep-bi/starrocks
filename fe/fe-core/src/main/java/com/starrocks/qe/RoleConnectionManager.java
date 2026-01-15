@@ -99,7 +99,8 @@ public class RoleConnectionManager {
                     throw new AuthenticationException(ErrorCode.ERR_GROUP_MAX_CONNECTION, role, limit, currentConnection);
                 }
             }
-
+        } finally {
+            // Register the connection, since it has already been created before we apply any role based restrictions.
             this.registerConnection(userRoles);
         }
     }
