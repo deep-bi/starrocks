@@ -59,6 +59,7 @@ constexpr std::string_view SSL_CA_LOCATION_KEY = "schema.registry.ssl.ca.locatio
 constexpr std::string_view SSL_CERTIFICATE_LOCATION_KEY = "schema.registry.ssl.certificate.location";
 constexpr std::string_view SSL_KEY_LOCATION_KEY = "schema.registry.ssl.key.location";
 constexpr std::string_view SSL_KEY_PASSWORD_KEY = "schema.registry.ssl.key.password";
+constexpr std::string_view SSL_TLS_MIN_VERSION_KEY = "schema.registry.ssl.tls.min.version";
 
 void replaceAll(std::string& str, const std::string& from, const std::string& to) {
     if (from.empty()) return;
@@ -161,9 +162,24 @@ Status AvroScanner::open() {
                 return it != props.end() ? it->second.c_str() : nullptr;
             };
 
-            serdes_conf_set_client_cert(sconf, get_property(SSL_CA_LOCATION_KEY),
-                                        get_property(SSL_CERTIFICATE_LOCATION_KEY), get_property(SSL_KEY_LOCATION_KEY),
-                                        get_property(SSL_KEY_PASSWORD_KEY), nullptr, 0);
+            serdes_err_t err = serdes_conf_set_client_cert(
+                    sconf, get_property(SSL_CA_LOCATION_KEY), get_property(SSL_CERTIFICATE_LOCATION_KEY),
+                    get_property(SSL_KEY_LOCATION_KEY), get_property(SSL_KEY_PASSWORD_KEY), _err_buf, sizeof(_err_buf));
+
+            if (err) {
+                LOG(ERROR) << "failed to set client cert: " << _err_buf;
+                return Status::InternalError("failed to set client cert");
+            }
+
+            auto tls_min_version = get_property(SSL_TLS_MIN_VERSION_KEY);
+            if (tls_min_version != nullptr) {
+                err = serdes_conf_set(sconf, SSL_TLS_MIN_VERSION_KEY.data(), tls_min_version, _err_buf,
+                                      sizeof(_err_buf));
+                if (err) {
+                    LOG(WARNING) << "failed to set tls min version: " << _err_buf;
+                    _err_buf[0] = '\0'; // _err_buf can be reused
+                }
+            }
         }
 
         _serdes = serdes_new(sconf, _err_buf, sizeof(_err_buf));
