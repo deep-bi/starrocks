@@ -32,48 +32,46 @@
 // specific language governing permissions and limitations
 // under the License.
 
-package com.starrocks.http.rest;
+package com.starrocks.http;
 
-import com.google.common.base.Strings;
 import com.starrocks.common.Config;
-import com.starrocks.http.SslUtil;
-import io.netty.handler.ssl.OpenSsl;
-import io.netty.handler.ssl.SslContext;
-import io.netty.handler.ssl.SslContextBuilder;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
-import java.io.FileInputStream;
-import java.io.InputStream;
-import java.security.KeyStore;
 import java.util.Arrays;
-import javax.net.ssl.KeyManagerFactory;
-import javax.net.ssl.SSLServerSocketFactory;
+import java.util.Collections;
+import java.util.List;
+import java.util.Objects;
+import java.util.regex.Pattern;
 
-public class HttpSSLContextLoader {
-    private static SslContext sslContext;
+public class SslUtil {
 
-    public static void load() throws Exception {
-        if (Config.enable_https && !Strings.isNullOrEmpty(Config.ssl_keystore_location)) {
-            sslContext = createSSLContext();
+    private static final Logger LOG = LogManager.getLogger(SslUtil.class);
+
+    public static String[] filterCipherSuites(String[] defaults) {
+        List<Pattern> whitelist = Config.sslCipherWhitelist.isEmpty()
+                ? Collections.emptyList()
+                : Arrays.stream(Config.sslCipherWhitelist.split("\\s*,\\s*"))
+                .filter(s -> !s.isEmpty())
+                .map(Pattern::compile)
+                .toList();
+        List<Pattern> blacklist = Config.sslCipherBlacklist.isEmpty()
+                ? Collections.emptyList()
+                : Arrays.stream(Config.sslCipherBlacklist.split("\\s*,\\s*"))
+                .filter(s -> !s.isEmpty())
+                .map(Pattern::compile)
+                .toList();
+        String[] filtered = Arrays.stream(defaults)
+                .filter(Objects::nonNull)
+                .filter(c -> whitelist.isEmpty() || whitelist.stream()
+                        .anyMatch(p -> p.matcher(c).matches()))
+                .filter(c -> blacklist.stream()
+                        .noneMatch(p -> p.matcher(c).matches()))
+                .toArray(String[]::new);
+
+        if (filtered.length == 0) {
+            LOG.warn("No cipher suites left, please check your whitelist and blacklist settings.");
         }
-    }
-
-    public static SslContext getSslContext() {
-        return sslContext;
-    }
-
-    private static SslContext createSSLContext() throws Exception {
-        KeyStore keyStore = KeyStore.getInstance(Config.ssl_keystore_type);
-        try (InputStream keyStoreIS = new FileInputStream(Config.ssl_keystore_location)) {
-            keyStore.load(keyStoreIS, Config.ssl_keystore_password.toCharArray());
-        }
-        KeyManagerFactory kmf = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm());
-        kmf.init(keyStore, Config.ssl_key_password.toCharArray());
-
-        String[] supportedCiphers = OpenSsl.isAvailable()
-                ? OpenSsl.availableJavaCipherSuites().toArray(new String[0])
-                : ((SSLServerSocketFactory) SSLServerSocketFactory.getDefault())
-                .getSupportedCipherSuites();
-        String[] filteredCiphers = SslUtil.filterCipherSuites(supportedCiphers);
-        return SslContextBuilder.forServer(kmf).ciphers(Arrays.asList(filteredCiphers)).build();
+        return filtered;
     }
 }
