@@ -1,3 +1,17 @@
+// Copyright 2021-present StarRocks, Inc. All rights reserved.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package com.starrocks.http;
 
 import io.netty.buffer.ByteBufAllocator;
@@ -5,7 +19,6 @@ import io.netty.handler.ssl.OpenSsl;
 import io.netty.handler.ssl.SslContext;
 import io.netty.handler.ssl.SslContextBuilder;
 import io.netty.handler.ssl.SslProvider;
-
 import org.apache.arrow.driver.jdbc.shaded.org.bouncycastle.asn1.x500.X500Name;
 import org.apache.arrow.driver.jdbc.shaded.org.bouncycastle.asn1.x509.BasicConstraints;
 import org.apache.arrow.driver.jdbc.shaded.org.bouncycastle.asn1.x509.Extension;
@@ -14,7 +27,6 @@ import org.apache.arrow.driver.jdbc.shaded.org.bouncycastle.asn1.x509.GeneralNam
 import org.apache.arrow.driver.jdbc.shaded.org.bouncycastle.cert.X509CertificateHolder;
 import org.apache.arrow.driver.jdbc.shaded.org.bouncycastle.cert.jcajce.JcaX509ExtensionUtils;
 import org.apache.arrow.driver.jdbc.shaded.org.bouncycastle.cert.jcajce.JcaX509v3CertificateBuilder;
-
 import org.apache.arrow.driver.jdbc.shaded.org.bouncycastle.operator.ContentSigner;
 import org.apache.arrow.driver.jdbc.shaded.org.bouncycastle.operator.jcajce.JcaContentSignerBuilder;
 import org.junit.jupiter.api.AfterAll;
