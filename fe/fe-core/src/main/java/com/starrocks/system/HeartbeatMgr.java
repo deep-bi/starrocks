@@ -98,7 +98,7 @@ public class HeartbeatMgr extends FrontendDaemon {
                 epoch);
         tMasterInfo.setCluster_id(clusterId);
         tMasterInfo.setToken(token);
-        tMasterInfo.setHttp_port(Config.http_port);
+        tMasterInfo.setHttp_port(Config.enable_https ? Config.https_port : Config.http_port);
         long flags = HeartbeatFlags.getHeartbeatFlags();
         tMasterInfo.setHeartbeat_flags(flags);
         tMasterInfo.setMin_active_txn_id(GlobalStateMgr.getCurrentState().getGlobalTransactionMgr().getMinActiveTxnId());
