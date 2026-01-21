@@ -182,7 +182,7 @@ public class AuthenticationHandler {
                 authenticationResult.groupProviderName);
         context.setGroups(groups);
         // Set current role IDs based on the authenticated user and groups
-        context.setCurrentRoleIds(authenticationResult.authenticatedUser, groups);
+        context.setCurrentRoleIds(authenticationResult.authenticatedUser);
 
         // Step 5: Validate group access permissions
         // If authentication result specifies allowed groups, verify user belongs to at least one
