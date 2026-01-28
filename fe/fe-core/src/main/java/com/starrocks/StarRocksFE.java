@@ -182,7 +182,7 @@ public class StarRocksFE {
             // 4. ArrowFlightSqlService for Arrow Flight SQL Server
             QeService qeService = new QeService(Config.query_port, ExecuteEnv.getInstance().getScheduler());
             FrontendThriftServer frontendThriftServer = new FrontendThriftServer(Config.rpc_port);
-            HttpServer httpServer = new HttpServer(Config.http_port);
+            HttpServer httpServer = new HttpServer(Config.enable_https ? Config.https_port : Config.http_port);
             ArrowFlightSqlService arrowFlightSqlService = new ArrowFlightSqlService(Config.arrow_flight_port);
 
             httpServer.setup();
@@ -303,8 +303,10 @@ public class StarRocksFE {
     }
 
     private static boolean isNewLeaderReady(String leaderHost) {
-        String accessibleHostPort = NetUtils.getHostPortInAccessibleFormat(leaderHost, Config.http_port);
-        String url = "http://" + accessibleHostPort
+        int port = Config.enable_https ? Config.https_port : Config.http_port;
+        String scheme = Config.enable_https ? "https://" : "http://";
+        String accessibleHostPort = NetUtils.getHostPortInAccessibleFormat(leaderHost, port);
+        String url = scheme + accessibleHostPort
                 + "/api/bootstrap"
                 + "?cluster_id=" + GlobalStateMgr.getCurrentState().getNodeMgr().getClusterId()
                 + "&token=" +  GlobalStateMgr.getCurrentState().getNodeMgr().getToken();
