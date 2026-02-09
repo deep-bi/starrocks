@@ -1,0 +1,160 @@
+// Copyright 2021-present StarRocks, Inc. All rights reserved.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+#include <gtest/gtest.h>
+
+#include <atomic>
+#include <chrono>
+#include <condition_variable>
+#include <deque>
+#include <functional>
+#include <future>
+#include <mutex>
+#include <thread>
+
+#include "service/service_be/shutdown_order.h"
+
+namespace starrocks {
+
+class MockExecPool {
+public:
+    MockExecPool() : _worker([this] { run(); }) {}
+
+    ~MockExecPool() {
+        shutdown();
+        if (_worker.joinable()) {
+            _worker.join();
+        }
+    }
+
+    bool submit(std::function<void()> task) {
+        std::lock_guard<std::mutex> lock(_mu);
+        if (_stopped) {
+            return false;
+        }
+        _tasks.emplace_back(std::move(task));
+        _cv.notify_one();
+        return true;
+    }
+
+    void set_allow_run(bool allow_run) {
+        std::lock_guard<std::mutex> lock(_mu);
+        _allow_run = allow_run;
+        _cv.notify_all();
+    }
+
+    void shutdown() {
+        std::lock_guard<std::mutex> lock(_mu);
+        _stopped = true;
+        _tasks.clear();
+        _cv.notify_all();
+    }
+
+private:
+    void run() {
+        std::unique_lock<std::mutex> lock(_mu);
+        while (true) {
+            _cv.wait(lock, [&] { return _stopped || (_allow_run && !_tasks.empty()); });
+            if (_stopped) {
+                return;
+            }
+            auto task = std::move(_tasks.front());
+            _tasks.pop_front();
+            lock.unlock();
+            task();
+            lock.lock();
+        }
+    }
+
+    std::mutex _mu;
+    std::condition_variable _cv;
+    std::deque<std::function<void()>> _tasks;
+    std::thread _worker;
+    bool _stopped{false};
+    bool _allow_run{false};
+};
+
+class MockBrpcServer {
+public:
+    explicit MockBrpcServer(std::function<bool(std::function<void()>)> submit_task)
+            : _submit_task(std::move(submit_task)), _queued_future(_queued_promise.get_future()) {}
+
+    ~MockBrpcServer() { join(); }
+
+    void start_inflight_request() {
+        _inflight.store(true);
+        _request_thread = std::thread([this] {
+            auto done = std::make_shared<std::promise<void>>();
+            auto done_future = done->get_future();
+            bool accepted = _submit_task([done] { done->set_value(); });
+            _queued_promise.set_value();
+
+            if (!accepted || done_future.wait_for(std::chrono::milliseconds(150)) != std::future_status::ready) {
+                _deadlock_detected.store(true);
+            }
+            _finish_request();
+        });
+    }
+
+    void wait_task_queued() { _queued_future.wait(); }
+
+    bool join_for(std::chrono::milliseconds timeout) {
+        std::unique_lock<std::mutex> lock(_mu);
+        return _done_cv.wait_for(lock, timeout, [&] { return !_inflight.load(); });
+    }
+
+    bool deadlock_detected() const { return _deadlock_detected.load(); }
+
+    void join() {
+        if (_request_thread.joinable()) {
+            _request_thread.join();
+        }
+    }
+
+private:
+    void _finish_request() {
+        _inflight.store(false);
+        _done_cv.notify_all();
+    }
+
+    std::function<bool(std::function<void()>)> _submit_task;
+    std::thread _request_thread;
+    std::atomic<bool> _inflight{false};
+    std::atomic<bool> _deadlock_detected{false};
+    std::mutex _mu;
+    std::condition_variable _done_cv;
+    std::promise<void> _queued_promise;
+    std::future<void> _queued_future;
+};
+
+TEST(BrpcShutdownDeadlockTest, PatchedOrderDrainsBeforePoolStop) {
+    MockExecPool pool;
+    MockBrpcServer brpc([&](std::function<void()> task) { return pool.submit(std::move(task)); });
+    brpc.start_inflight_request();
+    brpc.wait_task_queued();
+
+    CoreShutdownHooks hooks;
+    hooks.stop_servers = [] {};
+    hooks.join_servers = [&] {
+        pool.set_allow_run(true);
+        ASSERT_TRUE(brpc.join_for(std::chrono::milliseconds(200)));
+    };
+    hooks.stop_exec_env = [&] { pool.shutdown(); };
+
+    shutdown_core_components(hooks);
+    ASSERT_FALSE(brpc.deadlock_detected());
+    brpc.join();
+}
+
+} // namespace starrocks

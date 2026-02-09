@@ -22,6 +22,7 @@ add_library(ServiceBE
     http_service.cpp
     internal_service.cpp
     lake_service.cpp
+    shutdown_order.cpp
     starrocks_be.cpp
     arrow_flight_sql_service.cpp
     arrow_flight_auth_server_middleware.cpp
