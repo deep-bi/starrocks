@@ -61,6 +61,8 @@ public:
         _cv.notify_all();
     }
 
+    bool is_stopped() const { return _stopped.load(); }
+
 private:
     void run() {
         std::unique_lock<std::mutex> lock(_mu);
@@ -81,40 +83,79 @@ private:
     std::condition_variable _cv;
     std::deque<std::function<void()>> _tasks;
     std::thread _worker;
-    bool _stopped{false};
+    std::atomic<bool> _stopped{false};
     bool _allow_run{false};
 };
 
 class MockBrpcServer {
 public:
-    explicit MockBrpcServer(std::function<bool(std::function<void()>)> submit_task)
-            : _submit_task(std::move(submit_task)), _queued_future(_queued_promise.get_future()) {}
+    explicit MockBrpcServer(std::function<bool(std::function<void()>)> submit_task, MockExecPool* pool)
+            : _submit_task(std::move(submit_task)), _pool(pool) {}
 
-    ~MockBrpcServer() { join(); }
+    ~MockBrpcServer() {
+        cancel();
+        join();
+    }
 
     void start_inflight_request() {
         _inflight.store(true);
         _request_thread = std::thread([this] {
-            auto done = std::make_shared<std::promise<void>>();
-            auto done_future = done->get_future();
-            bool accepted = _submit_task([done] { done->set_value(); });
-            _queued_promise.set_value();
+            bool accepted = _submit_task([this] {
+                {
+                    std::lock_guard<std::mutex> lock(_mu);
+                    _done = true;
+                }
+                _cv.notify_all();
+            });
 
-            if (!accepted || done_future.wait_for(std::chrono::milliseconds(150)) != std::future_status::ready) {
-                _deadlock_detected.store(true);
+            {
+                std::lock_guard<std::mutex> lock(_mu);
+                _accepted = accepted;
+                _queued = true;
+                _waiting = accepted;
             }
+            _cv.notify_all();
+
+            if (!accepted) {
+                _finish_request();
+                return;
+            }
+
+            std::unique_lock<std::mutex> lock(_mu);
+            _cv.wait(lock, [&] { return _cancel || _done; });
+
+            if (_accepted && !_done && _pool->is_stopped()) {
+                _deadlock_possible.store(true);
+            }
+            _waiting = false;
             _finish_request();
         });
     }
 
-    void wait_task_queued() { _queued_future.wait(); }
+    void wait_task_queued() {
+        std::unique_lock<std::mutex> lock(_mu);
+        _cv.wait(lock, [&] { return _queued; });
+    }
+
+    void wait_request_waiting() {
+        std::unique_lock<std::mutex> lock(_mu);
+        _cv.wait(lock, [&] { return _waiting; });
+    }
 
     bool join_for(std::chrono::milliseconds timeout) {
-        std::unique_lock<std::mutex> lock(_mu);
+        std::unique_lock<std::mutex> lock(_done_mu);
         return _done_cv.wait_for(lock, timeout, [&] { return !_inflight.load(); });
     }
 
-    bool deadlock_detected() const { return _deadlock_detected.load(); }
+    void cancel() {
+        {
+            std::lock_guard<std::mutex> lock(_mu);
+            _cancel = true;
+        }
+        _cv.notify_all();
+    }
+
+    bool deadlock_possible() const { return _deadlock_possible.load(); }
 
     void join() {
         if (_request_thread.joinable()) {
@@ -125,36 +166,84 @@ public:
 private:
     void _finish_request() {
         _inflight.store(false);
+        std::lock_guard<std::mutex> lock(_done_mu);
         _done_cv.notify_all();
     }
 
     std::function<bool(std::function<void()>)> _submit_task;
+    MockExecPool* _pool;
     std::thread _request_thread;
-    std::atomic<bool> _inflight{false};
-    std::atomic<bool> _deadlock_detected{false};
+
     std::mutex _mu;
+    std::condition_variable _cv;
+    bool _accepted{false};
+    bool _queued{false};
+    bool _waiting{false};
+    bool _done{false};
+    bool _cancel{false};
+
+    std::atomic<bool> _inflight{false};
+    std::atomic<bool> _deadlock_possible{false};
+    std::mutex _done_mu;
     std::condition_variable _done_cv;
-    std::promise<void> _queued_promise;
-    std::future<void> _queued_future;
 };
 
-TEST(BrpcShutdownDeadlockTest, PatchedOrderDrainsBeforePoolStop) {
+static void stop_exec_before_join(const CoreShutdownHooks& hooks) {
+    if (hooks.stop_servers) {
+        hooks.stop_servers();
+    }
+    if (hooks.stop_exec_env) {
+        hooks.stop_exec_env();
+    }
+    if (hooks.join_servers) {
+        hooks.join_servers();
+    }
+}
+
+TEST(BrpcShutdownDeadlockTest, DetectsDeadlockWhenExecStopsFirst) {
     MockExecPool pool;
-    MockBrpcServer brpc([&](std::function<void()> task) { return pool.submit(std::move(task)); });
+    MockBrpcServer brpc([&](std::function<void()> task) { return pool.submit(std::move(task)); }, &pool);
+
     brpc.start_inflight_request();
     brpc.wait_task_queued();
+    brpc.wait_request_waiting();
+
+    CoreShutdownHooks hooks;
+    hooks.stop_servers = [] {};
+    hooks.stop_exec_env = [&] { pool.shutdown(); };
+    hooks.join_servers = [&] {
+        pool.set_allow_run(true);
+        ASSERT_FALSE(brpc.join_for(std::chrono::milliseconds(80)));
+    };
+
+    stop_exec_before_join(hooks);
+    ASSERT_TRUE(pool.is_stopped());
+
+    brpc.cancel();
+    ASSERT_TRUE(brpc.join_for(std::chrono::milliseconds(500)));
+    ASSERT_TRUE(brpc.deadlock_possible());
+}
+
+TEST(BrpcShutdownDeadlockTest, DrainsBeforeExecStop) {
+    MockExecPool pool;
+    MockBrpcServer brpc([&](std::function<void()> task) { return pool.submit(std::move(task)); }, &pool);
+
+    brpc.start_inflight_request();
+    brpc.wait_task_queued();
+    brpc.wait_request_waiting();
 
     CoreShutdownHooks hooks;
     hooks.stop_servers = [] {};
     hooks.join_servers = [&] {
         pool.set_allow_run(true);
-        ASSERT_TRUE(brpc.join_for(std::chrono::milliseconds(200)));
+        ASSERT_TRUE(brpc.join_for(std::chrono::milliseconds(250)));
     };
     hooks.stop_exec_env = [&] { pool.shutdown(); };
 
     shutdown_core_components(hooks);
-    ASSERT_FALSE(brpc.deadlock_detected());
-    brpc.join();
+    ASSERT_TRUE(pool.is_stopped());
+
+    ASSERT_FALSE(brpc.deadlock_possible());
 }
 
 } // namespace starrocks
