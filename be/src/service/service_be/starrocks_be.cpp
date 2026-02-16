@@ -39,7 +39,6 @@
 #include "service/service_be/http_service.h"
 #include "service/service_be/internal_service.h"
 #include "service/service_be/lake_service.h"
-#include "service/service_be/shutdown_order.h"
 #include "service/staros_worker.h"
 #include "storage/lake/tablet_manager.h"
 #include "storage/storage_engine.h"
@@ -254,39 +253,19 @@ void start_be(const std::vector<StorePath>& paths, bool as_cn) {
     arrow_flight_sql_server.reset();
     LOG(INFO) << process_name << " exit step " << exit_step++ << ": Arrow Flight SQL server exit successfully";
 
-    CoreShutdownHooks core_shutdown_hooks;
-    core_shutdown_hooks.stop_servers = [&] {
-        http_server->stop();
-        brpc_server->Stop(0);
-        thrift_server->stop();
-    };
-    core_shutdown_hooks.join_servers = [&] {
-        http_server->join();
-        http_server.reset();
-        LOG(INFO) << process_name << " exit step " << exit_step++ << ": http server exit successfully";
+    http_server->stop();
+    brpc_server->Stop(0);
+    thrift_server->stop();
 
-        brpc_server->Join();
-        brpc_server.reset();
-        LOG(INFO) << process_name << " exit step " << exit_step++ << ": brpc server exit successfully";
+    daemon->stop();
+    daemon.reset();
+    LOG(INFO) << process_name << " exit step " << exit_step++ << ": daemon threads exit successfully";
 
-        thrift_server->join();
-        thrift_server.reset();
-        LOG(INFO) << process_name << " exit step " << exit_step++ << ": thrift server exit successfully";
-    };
-    core_shutdown_hooks.stop_daemon = [&] {
-        daemon->stop();
-        daemon.reset();
-        LOG(INFO) << process_name << " exit step " << exit_step++ << ": daemon threads exit successfully";
-    };
-    core_shutdown_hooks.stop_exec_env = [&] {
-        exec_env->stop();
-        LOG(INFO) << process_name << " exit step " << exit_step++ << ": exec engine destroy successfully";
-    };
-    core_shutdown_hooks.stop_storage = [&] {
-        storage_engine->stop();
-        LOG(INFO) << process_name << " exit step " << exit_step++ << ": storage engine exit successfully";
-    };
-    shutdown_core_components(core_shutdown_hooks);
+    exec_env->stop();
+    LOG(INFO) << process_name << " exit step " << exit_step++ << ": exec engine destroy successfully";
+
+    storage_engine->stop();
+    LOG(INFO) << process_name << " exit step " << exit_step++ << ": storage engine exit successfully";
 
 #ifdef USE_STAROS
     if (exec_env->lake_tablet_manager() != nullptr) {
@@ -300,6 +279,18 @@ void start_be(const std::vector<StorePath>& paths, bool as_cn) {
         starrocks::poco::HTTPSessionPools::instance().shutdown();
         LOG(INFO) << process_name << " exit step " << exit_step++ << ": poco connection pool shutdown successfully";
     }
+
+    http_server->join();
+    http_server.reset();
+    LOG(INFO) << process_name << " exit step " << exit_step++ << ": http server exit successfully";
+
+    brpc_server->Join();
+    brpc_server.reset();
+    LOG(INFO) << process_name << " exit step " << exit_step++ << ": brpc server exit successfully";
+
+    thrift_server->join();
+    thrift_server.reset();
+    LOG(INFO) << process_name << " exit step " << exit_step++ << ": thrift server exit successfully";
 
     exec_env->destroy();
     LOG(INFO) << process_name << " exit step " << exit_step++ << ": exec env destroy successfully";

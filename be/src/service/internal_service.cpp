@@ -721,11 +721,15 @@ void PInternalServiceImplBase<T>::get_info(google::protobuf::RpcController* cont
     int timeout_ms =
             request->has_timeout() ? request->timeout() * 1000 : config::routine_load_kafka_timeout_second * 1000;
 
-    auto task = [this, request, response, done, timeout_ms]() {
-        this->_get_info_impl(request, response, done, timeout_ms);
-    };
+    auto task = std::make_shared<CancellableRunnable>(
+            [this, request, response, done, timeout_ms]() { this->_get_info_impl(request, response, done, timeout_ms); },
+            [response, done]() {
+                ClosureGuard closure_guard(done);
+                Status::ServiceUnavailable("cancelled because load rpc pool is shutting down")
+                        .to_protobuf(response->mutable_status());
+            });
 
-    auto st = _exec_env->load_rpc_pool()->submit_func(std::move(task));
+    auto st = _exec_env->load_rpc_pool()->submit(std::move(task));
     if (!st.ok()) {
         LOG(WARNING) << "get kafka info: " << st << " ,timeout: " << timeout_ms
                      << ", thread pool size: " << _exec_env->load_rpc_pool()->num_threads();
@@ -818,11 +822,17 @@ void PInternalServiceImplBase<T>::get_pulsar_info(google::protobuf::RpcControlle
     int timeout_ms =
             request->has_timeout() ? request->timeout() * 1000 : config::routine_load_pulsar_timeout_second * 1000;
 
-    auto task = [this, request, response, done, timeout_ms]() {
-        this->_get_pulsar_info_impl(request, response, done, timeout_ms);
-    };
+    auto task = std::make_shared<CancellableRunnable>(
+            [this, request, response, done, timeout_ms]() {
+                this->_get_pulsar_info_impl(request, response, done, timeout_ms);
+            },
+            [response, done]() {
+                ClosureGuard closure_guard(done);
+                Status::ServiceUnavailable("cancelled because load rpc pool is shutting down")
+                        .to_protobuf(response->mutable_status());
+            });
 
-    auto st = _exec_env->load_rpc_pool()->submit_func(std::move(task));
+    auto st = _exec_env->load_rpc_pool()->submit(std::move(task));
     if (!st.ok()) {
         LOG(WARNING) << "get pulsar info: " << st << " ,timeout: " << timeout_ms
                      << ", thread pool size: " << _exec_env->load_rpc_pool()->num_threads();
@@ -897,9 +907,15 @@ template <typename T>
 void PInternalServiceImplBase<T>::get_file_schema(google::protobuf::RpcController* controller,
                                                   const PGetFileSchemaRequest* request, PGetFileSchemaResult* response,
                                                   google::protobuf::Closure* done) {
-    auto task = [=]() { this->_get_file_schema(controller, request, response, done); };
+    auto task = std::make_shared<CancellableRunnable>(
+            [=]() { this->_get_file_schema(controller, request, response, done); },
+            [response, done]() {
+                ClosureGuard closure_guard(done);
+                Status::ServiceUnavailable("cancelled because load rpc pool is shutting down")
+                        .to_protobuf(response->mutable_status());
+            });
 
-    auto st = _exec_env->load_rpc_pool()->submit_func(std::move(task));
+    auto st = _exec_env->load_rpc_pool()->submit(std::move(task));
     if (!st.ok()) {
         LOG(WARNING) << "get file schema: " << st
                      << ", thread pool size: " << _exec_env->load_rpc_pool()->num_threads();

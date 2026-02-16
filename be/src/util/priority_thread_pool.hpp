@@ -190,13 +190,11 @@ private:
     }
 
     // Driver method for each thread in the pool. Continues to read work from the queue
-    // until the pool is shutdown.
+    // until the pool is shutdown and queue is drained.
     void work_thread(int thread_id) {
-        while (!is_shutdown()) {
-            Task task;
-            if (_work_queue.blocking_get(&task)) {
-                task.work_function();
-            }
+        Task task;
+        while (_work_queue.blocking_get(&task)) {
+            task.work_function();
             if (_work_queue.get_size() == 0) {
                 _empty_cv.notify_all();
             }
