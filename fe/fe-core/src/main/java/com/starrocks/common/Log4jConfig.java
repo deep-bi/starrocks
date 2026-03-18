@@ -41,7 +41,6 @@ import groovy.lang.Tuple3;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.core.LoggerContext;
-import org.apache.logging.log4j.core.config.Configuration;
 import org.apache.logging.log4j.core.config.ConfigurationSource;
 import org.apache.logging.log4j.core.config.xml.XmlConfiguration;
 import org.apache.logging.log4j.core.lookup.Interpolator;
@@ -49,11 +48,8 @@ import org.apache.logging.log4j.core.lookup.StrSubstitutor;
 
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
-import java.io.InputStream;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Paths;
 import java.util.Map;
 import java.util.Set;
 
@@ -421,13 +417,11 @@ public class Log4jConfig extends XmlConfiguration {
         String customConfig = System.getProperty("log4j.configurationFile");
 
         if (StringUtils.isNotBlank(customConfig)) {
-            URI uri = URI.create(customConfig);
-
-            try (InputStream inputStream = Files.newInputStream(Paths.get(uri))) {
-                ConfigurationSource source = new ConfigurationSource(inputStream);
+            try {
+                URI uri = URI.create(customConfig);
                 LoggerContext context = (LoggerContext) LogManager.getContext(false);
-                Configuration config = new Log4jConfig(source);
-                context.start(config);
+                context.setConfigLocation(uri);
+                context.start();
                 return;
             } catch (Exception e) {
                 System.err.println("[ERROR] Failed to initialize custom Log4j config: " + customConfig);
