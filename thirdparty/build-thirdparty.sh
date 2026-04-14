@@ -1460,12 +1460,12 @@ export CXXFLAGS=$GLOBAL_CXXFLAGS
 export CFLAGS=$GLOBAL_CFLAGS
 
 
-build_libevent
-build_zlib
+build_zlib # must before openssl
 build_lz4
 build_lzo2
 build_bzip
 build_openssl
+build_libevent
 build_boost # must before thrift
 build_protobuf
 build_gflags
