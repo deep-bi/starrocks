@@ -15,9 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#ifndef EVENT_HAVE_OPENSSL
-#define EVENT_HAVE_OPENSSL
-#endif
 #pragma once
 
 #include <event2/bufferevent_ssl.h>

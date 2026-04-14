@@ -32,10 +32,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#ifndef EVENT_HAVE_OPENSSL
-#define EVENT_HAVE_OPENSSL
-#endif
-
 #include "http/ev_http_server.h"
 
 #include <event2/buffer.h>
