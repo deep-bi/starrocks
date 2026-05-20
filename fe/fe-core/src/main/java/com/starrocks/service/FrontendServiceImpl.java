@@ -1767,11 +1767,11 @@ public class FrontendServiceImpl implements FrontendService.Iface {
                 " target cluster if you don't want to check the authorization and privilege.";
 
         // 1. check user and password
-        UserIdentity userIdentity;
+        ConnectContext context;
         try {
             BaseAction.ActionAuthorizationInfo authInfo = BaseAction.parseAuthInfo(
                     authParams.getUser(), authParams.getPasswd(), authParams.getHost());
-            userIdentity = BaseAction.checkPassword(authInfo);
+            context = BaseAction.checkPassword(authInfo);
         } catch (Exception e) {
             LOG.warn("Failed to check TAuthenticateParams [user: {}, host: {}, db: {}, tables: {}]",
                     authParams.user, authParams.getHost(), authParams.getDb_name(), authParams.getTable_names(), e);
@@ -1785,9 +1785,6 @@ public class FrontendServiceImpl implements FrontendService.Iface {
         try {
             String dbName = authParams.getDb_name();
             for (String tableName : authParams.getTable_names()) {
-                ConnectContext context = new ConnectContext();
-                context.setCurrentUserIdentity(userIdentity);
-                context.setCurrentRoleIds(userIdentity);
                 Authorizer.checkTableAction(context, dbName, tableName, PrivilegeType.INSERT);
             }
             return new TStatus(TStatusCode.OK);

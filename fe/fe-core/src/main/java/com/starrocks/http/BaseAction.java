@@ -44,6 +44,7 @@ import com.starrocks.authorization.PrivilegeBuiltinConstants;
 import com.starrocks.authorization.PrivilegeException;
 import com.starrocks.common.DdlException;
 import com.starrocks.common.util.DebugUtil;
+import com.starrocks.mysql.privilege.AuthPlugin;
 import com.starrocks.qe.ConnectContext;
 import com.starrocks.server.GlobalStateMgr;
 import com.starrocks.sql.ast.UserIdentity;
@@ -75,6 +76,7 @@ import io.netty.handler.stream.ChunkedInput;
 import io.netty.handler.stream.ChunkedStream;
 import io.netty.util.CharsetUtil;
 import org.apache.commons.collections4.CollectionUtils;
+import org.apache.commons.lang3.StringUtils;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -85,8 +87,10 @@ import java.io.IOException;
 import java.io.RandomAccessFile;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 
 public abstract class BaseAction implements IAction {
@@ -282,6 +286,7 @@ public abstract class BaseAction implements IAction {
         public String fullUserName;
         public String remoteIp;
         public String password;
+        public String authPlugin;
 
         @Override
         public String toString() {
@@ -338,10 +343,15 @@ public abstract class BaseAction implements IAction {
     }
 
     // return currentUserIdentity from StarRocks auth
-    public static UserIdentity checkPassword(ActionAuthorizationInfo authInfo) throws AccessDeniedException {
+    public static ConnectContext checkPassword(ActionAuthorizationInfo authInfo) throws AccessDeniedException {
         try {
-            return AuthenticationHandler.authenticate(new ConnectContext(), authInfo.fullUserName,
+            ConnectContext context = new ConnectContext();
+            context.setAuthPlugin(authInfo.authPlugin);
+            context.setRestCall(true);
+
+            AuthenticationHandler.authenticate(context, authInfo.fullUserName,
                     authInfo.remoteIp, authInfo.password.getBytes(StandardCharsets.UTF_8));
+            return context;
         } catch (AuthenticationException e) {
             throw new AccessDeniedException("Access denied for " + authInfo.fullUserName + "@" + authInfo.remoteIp);
         }
@@ -355,6 +365,8 @@ public abstract class BaseAction implements IAction {
                 LOG.info("parse auth info failed, url {}", request.getRequest().uri());
                 throw new AccessDeniedException("Need auth information.");
             }
+
+            parsePluginInfo(request, authInfo);
             LOG.debug("get auth info: {}", authInfo);
             return authInfo;
         } catch (Exception e) {
@@ -409,6 +421,17 @@ public abstract class BaseAction implements IAction {
             }
         }
         return true;
+    }
+
+    private void parsePluginInfo(BaseRequest request, ActionAuthorizationInfo authInfo) {
+        String pluginInfo = request.getPluginInfoHeader();
+
+        if (StringUtils.isNotBlank(pluginInfo)
+                    && Arrays.stream(AuthPlugin.Client.values())
+                        .map(Objects::toString)
+                        .anyMatch(pluginInfo::equals)) {
+            authInfo.authPlugin = pluginInfo;
+        }
     }
 
     // Refer to {@link #parseAuthInfo(BaseRequest, ActionAuthorizationInfo)}
