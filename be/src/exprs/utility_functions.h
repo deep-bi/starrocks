@@ -26,6 +26,10 @@ public:
     DEFINE_VECTORIZED_FN(current_version);
 
     /**
+     * hello_world - simple builtin for testing that returns a constant string
+     */
+    DEFINE_VECTORIZED_FN(hello_world);
+    /**
      * sleep for int seconds.
      * @param: [int]
      * @return true

@@ -765,6 +765,7 @@ vectorized_functions = [
     [100011, 'sleep', True, False, 'BOOLEAN', ['INT'], "UtilityFunctions::sleep"],
     [100012, 'version', True, False, 'VARCHAR', [], "UtilityFunctions::version"],
     [100013, 'current_version', True, False, 'VARCHAR', [], "UtilityFunctions::current_version"],
+    [100025, 'hello_world', True, False, 'VARCHAR', [], "UtilityFunctions::hello_world"],
     [100014, 'last_query_id', True, False, 'VARCHAR', [], "UtilityFunctions::last_query_id"],
     [100015, 'uuid', True, False, 'VARCHAR', [], "UtilityFunctions::uuid"],
     [100016, 'uuid_numeric', True, False, 'LARGEINT', [], "UtilityFunctions::uuid_numeric"],

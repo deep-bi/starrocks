@@ -61,6 +61,10 @@ StatusOr<ColumnPtr> UtilityFunctions::current_version(FunctionContext* context, 
     return ColumnHelper::create_const_column<TYPE_VARCHAR>(version, 1);
 }
 
+StatusOr<ColumnPtr> UtilityFunctions::hello_world(FunctionContext* context, const Columns& columns) {
+    return ColumnHelper::create_const_column<TYPE_VARCHAR>("HelloWorld", 1);
+}
+
 StatusOr<ColumnPtr> UtilityFunctions::sleep(FunctionContext* context, const Columns& columns) {
     ColumnViewer<TYPE_INT> data_column(columns[0]);
 
