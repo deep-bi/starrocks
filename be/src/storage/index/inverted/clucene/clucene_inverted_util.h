@@ -36,6 +36,8 @@ inline StatusOr<std::unique_ptr<lucene::analysis::Analyzer>> get_analyzer(Invert
         chinese_analyzer->setStem(false);
         return chinese_analyzer;
     }
+    case InvertedIndexParserType::PARSER_WHITESPACE:
+        return std::make_unique<lucene::analysis::WhitespaceAnalyzer>();
     default:
         return Status::NotSupported("Not support UNKNOWN parser_type");
     }
