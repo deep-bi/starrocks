@@ -965,3 +965,37 @@ SELECT id1 FROM t_gin_like_underscore WHERE text_column LIKE "ab%" ORDER BY id1;
 SELECT id1 FROM t_gin_like_underscore WHERE text_column LIKE "abc" ORDER BY id1;
 
 DROP TABLE t_gin_like_underscore;
+-- name: test_gin_index_single_predicate_whitespace
+ADMIN SET FRONTEND CONFIG("enable_experimental_gin" = "true");
+set low_cardinality_optimize_v2 = false;
+set cbo_enable_low_cardinality_optimize = false;
+CREATE TABLE `t_gin_index_single_predicate_whitespace` (
+  `id1` bigint(20) NOT NULL COMMENT "",
+  `text_column` varchar(255) NULL COMMENT "",
+  INDEX gin_whitespace (`text_column`) USING GIN ("parser" = "whitespace") COMMENT 'whitespace index'
+) ENGINE=OLAP
+DUPLICATE KEY(`id1`)
+DISTRIBUTED BY HASH(`id1`) BUCKETS 1
+PROPERTIES (
+"replication_num" = "1",
+"enable_persistent_index" = "true",
+"replicated_storage" = "false",
+"compression" = "LZ4"
+);
+
+INSERT INTO t_gin_index_single_predicate_whitespace VALUES
+(1, "user-john@email.com hello world"),
+(2, "john smith 12345"),
+(3, "Hello World"),
+(4, "hello-world test"),
+(5, NULL);
+
+SELECT * FROM t_gin_index_single_predicate_whitespace WHERE text_column match "john";
+SELECT * FROM t_gin_index_single_predicate_whitespace WHERE text_column match "user-john@email.com";
+SELECT * FROM t_gin_index_single_predicate_whitespace WHERE text_column match "hello";
+SELECT * FROM t_gin_index_single_predicate_whitespace WHERE text_column match "Hello";
+SELECT * FROM t_gin_index_single_predicate_whitespace WHERE text_column match "hello-world";
+SELECT * FROM t_gin_index_single_predicate_whitespace WHERE text_column match "world";
+SELECT * FROM t_gin_index_single_predicate_whitespace WHERE text_column not match "hello";
+
+DROP TABLE t_gin_index_single_predicate_whitespace;
