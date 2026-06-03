@@ -61,7 +61,18 @@ struct DecimalBinaryFunction {
             if constexpr (adjust_left) {
                 overflow = DecimalV3Cast::scale_up<LhsCppType, LhsCppType, check_overflow<overflow_mode>>(
                         lhs_datum, scale_factor, &lhs_datum);
+                if (overflow) {
+                    if constexpr (check_overflow<overflow_mode>)
+                        if constexpr (error_if_overflow<overflow_mode>) {
+                            throw std::overflow_error(strings::Substitute(
+                                    "The '$0' operation involving decimal values overflows", get_op_name<Op>()));
+                        } else {
+                            return true;
+                        }
+                    }
+                }
                 // adjusting operand generates decimal overflow
+                /*
                 if constexpr (check_overflow<overflow_mode>) {
                     if (overflow) {
                         if constexpr (error_if_overflow<overflow_mode>) {
@@ -71,7 +82,7 @@ struct DecimalBinaryFunction {
                             return true;
                         }
                     }
-                }
+                }*/
             }
         }
 
