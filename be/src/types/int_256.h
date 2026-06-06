@@ -4,6 +4,10 @@
 #include <string>
 #include <algorithm>
 
+#include "util/decimal_types.h"
+
+namespace starrocks {
+
 static inline uint128_t abs(int128_t x) {
     return x < 0 ? -x : x;
 }
@@ -33,7 +37,7 @@ static inline void multiply_128x128_to_256(uint128_t a,uint128_t b,uint128_t& lo
         + (middle >> 64);
 }
 
-static std::string to_hex(unsigned __int128 x) {
+static inline std::string to_hex(unsigned __int128 x) {
     const char* hex = "0123456789abcdef";
     std::string s;
     s.reserve(32);
@@ -45,7 +49,7 @@ static std::string to_hex(unsigned __int128 x) {
 
     return s;
 }
-static std::string to_string(unsigned __int128 x) {
+static inline std::string to_string(unsigned __int128 x) {
     if (x == 0) return "0";
 
     std::string s;
@@ -59,7 +63,7 @@ static std::string to_string(unsigned __int128 x) {
     std::reverse(s.begin(), s.end());
     return s;
 }
-static std::string to_string(int128_t x) {
+static inline std::string to_string(int128_t x) {
     if (x == 0) return "0";
 
     bool neg = x < 0;
@@ -132,10 +136,10 @@ static inline uint128_t div_256_by_128_to_128(
     return quotient;
 }
 
-void signed_multiply_128x128_to_256(int128_t x,
-                int128_t y,
-                int128_t& output_low,
-                int128_t& output_high) {
+static inline void signed_multiply_128x128_to_256(int128_t x,
+                                                  int128_t y,
+                                                  int128_t& output_low,
+                                                  int128_t& output_high) {
     
     bool negative = (x < 0) ^ (y < 0);
 
@@ -169,7 +173,6 @@ static inline int128_t signed_div_256_by_128_to_128(
 
     uint128_t u_high = static_cast<uint128_t>(high);
     uint128_t u_low = static_cast<uint128_t>(low);
-    uint128_t u_divisor = static_cast<uint128_t>(divisor);
     abs_256(u_high, u_low);
     uint128_t u_div = abs(divisor);
 
@@ -190,4 +193,6 @@ static inline int128_t signed_div_256_by_128_to_128(
 
     return q;
 }
+
+} // namespace starrocks
 
