@@ -20,6 +20,8 @@
 #include "exprs/overflow.h"
 #include "gutil/strings/substitute.h"
 #include "types/logical_type.h"
+//new
+#include "int_256.h"
 
 namespace starrocks {
 template <OverflowMode overflow_mode, typename Op>
@@ -53,6 +55,9 @@ struct DecimalBinaryFunction {
         [[maybe_unused]] RhsCppType rhs_datum;
         [[maybe_unused]] const auto scale_factor = get_scale_factor<LhsCppType>(adjust_scale);
         [[maybe_unused]] auto overflow = false;
+        //new
+        bool using_int256_division = false;
+        int128_t lhs_scaled_int256_low, lhs_scaled_int256_high;
 
         // if lhs is a const column and needs to adjust, adjust lhs outside of loop.
         if constexpr (lhs_is_const) {
@@ -61,8 +66,13 @@ struct DecimalBinaryFunction {
             if constexpr (adjust_left) {
                 overflow = DecimalV3Cast::scale_up<LhsCppType, LhsCppType, check_overflow<overflow_mode>>(
                         lhs_datum, scale_factor, &lhs_datum);
+                //new
                 if (overflow) {
-                    if constexpr (check_overflow<overflow_mode>)
+                    if constexpr (is_div_op<Op>) {
+                        using_int256_division = true;
+                        signed_multiply_128x128_to_256(lhs_datum, scale_factor, lhs_scaled_int256_low, lhs_scaled_int256_high);
+                    }
+                    else if constexpr (check_overflow<overflow_mode>)
                         if constexpr (error_if_overflow<overflow_mode>) {
                             throw std::overflow_error(strings::Substitute(
                                     "The '$0' operation involving decimal values overflows", get_op_name<Op>()));
@@ -71,42 +81,52 @@ struct DecimalBinaryFunction {
                         }
                     }
                 }
-                // adjusting operand generates decimal overflow
-                /*
-                if constexpr (check_overflow<overflow_mode>) {
-                    if (overflow) {
-                        if constexpr (error_if_overflow<overflow_mode>) {
-                            throw std::overflow_error(strings::Substitute(
-                                    "The '$0' operation involving decimal values overflows", get_op_name<Op>()));
-                        } else {
-                            return true;
-                        }
-                    }
-                }*/
             }
         }
 
         if constexpr (rhs_is_const) {
             rhs_datum = rhs_data[0];
         }
-
+        
         for (auto i = 0; i < num_rows; ++i) {
             if constexpr (lhs_is_const && rhs_is_const) {
-                overflow = BinaryOperator::template apply<check_overflow<overflow_mode>, false, LhsCppType, RhsCppType,
+                if (using_int256_division) {
+                    result_data[i] = signed_div_256_by_128_to_128(lhs_scaled_int256_high, lhs_scaled_int256_low, rhs_datum, &overflow);
+                }
+                else {
+                    overflow = BinaryOperator::template apply<check_overflow<overflow_mode>, false, LhsCppType, RhsCppType,
                                                           ResultCppType>(lhs_datum, rhs_datum, &result_data[i],
                                                                          scale_factor);
+                }
             } else if constexpr (lhs_is_const) {
-                overflow = BinaryOperator::template apply<check_overflow<overflow_mode>, false, LhsCppType, RhsCppType,
+                if (using_int256_division) {
+                    result_data[i] = signed_div_256_by_128_to_128(lhs_scaled_int256_high, lhs_scaled_int256_low, rhs_data[i], &overflow);
+                }
+                else {
+                    overflow = BinaryOperator::template apply<check_overflow<overflow_mode>, false, LhsCppType, RhsCppType,
                                                           ResultCppType>(lhs_datum, rhs_data[i], &result_data[i],
                                                                          scale_factor);
+                }
             } else if constexpr (rhs_is_const) {
-                overflow = BinaryOperator::template apply<check_overflow<overflow_mode>, adjust_left, LhsCppType,
+                if (using_int256_division) {
+                    signed_multiply_128x128_to_256(lhs_data[i], scale_factor, lhs_scaled_int256_low, lhs_scaled_int256_high);
+                    result_data[i] = signed_div_256_by_128_to_128(lhs_scaled_int256_high, lhs_scaled_int256_low, rhs_datum, &overflow);
+                }
+                else {
+                    overflow = BinaryOperator::template apply<check_overflow<overflow_mode>, adjust_left, LhsCppType,
                                                           RhsCppType, ResultCppType>(lhs_data[i], rhs_datum,
                                                                                      &result_data[i], scale_factor);
+                }
             } else {
-                overflow = BinaryOperator::template apply<check_overflow<overflow_mode>, adjust_left, LhsCppType,
+                if (using_int256_division) {
+                    signed_multiply_128x128_to_256(lhs_data[i], scale_factor, lhs_scaled_int256_low, lhs_scaled_int256_high);
+                    result_data[i] = signed_div_256_by_128_to_128(lhs_scaled_int256_high, lhs_scaled_int256_low, rhs_data[i], &overflow);
+                }
+                else {
+                    overflow = BinaryOperator::template apply<check_overflow<overflow_mode>, adjust_left, LhsCppType,
                                                           RhsCppType, ResultCppType>(lhs_data[i], rhs_data[i],
                                                                                      &result_data[i], scale_factor);
+                }
             }
             if constexpr (check_overflow<overflow_mode>) {
                 if (overflow) {
