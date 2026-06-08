@@ -83,58 +83,57 @@ static inline void multiply_128x128_to_256(uint128_t a,uint128_t b,uint128_t& lo
 //     return s;
 // }
 
-// static inline void negate_256(uint128_t& high, uint128_t& low) {
-//     high = ~high;
-//     low = ~low;
+static inline void negate_256(uint128_t& high, uint128_t& low) {
+    high = ~high;
+    low = ~low;
 
-//     ++low;
+    ++low;
 
-//     if (low == 0) {
-//         ++high;
-//     }
-// }
+        ++high;
+    }
+}
 
-// static inline void abs_256(uint128_t& high, uint128_t& low) {
-//     if ((high >> 127) != 0) {
-//         negate_256(high, low);
-//     }
-// }
+static inline void abs_256(uint128_t& high, uint128_t& low) {
+    if ((high >> 127) != 0) {
+        negate_256(high, low);
+    }
+}
 
-// static inline uint128_t div_256_by_128_to_128(
-//     uint128_t high,
-//     uint128_t low,
-//     uint128_t divisor,
-//     bool& overflow) {
+static inline uint128_t div_256_by_128_to_128(
+    uint128_t high,
+    uint128_t low,
+    uint128_t divisor,
+    bool& overflow) {
 
-//     uint128_t quotient = 0;
-//     uint128_t remainder = 0;
+    uint128_t quotient = 0;
+    uint128_t remainder = 0;
 
-//     overflow = false;
+    overflow = false;
 
-//     for (int i = 255; i >= 0; --i) {
+    for (int i = 255; i >= 0; --i) {
 
-//         remainder <<= 1;
+        remainder <<= 1;
 
-//         if (i >= 128) {
-//             remainder |= (high >> (i - 128)) & 1;
-//         } else {
-//             remainder |= (low >> i) & 1;
-//         }
+        if (i >= 128) {
+            remainder |= (high >> (i - 128)) & 1;
+        } else {
+            remainder |= (low >> i) & 1;
+        }
 
-//         if (remainder >= divisor) {
-//             remainder -= divisor;
+        if (remainder >= divisor) {
+            remainder -= divisor;
 
-//             if (i < 128) {
-//                 quotient |= (uint128_t)1 << i;
-//             } else {
-//                 // overflow into bits above 128
-//                 overflow = true;
-//             }
-//         }
-//     }
+            if (i < 128) {
+                quotient |= (uint128_t)1 << i;
+            } else {
+                // overflow into bits above 128
+                overflow = true;
+            }
+        }
+    }
 
-//     return quotient;
-// }
+    return quotient;
+}
 
 // static inline void signed_multiply_128x128_to_256(int128_t x,
 //                                                   int128_t y,
