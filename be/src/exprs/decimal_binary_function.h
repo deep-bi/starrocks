@@ -74,12 +74,12 @@ struct DecimalBinaryFunction {
                         overflow = false;
                     }
                     else if constexpr (check_overflow<overflow_mode>) {
-                        // if constexpr (error_if_overflow<overflow_mode>) {
-                        //     throw std::overflow_error(strings::Substitute(
-                        //             "The '$0' operation involving decimal values overflows", get_op_name<Op>()));
-                        // } else {
-                        //     return true;
-                        // }
+                        if constexpr (error_if_overflow<overflow_mode>) {
+                            throw std::overflow_error(strings::Substitute(
+                                    "The '$0' operation involving decimal values overflows", get_op_name<Op>()));
+                        } else {
+                            return true;
+                        }
                     }
                 }
             }
