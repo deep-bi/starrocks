@@ -21,7 +21,7 @@
 #include "gutil/strings/substitute.h"
 #include "types/logical_type.h"
 //new
-//#include "types/int_256.h"
+#include "types/int_256.h"
 
 namespace starrocks {
 template <OverflowMode overflow_mode, typename Op>
