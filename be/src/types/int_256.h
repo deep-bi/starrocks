@@ -4,13 +4,13 @@
 #include <string>
 #include <algorithm>
 
-#include "util/decimal_types.h"
+//#include "util/decimal_types.h"
 
 namespace starrocks {
 
-// static inline uint128_t abs(int128_t x) {
-//     return x < 0 ? -x : x;
-// }
+static inline unsigned __int128 abs(__int128 x) {
+    return x < 0 ? -x : x;
+}
 
 // static inline void multiply_128x128_to_256(uint128_t a,uint128_t b,uint128_t& low,uint128_t& high) {
 //     uint64_t a0 = static_cast<uint64_t>(a);
