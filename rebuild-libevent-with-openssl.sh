@@ -8,7 +8,6 @@
 #
 # Usage (inside docker container):
 #   ./rebuild-libevent-with-openssl.sh
-#   export STARROCKS_THIRDPARTY=$(pwd)/thirdparty/custom
 #   ./build.sh --be -j$(nproc)
 
 set -e
@@ -24,7 +23,7 @@ error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SOURCE_TP="${STARROCKS_THIRDPARTY:-/var/local/thirdparty}"
-CUSTOM_TP="${SCRIPT_DIR}/thirdparty/custom"
+CUSTOM_TP="${SOURCE_TP}/custom"
 CUSTOM_INSTALLED="${CUSTOM_TP}/installed"
 
 LIBEVENT_COMMIT="24236aed01798303745470e6c498bf606e88724a"
@@ -93,6 +92,7 @@ info "Building libevent with OpenSSL support..."
 mkdir build && cd build
 cmake \
     -DCMAKE_INSTALL_PREFIX="${CUSTOM_INSTALLED}" \
+    -DBUILD_SHARED_LIBS=OFF \
     -DEVENT__DISABLE_TESTS=ON \
     -DEVENT__DISABLE_OPENSSL=OFF \
     -DEVENT__DISABLE_SAMPLES=ON \
@@ -105,6 +105,9 @@ cmake \
 
 make -j"$(nproc)" > /dev/null
 make install > /dev/null
+
+rm -f "${CUSTOM_INSTALLED}/lib/libevent"*.so
+rm -f "${CUSTOM_INSTALLED}/lib/libevent"*.so.*
 
 # Step 5: Verify
 info "Verifying installation..."
@@ -124,10 +127,12 @@ info "EVENT__HAVE_OPENSSL: defined"
 
 # Cleanup
 rm -rf "${BUILD_DIR}"
+rm -rf "${STARROCKS_THIRDPARTY}/installed"
+mv "${CUSTOM_TP}/installed" "${STARROCKS_THIRDPARTY}/installed"
+rm -rf "${CUSTOM_TP}"
 
 echo ""
 info "Done. To build StarRocks with HTTPS support:"
 echo ""
-echo "  export STARROCKS_THIRDPARTY=${CUSTOM_TP}"
 echo "  ./build.sh --be -j\$(nproc)"
 echo ""
