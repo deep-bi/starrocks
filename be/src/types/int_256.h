@@ -4,7 +4,7 @@
 #include <string>
 #include <algorithm>
 
-//#include "util/decimal_types.h"
+#include "util/decimal_types.h"
 
 namespace starrocks {
 
