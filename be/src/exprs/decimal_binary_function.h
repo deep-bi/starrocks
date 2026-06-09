@@ -68,11 +68,11 @@ struct DecimalBinaryFunction {
                         lhs_datum, scale_factor, &lhs_datum);
                 //new
                 if (overflow) {
-                    // if constexpr (is_div_op<Op>) {
-                    //     using_int256_division = true;
-                    //     //signed_multiply_128x128_to_256(lhs_datum, scale_factor, lhs_scaled_int256_low, lhs_scaled_int256_high);
-                    //     overflow = false;
-                    // }
+                    if constexpr (is_div_op<Op>) {
+                        // using_int256_division = true;
+                        // //signed_multiply_128x128_to_256(lhs_datum, scale_factor, lhs_scaled_int256_low, lhs_scaled_int256_high);
+                        // overflow = false;
+                    }
                     // else if constexpr (check_overflow<overflow_mode>)
                     //     if constexpr (error_if_overflow<overflow_mode>) {
                     //         throw std::overflow_error(strings::Substitute(
