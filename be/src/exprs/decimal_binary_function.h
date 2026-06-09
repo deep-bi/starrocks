@@ -92,7 +92,7 @@ struct DecimalBinaryFunction {
         for (auto i = 0; i < num_rows; ++i) {
             if constexpr (lhs_is_const && rhs_is_const) {
                 if (using_int256_division) {
-                    result_data[i] = signed_div_256_by_128_to_128(lhs_scaled_int256_high, lhs_scaled_int256_low, rhs_datum, &overflow);
+                    // result_data[i] = signed_div_256_by_128_to_128(lhs_scaled_int256_high, lhs_scaled_int256_low, rhs_datum, &overflow);
                 }
                 else {
                     overflow = BinaryOperator::template apply<check_overflow<overflow_mode>, false, LhsCppType, RhsCppType,
@@ -101,7 +101,7 @@ struct DecimalBinaryFunction {
                 }
             } else if constexpr (lhs_is_const) {
                 if (using_int256_division) {
-                    result_data[i] = signed_div_256_by_128_to_128(lhs_scaled_int256_high, lhs_scaled_int256_low, rhs_data[i], &overflow);
+                    // result_data[i] = signed_div_256_by_128_to_128(lhs_scaled_int256_high, lhs_scaled_int256_low, rhs_data[i], &overflow);
                 }
                 else {
                     overflow = BinaryOperator::template apply<check_overflow<overflow_mode>, false, LhsCppType, RhsCppType,
@@ -110,8 +110,8 @@ struct DecimalBinaryFunction {
                 }
             } else if constexpr (rhs_is_const) {
                 if (using_int256_division) {
-                    signed_multiply_128x128_to_256(lhs_data[i], scale_factor, lhs_scaled_int256_low, lhs_scaled_int256_high);
-                    result_data[i] = signed_div_256_by_128_to_128(lhs_scaled_int256_high, lhs_scaled_int256_low, rhs_datum, &overflow);
+                    // signed_multiply_128x128_to_256(lhs_data[i], scale_factor, lhs_scaled_int256_low, lhs_scaled_int256_high);
+                    // result_data[i] = signed_div_256_by_128_to_128(lhs_scaled_int256_high, lhs_scaled_int256_low, rhs_datum, &overflow);
                 }
                 else {
                     overflow = BinaryOperator::template apply<check_overflow<overflow_mode>, adjust_left, LhsCppType,
@@ -120,8 +120,8 @@ struct DecimalBinaryFunction {
                 }
             } else {
                 if (using_int256_division) {
-                    signed_multiply_128x128_to_256(lhs_data[i], scale_factor, lhs_scaled_int256_low, lhs_scaled_int256_high);
-                    result_data[i] = signed_div_256_by_128_to_128(lhs_scaled_int256_high, lhs_scaled_int256_low, rhs_data[i], &overflow);
+                    // signed_multiply_128x128_to_256(lhs_data[i], scale_factor, lhs_scaled_int256_low, lhs_scaled_int256_high);
+                    // result_data[i] = signed_div_256_by_128_to_128(lhs_scaled_int256_high, lhs_scaled_int256_low, rhs_data[i], &overflow);
                 }
                 else {
                     overflow = BinaryOperator::template apply<check_overflow<overflow_mode>, adjust_left, LhsCppType,
