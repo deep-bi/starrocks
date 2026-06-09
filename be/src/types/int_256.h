@@ -8,34 +8,34 @@
 
 namespace starrocks {
 
-static inline uint128_t abs(int128_t x) {
-    return x < 0 ? -x : x;
-}
+// static inline uint128_t abs(int128_t x) {
+//     return x < 0 ? -x : x;
+// }
 
-static inline void multiply_128x128_to_256(uint128_t a,uint128_t b,uint128_t& low,uint128_t& high) {
-    uint64_t a0 = static_cast<uint64_t>(a);
-    uint64_t a1 = static_cast<uint64_t>(a >> 64);
+// static inline void multiply_128x128_to_256(uint128_t a,uint128_t b,uint128_t& low,uint128_t& high) {
+//     uint64_t a0 = static_cast<uint64_t>(a);
+//     uint64_t a1 = static_cast<uint64_t>(a >> 64);
 
-    uint64_t b0 = static_cast<uint64_t>(b);
-    uint64_t b1 = static_cast<uint64_t>(b >> 64);
+//     uint64_t b0 = static_cast<uint64_t>(b);
+//     uint64_t b1 = static_cast<uint64_t>(b >> 64);
 
-    uint128_t p00 = (uint128_t)a0 * b0;
-    uint128_t p01 = (uint128_t)a0 * b1;
-    uint128_t p10 = (uint128_t)a1 * b0;
-    uint128_t p11 = (uint128_t)a1 * b1;
+//     uint128_t p00 = (uint128_t)a0 * b0;
+//     uint128_t p01 = (uint128_t)a0 * b1;
+//     uint128_t p10 = (uint128_t)a1 * b0;
+//     uint128_t p11 = (uint128_t)a1 * b1;
 
-    uint128_t middle = (p00 >> 64)
-                    + (uint64_t)p01
-                    + (uint64_t)p10;
+//     uint128_t middle = (p00 >> 64)
+//                     + (uint64_t)p01
+//                     + (uint64_t)p10;
 
-    low = (p00 & (((uint128_t)1 << 64) - 1))
-        | (middle << 64);
+//     low = (p00 & (((uint128_t)1 << 64) - 1))
+//         | (middle << 64);
 
-    high = p11
-        + (p01 >> 64)
-        + (p10 >> 64)
-        + (middle >> 64);
-}
+//     high = p11
+//         + (p01 >> 64)
+//         + (p10 >> 64)
+//         + (middle >> 64);
+// }
 
 // static inline std::string to_hex(unsigned __int128 x) {
 //     const char* hex = "0123456789abcdef";
@@ -83,57 +83,58 @@ static inline void multiply_128x128_to_256(uint128_t a,uint128_t b,uint128_t& lo
 //     return s;
 // }
 
-static inline void negate_256(uint128_t& high, uint128_t& low) {
-    high = ~high;
-    low = ~low;
+// static inline void negate_256(uint128_t& high, uint128_t& low) {
+//     high = ~high;
+//     low = ~low;
 
-    ++low;
+//     ++low;
 
-        ++high;
-    }
-}
+//     if (low == 0) {
+//         ++high;
+//     }
+// }
 
-static inline void abs_256(uint128_t& high, uint128_t& low) {
-    if ((high >> 127) != 0) {
-        negate_256(high, low);
-    }
-}
+// static inline void abs_256(uint128_t& high, uint128_t& low) {
+//     if ((high >> 127) != 0) {
+//         negate_256(high, low);
+//     }
+// }
 
-static inline uint128_t div_256_by_128_to_128(
-    uint128_t high,
-    uint128_t low,
-    uint128_t divisor,
-    bool& overflow) {
+// static inline uint128_t div_256_by_128_to_128(
+//     uint128_t high,
+//     uint128_t low,
+//     uint128_t divisor,
+//     bool& overflow) {
 
-    uint128_t quotient = 0;
-    uint128_t remainder = 0;
+//     uint128_t quotient = 0;
+//     uint128_t remainder = 0;
 
-    overflow = false;
+//     overflow = false;
 
-    for (int i = 255; i >= 0; --i) {
+//     for (int i = 255; i >= 0; --i) {
 
-        remainder <<= 1;
+//         remainder <<= 1;
 
-        if (i >= 128) {
-            remainder |= (high >> (i - 128)) & 1;
-        } else {
-            remainder |= (low >> i) & 1;
-        }
+//         if (i >= 128) {
+//             remainder |= (high >> (i - 128)) & 1;
+//         } else {
+//             remainder |= (low >> i) & 1;
+//         }
 
-        if (remainder >= divisor) {
-            remainder -= divisor;
+//         if (remainder >= divisor) {
+//             remainder -= divisor;
 
-            if (i < 128) {
-                quotient |= (uint128_t)1 << i;
-            } else {
-                // overflow into bits above 128
-                overflow = true;
-            }
-        }
-    }
+//             if (i < 128) {
+//                 quotient |= (uint128_t)1 << i;
+//             } else {
+//                 // overflow into bits above 128
+//                 overflow = true;
+//             }
+//         }
+//     }
 
-    return quotient;
-}
+//     return quotient;
+// }
 
 // static inline void signed_multiply_128x128_to_256(int128_t x,
 //                                                   int128_t y,
