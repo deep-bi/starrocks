@@ -143,23 +143,23 @@ static inline void signed_multiply_128x128_to_256(int128_t x,
                                                   int128_t& output_low,
                                                   int128_t& output_high) {
     
-    bool negative = (x < 0) ^ (y < 0);
+    // bool negative = (x < 0) ^ (y < 0);
 
     
-    uint128_t a = abs(x);
-    uint128_t b = abs(y);
+    // uint128_t a = abs(x);
+    // uint128_t b = abs(y);
 
     
-    uint128_t low;
-    uint128_t high;
-    multiply_128x128_to_256(a, b, low, high);
+    // uint128_t low;
+    // uint128_t high;
+    // multiply_128x128_to_256(a, b, low, high);
 
-    if (negative) {
-        negate_256(high, low);
-    }
+    // if (negative) {
+    //     negate_256(high, low);
+    // }
 
-    output_low = static_cast<int128_t>(low);
-    output_high = static_cast<int128_t>(high);
+    // output_low = static_cast<int128_t>(low);
+    // output_high = static_cast<int128_t>(high);
 }
 
 static inline int128_t signed_div_256_by_128_to_128(
