@@ -57,8 +57,7 @@ struct DecimalBinaryFunction {
         [[maybe_unused]] auto overflow = false;
         //new
         bool using_int256_division = false;
-        int128_t lhs_scaled_int256_low, lhs_scaled_int256_high;
-
+        int128_t lhs_scaled_int256_low, lhs_scaled_int256_high;                            
         // if lhs is a const column and needs to adjust, adjust lhs outside of loop.
         if constexpr (lhs_is_const) {
             lhs_datum = lhs_data[0];
@@ -69,6 +68,7 @@ struct DecimalBinaryFunction {
                 //new
                 if (overflow) {
                     if constexpr (is_div_op<Op>) {
+                        lhs_datum = lhs_data[0];
                         using_int256_division = true;
                         signed_multiply_128x128_to_256(lhs_datum, scale_factor, lhs_scaled_int256_low, lhs_scaled_int256_high);
                         overflow = false;
