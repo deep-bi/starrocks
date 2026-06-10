@@ -170,31 +170,32 @@ static inline int128_t signed_div_256_by_128_to_128(
     static constexpr int128_t INT128_MAX = (int128_t)((uint128_t(1) << 127) - 1);
     static constexpr int128_t INT128_MIN = -INT128_MAX - 1;
     
-    bool neg_result = ((high < 0) ^ (divisor < 0));
+    // bool neg_result = ((high < 0) ^ (divisor < 0));
     
 
-    uint128_t u_high = static_cast<uint128_t>(high);
-    uint128_t u_low = static_cast<uint128_t>(low);
-    abs_256(u_high, u_low);
-    uint128_t u_div = abs(divisor);
+    // uint128_t u_high = static_cast<uint128_t>(high);
+    // uint128_t u_low = static_cast<uint128_t>(low);
+    // abs_256(u_high, u_low);
+    // uint128_t u_div = abs(divisor);
 
-    bool u_overflow = false;
-    uint128_t uq = 0;
-    //uq  = div_256_by_128_to_128(u_high, u_low, u_div, u_overflow);
+    // bool u_overflow = false;
+    // uint128_t uq = 0;
+    // //uq  = div_256_by_128_to_128(u_high, u_low, u_div, u_overflow);
 
-    // 4. apply sign
-    int128_t q = neg_result ? -(int128_t)uq : (int128_t)uq;
+    // // 4. apply sign
+    // int128_t q = neg_result ? -(int128_t)uq : (int128_t)uq;
 
-    // 5. overflow check (signed 128-bit range)
-    overflow = false;
-    if ((uq >> 127) != 0 || q > INT128_MAX || q < INT128_MIN) {
-        overflow = true;
-    }
+    // // 5. overflow check (signed 128-bit range)
+    // overflow = false;
+    // if ((uq >> 127) != 0 || q > INT128_MAX || q < INT128_MIN) {
+    //     overflow = true;
+    // }
 
-    // 6. propagate unsigned overflow too
-    overflow = overflow || u_overflow;
+    // // 6. propagate unsigned overflow too
+    // overflow = overflow || u_overflow;
 
-    return q;
+    // return q;
+    return 0;
 }
 
 } // namespace starrocks
