@@ -179,7 +179,8 @@ static inline int128_t signed_div_256_by_128_to_128(
     uint128_t u_div = abs(divisor);
 
     bool u_overflow = false;
-    //uint128_t uq = div_256_by_128_to_128(u_high, u_low, u_div, u_overflow);
+    uint128_t uq = 0;
+    //uq  = div_256_by_128_to_128(u_high, u_low, u_div, u_overflow);
 
     // 4. apply sign
     int128_t q = neg_result ? -(int128_t)uq : (int128_t)uq;
