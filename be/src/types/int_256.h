@@ -152,7 +152,7 @@ static inline void signed_multiply_128x128_to_256(int128_t x,
     
     uint128_t low;
     uint128_t high;
-    // multiply_128x128_to_256(a, b, low, high);
+    multiply_128x128_to_256(a, b, low, high);
 
     if (negative) {
         negate_256(high, low);
