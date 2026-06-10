@@ -72,8 +72,8 @@ struct DecimalBinaryFunction {
                         using_int256_division = true;
                         signed_multiply_128x128_to_256(lhs_datum, scale_factor, lhs_scaled_int256_low, lhs_scaled_int256_high);
                         overflow = false;
-                        throw std::overflow_error(strings::Substitute(
-                                    to_hex(lhs_scaled_int256_low), get_op_name<Op>()));
+                        // throw std::overflow_error(strings::Substitute(
+                        //             to_hex(lhs_scaled_int256_low), get_op_name<Op>()));
                     }
                     else if constexpr (check_overflow<overflow_mode>) {
                         if constexpr (error_if_overflow<overflow_mode>) {
