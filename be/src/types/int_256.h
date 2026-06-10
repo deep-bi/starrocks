@@ -162,13 +162,9 @@ static inline void signed_multiply_128x128_to_256(int128_t x,
     output_high = static_cast<int128_t>(high);
 }
 
-static inline int128_t signed_div_256_by_128_to_128(
-    int128_t high,
-    int128_t low,
-    int128_t divisor,
-    bool& overflow) {
+static inline int128_t signed_div_256_by_128_to_128() {
     // static constexpr int128_t INT128_MAX = (int128_t)((uint128_t(1) << 127) - 1);
-    // static constexpr int128_t INT128_MIN = -INT128_MAX - 1;
+    // static constexpr int128_t INT128_MIN = -INT128_MAX - 1;`
     
     // bool neg_result = ((high < 0) ^ (divisor < 0));
     

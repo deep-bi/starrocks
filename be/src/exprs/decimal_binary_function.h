@@ -92,8 +92,7 @@ struct DecimalBinaryFunction {
         for (auto i = 0; i < num_rows; ++i) {
             if constexpr (lhs_is_const && rhs_is_const) {
                 if (using_int256_division) {
-                    result_data[i] = 0; 
-                    signed_div_256_by_128_to_128(lhs_scaled_int256_high, lhs_scaled_int256_low, rhs_datum, &overflow);
+                    result_data[i] = signed_div_256_by_128_to_128();
                 }
                 else {
                     overflow = BinaryOperator::template apply<check_overflow<overflow_mode>, false, LhsCppType, RhsCppType,
