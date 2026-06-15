@@ -408,16 +408,14 @@ static inline std::tuple<int, int, int> compute_decimal_result_type(int lhs_scal
         DCHECK(scale <= max_precision);
     } else if constexpr (is_div_op<Op>) {
         precision = decimal_precision_limit<int128_t>;
-        // if (lhs_scale <= 6) {
-        //     scale = lhs_scale + 6;
-        // } else if (lhs_scale <= 12) {
-        //     scale = 12;
-        // } else {
-        //     scale = lhs_scale;
-        // }
-        // adjust_scale = scale + rhs_scale - lhs_scale;
-        scale = lhs_scale;
-        adjust_scale = rhs_scale;
+        if (lhs_scale <= 6) {
+            scale = lhs_scale + 6;
+        } else if (lhs_scale <= 12) {
+            scale = 12;
+        } else {
+            scale = lhs_scale;
+        }
+        adjust_scale = scale + rhs_scale - lhs_scale;
     } else {
         static_assert(is_decimal_op<Op>, "Invalid decimal Op");
     }
