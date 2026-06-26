@@ -17,7 +17,10 @@
 
 #pragma once
 
+#include <event2/bufferevent_ssl.h>
 #include <event2/event.h>
+#include <openssl/err.h>
+#include <openssl/ssl.h>
 
 #include <string>
 #include <thread>
@@ -79,6 +82,14 @@ private:
     PathTrie<HttpHandler*> _options_handlers;
     std::vector<struct event_base*> _event_bases;
     std::vector<struct evhttp*> _https;
+
+    // SSL context and configuration
+    SSL_CTX* _ssl_ctx = nullptr;
+    EC_KEY* _ecdh = nullptr;
+
+    // SSL initialization methods
+    void _InitSSL();
+    int _ServerSetCerts();
 };
 
 } // namespace starrocks
