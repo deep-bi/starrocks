@@ -14,6 +14,7 @@ docs/contents
 gensrc/build
 fe/fe-core/target
 thirdparty/src
+thirdparty/custom
 thirdparty/installed
 *.so.tmp
 .DS_Store
