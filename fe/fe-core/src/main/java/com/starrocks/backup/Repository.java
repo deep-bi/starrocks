@@ -330,19 +330,42 @@ public class Repository implements Writable, GsonPostProcessable {
             return new Status(ErrCode.COMMON_ERROR, "Snapshot name cannot be empty");
         }
 
-        // Construct the snapshot directory path
-        // eg. __starrocks_repository_repo_name/__ss_snapshot_name/
         String snapshotPath = Joiner.on(PATH_DELIMITER).join(location, joinPrefix(prefixRepo, name),
                                                             joinPrefix(PREFIX_SNAPSHOT_DIR, snapshotName));
 
         LOG.info("Deleting snapshot '{}' at path: {}", snapshotName, snapshotPath);
 
-        // Delete the entire snapshot directory
+        // Delete directory contents recursively
         Status st = storage.delete(snapshotPath);
         if (!st.ok()) {
-            LOG.error("Failed to delete snapshot '{}': {}", snapshotName, st.getErrMsg());
+            LOG.warn("Recursive delete returned error for '{}': {}", snapshotName, st.getErrMsg());
+        }
+
+        // On S3, the recursive delete removes contents but may leave the directory
+        // marker (a 0-byte object with trailing '/'). Clean up any remaining objects
+        // and the marker explicitly.
+        List<RemoteFile> remaining = Lists.newArrayList();
+        st = storage.list(snapshotPath + PATH_DELIMITER + "*", remaining);
+        if (st.ok() && !remaining.isEmpty()) {
+            for (RemoteFile file : remaining) {
+                String filePath = snapshotPath + PATH_DELIMITER + file.getName();
+                Status delSt = storage.delete(filePath);
+                if (!delSt.ok()) {
+                    LOG.warn("Failed to delete remaining file '{}': {}", filePath, delSt.getErrMsg());
+                }
+            }
+        }
+
+        // Delete the directory marker itself (path with trailing '/')
+        storage.delete(snapshotPath + PATH_DELIMITER);
+
+        // Verify the snapshot directory is actually gone
+        st = storage.checkPathExist(snapshotPath);
+        if (st.ok()) {
+            LOG.error("Snapshot directory '{}' still exists after deletion", snapshotPath);
             return new Status(ErrCode.COMMON_ERROR,
-                            "Failed to delete snapshot '" + snapshotName + "': " + st.getErrMsg());
+                            "Failed to fully remove snapshot '" + snapshotName
+                            + "': directory still exists after deletion");
         }
 
         LOG.info("Successfully deleted snapshot '{}'", snapshotName);
