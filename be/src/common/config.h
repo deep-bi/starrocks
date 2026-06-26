@@ -48,11 +48,11 @@ CONF_Int32(brpc_port, "8060");
 
 // The number of bthreads for brpc, the default value is set to -1, which means the number of bthreads is #cpu-cores.
 CONF_Int32(brpc_num_threads, "-1");
-// https enable flag
+// https enable flag: adds optional TLS to brpc_port, which still accepts plain connections
 CONF_Bool(enable_https, "false");
-// path of certificate
+// path of certificate, used by brpc_port (enable_https) and be_http_port (be_http_ssl_enable)
 CONF_String(ssl_certificate_path, "");
-// path of private key
+// path of private key, used by brpc_port (enable_https) and be_http_port (be_http_ssl_enable)
 CONF_String(ssl_private_key_path, "");
 
 // The max number of single connections maintained by the brpc client and each server.
@@ -468,6 +468,10 @@ CONF_Int32(be_http_port, "8040");
 CONF_Alias(be_http_port, webserver_port);
 // Number of http workers in BE
 CONF_Int32(be_http_num_workers, "48");
+// Serve HTTPS instead of HTTP on be_http_port, with the certificate and key from
+// ssl_certificate_path and ssl_private_key_path. Independent of enable_https, which
+// only adds optional TLS to brpc_port.
+CONF_Bool(be_http_ssl_enable, "false");
 // Period to update rate counters and sampling counters in ms.
 CONF_mInt32(periodic_counter_update_period_ms, "500");
 
