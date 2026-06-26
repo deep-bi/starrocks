@@ -45,6 +45,7 @@
 #include <sstream>
 #include <utility>
 
+#include "common/config.h"
 #include "common/logging.h"
 #include "http/http_channel.h"
 #include "http/http_handler.h"
@@ -106,9 +107,81 @@ EvHttpServer::EvHttpServer(std::string host, int port, int num_workers)
 
 EvHttpServer::~EvHttpServer() {
     pthread_rwlock_destroy(&_rw_lock);
+
+    if (_ecdh != nullptr) {
+        EC_KEY_free(_ecdh);
+    }
+    if (_ssl_ctx != nullptr) {
+        SSL_CTX_free(_ssl_ctx);
+    }
+}
+
+void EvHttpServer::_InitSSL() {
+    SSL_library_init();
+    SSL_load_error_strings();
+    OpenSSL_add_all_algorithms();
+
+    _ssl_ctx = SSL_CTX_new(SSLv23_server_method());
+    SSL_CTX_set_options(_ssl_ctx, SSL_OP_SINGLE_DH_USE | SSL_OP_SINGLE_ECDH_USE | SSL_OP_NO_SSLv2);
+
+    _ecdh = EC_KEY_new_by_curve_name(NID_X9_62_prime256v1);
+    if (_ecdh == nullptr) {
+        LOG(WARNING) << "EC_KEY_new_by_curve_name failed";
+        return;
+    }
+    if (SSL_CTX_set_tmp_ecdh(_ssl_ctx, _ecdh) != 1) {
+        LOG(WARNING) << "SSL_CTX_set_tmp_ecdh failed";
+        return;
+    }
+}
+
+int EvHttpServer::_ServerSetCerts() {
+    if (config::ssl_certificate_path.empty() || config::ssl_private_key_path.empty()) {
+        LOG(ERROR) << "SSL certificate or private key path not configured";
+        return -1;
+    }
+
+    if (SSL_CTX_use_certificate_file(_ssl_ctx, config::ssl_certificate_path.c_str(), SSL_FILETYPE_PEM) != 1) {
+        LOG(ERROR) << "Failed to load SSL certificate from: " << config::ssl_certificate_path
+                   << ", error: " << ERR_reason_error_string(ERR_get_error());
+        return -1;
+    }
+
+    if (SSL_CTX_use_PrivateKey_file(_ssl_ctx, config::ssl_private_key_path.c_str(), SSL_FILETYPE_PEM) != 1) {
+        LOG(ERROR) << "Failed to load SSL private key from: " << config::ssl_private_key_path
+                   << ", error: " << ERR_reason_error_string(ERR_get_error());
+        return -1;
+    }
+
+    if (SSL_CTX_check_private_key(_ssl_ctx) != 1) {
+        LOG(ERROR) << "SSL private key does not match certificate";
+        return -1;
+    }
+
+    LOG(INFO) << "SSL certificate and private key loaded successfully";
+    return 0;
+}
+
+static struct bufferevent* bevcb(struct event_base *base, void *arg) {
+    struct bufferevent* r;
+    SSL_CTX *ctx = (SSL_CTX *)arg;
+    r = bufferevent_openssl_socket_new(base, -1, SSL_new(ctx), BUFFEREVENT_SSL_ACCEPTING, BEV_OPT_CLOSE_ON_FREE);
+    return r;
 }
 
 Status EvHttpServer::start() {
+    // Initialize SSL if HTTPS is enabled
+    if (config::enable_https) {
+        _InitSSL();
+        if (_ssl_ctx == nullptr) {
+            return Status::InternalError("Failed to initialize SSL context");
+        }
+        int ret = _ServerSetCerts();
+        if (ret < 0) {
+            return Status::InternalError("Failed to load SSL certificates");
+        }
+    }
+
     // bind to
     RETURN_IF_ERROR(_bind());
     for (int i = 0; i < _num_workers; ++i) {
@@ -133,6 +206,10 @@ Status EvHttpServer::start() {
             _https.push_back(http);
             pthread_rwlock_unlock(&_rw_lock);
 
+            // Enable SSL if configured
+            if (config::enable_https && _ssl_ctx != nullptr) {
+                evhttp_set_bevcb(http, bevcb, _ssl_ctx);
+            }
             auto res = evhttp_accept_socket(http, _server_fd);
             if (res < 0) {
                 LOG(WARNING) << "evhttp accept socket failed"

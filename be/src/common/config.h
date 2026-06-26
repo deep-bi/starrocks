@@ -408,6 +408,12 @@ CONF_Int32(be_http_port, "8040");
 CONF_Alias(be_http_port, webserver_port);
 // Number of http workers in BE
 CONF_Int32(be_http_num_workers, "48");
+// Enable HTTPS for BE HTTP server
+CONF_Bool(enable_https, "false");
+// Path to SSL certificate file for HTTPS
+CONF_String(ssl_certificate_path, "");
+// Path to SSL private key file for HTTPS
+CONF_String(ssl_private_key_path, "");
 // Period to update rate counters and sampling counters in ms.
 CONF_mInt32(periodic_counter_update_period_ms, "500");
 
