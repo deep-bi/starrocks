@@ -14,12 +14,16 @@
 
 #include "arrow_flight_sql_service.h"
 
+#include <fstream>
+#include <sstream>
+
 #include <arrow/array/builder_binary.h>
 #include <arrow/flight/server.h>
 #include <arrow/flight/types.h>
 #include <exec/pipeline/query_context.h>
 #include <util/arrow/utils.h>
 
+#include "common/config.h"
 #include "common/status.h"
 #include "exec/arrow_flight_batch_reader.h"
 #include "exprs/base64.h"
@@ -27,6 +31,25 @@
 #include "util/uid_util.h"
 
 namespace starrocks {
+
+static Status read_pem_file(const std::string& path, std::string* content) {
+    if (path.empty()) {
+        return Status::InvalidArgument("empty file path");
+    }
+
+    std::ifstream input(path, std::ios::in | std::ios::binary);
+    if (!input.is_open()) {
+        return Status::InvalidArgument("failed to open file: " + path);
+    }
+
+    std::ostringstream ss;
+    ss << input.rdbuf();
+    *content = ss.str();
+    if (content->empty()) {
+        return Status::InvalidArgument("file is empty: " + path);
+    }
+    return Status::OK();
+}
 
 Status ArrowFlightSqlServer::start(int port) {
     if (port <= 0) {
@@ -37,10 +60,43 @@ Status ArrowFlightSqlServer::start(int port) {
 
     _running = true;
 
+    const bool tls_enabled = config::arrow_flight_ssl_enable;
+
     arrow::flight::Location bind_location;
-    RETURN_STATUS_IF_ERROR(arrow::flight::Location::ForGrpcTcp(BackendOptions::get_service_bind_address(), port)
-                                   .Value(&bind_location));
+    if (tls_enabled) {
+        RETURN_STATUS_IF_ERROR(arrow::flight::Location::ForGrpcTls(BackendOptions::get_service_bind_address(), port)
+                                       .Value(&bind_location));
+    } else {
+        RETURN_STATUS_IF_ERROR(arrow::flight::Location::ForGrpcTcp(BackendOptions::get_service_bind_address(), port)
+                                       .Value(&bind_location));
+    }
     arrow::flight::FlightServerOptions flight_options(bind_location);
+
+    if (tls_enabled) {
+        if (config::arrow_flight_ssl_cert_file.empty() || config::arrow_flight_ssl_key_file.empty()) {
+            return Status::InvalidArgument(
+                    "arrow_flight_ssl_enable=true requires both arrow_flight_ssl_cert_file and arrow_flight_ssl_key_file");
+        }
+
+        std::string pem_cert;
+        std::string pem_key;
+        RETURN_IF_ERROR(read_pem_file(config::arrow_flight_ssl_cert_file, &pem_cert));
+        RETURN_IF_ERROR(read_pem_file(config::arrow_flight_ssl_key_file, &pem_key));
+
+        arrow::flight::CertKeyPair cert_key_pair;
+        cert_key_pair.pem_cert = std::move(pem_cert);
+        cert_key_pair.pem_key = std::move(pem_key);
+        flight_options.tls_certificates.emplace_back(std::move(cert_key_pair));
+
+        flight_options.verify_client = config::arrow_flight_ssl_require_client_auth;
+        if (flight_options.verify_client) {
+            if (config::arrow_flight_ssl_ca_cert_file.empty()) {
+                return Status::InvalidArgument(
+                        "arrow_flight_ssl_require_client_auth=true requires arrow_flight_ssl_ca_cert_file");
+            }
+            RETURN_IF_ERROR(read_pem_file(config::arrow_flight_ssl_ca_cert_file, &flight_options.root_certificates));
+        }
+    }
 
     // Not authenticated in BE flight server.
     // After the authentication between the ADBC Client and the FE flight server is completed,
@@ -50,6 +106,9 @@ Status ArrowFlightSqlServer::start(int port) {
     _bearer_middleware = std::make_shared<NoOpBearerAuthServerMiddlewareFactory>();
     flight_options.auth_handler = std::make_shared<arrow::flight::NoOpAuthHandler>();
     flight_options.middleware.emplace_back("bearer-auth-server", _bearer_middleware);
+
+    LOG(INFO) << "[ARROW] Arrow Flight SQL server transport=" << (tls_enabled ? "TLS" : "PLAINTEXT")
+              << " [mTLS=" << (flight_options.verify_client ? "enabled" : "disabled") << "]";
 
     RETURN_STATUS_IF_ERROR(Init(flight_options));
 
