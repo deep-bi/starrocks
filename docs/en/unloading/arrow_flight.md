@@ -153,6 +153,36 @@ arrow_flight_port = 9408
 arrow_flight_port = 9419
 ```
 
+#### Configure TLS (Optional)
+
+By default, the Arrow Flight SQL server accepts plaintext gRPC connections. To require TLS, set the following parameters in **fe.conf** and restart the FE:
+
+| Parameter                            | Default | Description                                                                                     |
+| ------------------------------------- | ------- | ------------------------------------------------------------------------------------------------ |
+| `arrow_flight_ssl_enable`             | `false` | Whether to enable TLS for the Arrow Flight SQL server. Requires the two parameters below to be set. |
+| `arrow_flight_ssl_certificate_path`   | (empty) | Path to the PEM-encoded certificate chain file.                                                  |
+| `arrow_flight_ssl_private_key_path`   | (empty) | Path to the PEM-encoded, unencrypted PKCS#8 private key file.                                    |
+
+:::note
+
+- Both the certificate chain and the private key must be PEM-encoded files, and the private key must be an unencrypted PKCS#8 key. Other formats (for example, a JKS keystore, or a PKCS#1/encrypted key) are not supported.
+- If `arrow_flight_ssl_enable` is `true` but the certificate or key file cannot be found, the FE fails to start.
+- These parameters are independent from the HTTP server's `enable_https`/`ssl_keystore_*` parameters. Arrow Flight SQL TLS cannot reuse the HTTP keystore, because the underlying Arrow Flight library only accepts PEM cert/key files, not a JKS keystore.
+
+:::
+
+Example:
+
+```Properties
+// fe.conf
+arrow_flight_port = 9408
+arrow_flight_ssl_enable = true
+arrow_flight_ssl_certificate_path = /path/to/server.crt
+arrow_flight_ssl_private_key_path = /path/to/server.key
+```
+
+On the client side, connect using `grpc+tls://` instead of `grpc://`, for example `grpc+tls://127.0.0.1:9408`.
+
 #### Configure Arrow Flight Proxy (Optional)
 
 If your BE nodes are not directly accessible from client applications (for example, when deployed in private networks or Kubernetes environments), you can enable the Arrow Flight proxy feature on the FE to route data from BE nodes through the FE.
