@@ -91,6 +91,11 @@ public class ArrowFlightSqlService {
             } catch (IOException e) {
                 throw new IllegalArgumentException("Failed to load Arrow Flight SQL TLS certificate/private key", e);
             }
+        } else if (Config.arrow_flight_be_ssl_enable && !new File(Config.arrow_flight_ssl_certificate_path).isFile()) {
+            throw new IllegalArgumentException(String.format(
+                    "arrow_flight_be_ssl_enable is true but arrow_flight_ssl_certificate_path=[%s] does not " +
+                            "point to a readable PEM file.",
+                    Config.arrow_flight_ssl_certificate_path));
         }
 
         this.flightServer = builder.build();

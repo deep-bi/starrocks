@@ -3949,6 +3949,13 @@ public class Config extends ConfigBase {
     @ConfField
     public static String arrow_flight_ssl_private_key_path = "";
 
+    /**
+     * Whether the FE should connect to BE/CN Arrow Flight SQL ports over TLS when proxying requests.
+     * When enabled, the FE trusts the certificate at arrow_flight_ssl_certificate_path for these connections as well.
+     */
+    @ConfField
+    public static boolean arrow_flight_be_ssl_enable = false;
+
     @ConfField(mutable = true)
     public static int arrow_token_cache_size = 1024;
 

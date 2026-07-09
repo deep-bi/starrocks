@@ -59,6 +59,7 @@ public class ArrowFlightSqlServiceTest {
         Config.arrow_flight_ssl_enable = false;
         Config.arrow_flight_ssl_certificate_path = "";
         Config.arrow_flight_ssl_private_key_path = "";
+        Config.arrow_flight_be_ssl_enable = false;
     }
 
     @Test
