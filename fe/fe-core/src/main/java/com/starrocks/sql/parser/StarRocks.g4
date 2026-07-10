@@ -233,6 +233,7 @@ statement
 
     // Group Provider Statement
     | createGroupProviderStatement
+    | alterGroupProviderStatement
     | dropGroupProviderStatement
     | showGroupProvidersStatement
     | showCreateGroupProviderStatement
@@ -1863,6 +1864,10 @@ showCreateSecurityIntegrationStatement
 
 createGroupProviderStatement
     : CREATE GROUP PROVIDER (IF NOT EXISTS)? identifier properties
+    ;
+
+alterGroupProviderStatement
+    : ALTER GROUP PROVIDER identifier SET propertyList
     ;
 
 dropGroupProviderStatement

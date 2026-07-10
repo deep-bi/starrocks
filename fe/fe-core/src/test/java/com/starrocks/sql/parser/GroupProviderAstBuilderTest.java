@@ -16,6 +16,7 @@ package com.starrocks.sql.parser;
 
 import com.starrocks.qe.ConnectContext;
 import com.starrocks.sql.ast.UserIdentity;
+import com.starrocks.sql.ast.group.AlterGroupProviderStmt;
 import com.starrocks.sql.ast.group.CreateGroupProviderStmt;
 import com.starrocks.sql.ast.group.DropGroupProviderStmt;
 import com.starrocks.sql.ast.group.ShowCreateGroupProviderStmt;
@@ -114,6 +115,62 @@ public class GroupProviderAstBuilderTest {
         Assertions.assertNotNull(stmt, "Statement should not be null");
         Assertions.assertEquals("test_provider", stmt.getName(), "Provider name should match");
         Assertions.assertTrue(stmt.isIfExists(), "IF EXISTS should be true");
+    }
+
+    /**
+     * Test case: Parse ALTER GROUP PROVIDER with a single property
+     * Test point: Should create statement with the updated property
+     */
+    @Test
+    public void testParseAlterGroupProvider() throws Exception {
+        String sql = "ALTER GROUP PROVIDER test_provider SET (\"ldap_cache_refresh_interval\" = \"600\")";
+
+        AlterGroupProviderStmt stmt =
+                (AlterGroupProviderStmt) SqlParser.parseSingleStatement(sql, ctx.getSessionVariable().getSqlMode());
+
+        Assertions.assertNotNull(stmt, "Statement should not be null");
+        Assertions.assertEquals("test_provider", stmt.getName(), "Provider name should match");
+
+        Map<String, String> properties = stmt.getProperties();
+        Assertions.assertNotNull(properties, "Properties should not be null");
+        Assertions.assertEquals("600", properties.get("ldap_cache_refresh_interval"),
+                "Updated property should match");
+    }
+
+    /**
+     * Test case: Parse ALTER GROUP PROVIDER with multiple properties
+     * Test point: Should create statement with all updated properties
+     */
+    @Test
+    public void testParseAlterGroupProviderMultipleProperties() throws Exception {
+        String sql = "ALTER GROUP PROVIDER ldap_provider SET (" +
+                "\"ldap_conn_url\" = \"ldap://localhost:390\", " +
+                "\"ldap_bind_root_pwd\" = \"new_password\")";
+
+        AlterGroupProviderStmt stmt =
+                (AlterGroupProviderStmt) SqlParser.parseSingleStatement(sql, ctx.getSessionVariable().getSqlMode());
+
+        Assertions.assertNotNull(stmt, "Statement should not be null");
+        Assertions.assertEquals("ldap_provider", stmt.getName(), "Provider name should match");
+
+        Map<String, String> properties = stmt.getProperties();
+        Assertions.assertEquals("ldap://localhost:390", properties.get("ldap_conn_url"));
+        Assertions.assertEquals("new_password", properties.get("ldap_bind_root_pwd"));
+    }
+
+    /**
+     * Test case: Parse ALTER GROUP PROVIDER with quoted identifier
+     * Test point: Should correctly handle quoted provider names
+     */
+    @Test
+    public void testParseAlterGroupProviderWithQuotedIdentifier() throws Exception {
+        String sql = "ALTER GROUP PROVIDER `test-provider` SET (\"ldap_cache_refresh_interval\" = \"600\")";
+
+        AlterGroupProviderStmt stmt =
+                (AlterGroupProviderStmt) SqlParser.parseSingleStatement(sql, ctx.getSessionVariable().getSqlMode());
+
+        Assertions.assertNotNull(stmt, "Statement should not be null");
+        Assertions.assertEquals("test-provider", stmt.getName(), "Provider name should match");
     }
 
     /**
@@ -249,6 +306,14 @@ public class GroupProviderAstBuilderTest {
         Assertions.assertNotNull(dropStmt, "Drop statement should not be null");
         Assertions.assertEquals("case_test", dropStmt.getName(), "Provider name should match");
         Assertions.assertTrue(dropStmt.isIfExists(), "IF EXISTS should be true");
+
+        // Test ALTER with different case
+        String alterSql = "alter group provider case_test set (\"ldap_cache_refresh_interval\" = \"600\")";
+        AlterGroupProviderStmt alterStmt =
+                (AlterGroupProviderStmt) SqlParser.parseSingleStatement(alterSql, ctx.getSessionVariable().getSqlMode());
+
+        Assertions.assertNotNull(alterStmt, "Alter statement should not be null");
+        Assertions.assertEquals("case_test", alterStmt.getName(), "Provider name should match");
     }
 
     /**
