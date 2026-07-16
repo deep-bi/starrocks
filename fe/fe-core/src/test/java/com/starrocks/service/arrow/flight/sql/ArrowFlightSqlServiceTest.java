@@ -29,6 +29,7 @@ import org.apache.arrow.driver.jdbc.shaded.org.bouncycastle.operator.jcajce.JcaC
 import org.apache.arrow.flight.FlightServer;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 import java.io.ByteArrayInputStream;
 import java.io.File;
@@ -38,7 +39,6 @@ import java.io.OutputStreamWriter;
 import java.io.Writer;
 import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
 import java.security.SecureRandom;
@@ -111,7 +111,7 @@ public class ArrowFlightSqlServiceTest {
     }
 
     @Test
-    public void testEnableTls(@Mocked FlightServer server) throws Exception {
+    public void testEnableTls(@Mocked FlightServer server, @TempDir File dir) throws Exception {
         new MockUp<FlightServer.Builder>() {
             @Mock
             public FlightServer build() {
@@ -142,7 +142,7 @@ public class ArrowFlightSqlServiceTest {
             }
         };
 
-        configureTls();
+        configureTls(dir);
         ArrowFlightSqlService service = new ArrowFlightSqlService(1234);
         service.start();
         service.stop();
@@ -157,7 +157,14 @@ public class ArrowFlightSqlServiceTest {
         assertThrows(IllegalArgumentException.class, () -> new ArrowFlightSqlService(1234));
     }
 
-    private static void configureTls() throws Exception {
+    @Test
+    public void testBeSslEnableWithMissingCertThrows() {
+        Config.arrow_flight_be_ssl_enable = true;
+        Config.arrow_flight_ssl_certificate_path = "/nonexistent/cert.pem";
+        assertThrows(IllegalArgumentException.class, () -> new ArrowFlightSqlService(1234));
+    }
+
+    private static void configureTls(File dir) throws Exception {
         KeyPairGenerator kpg = KeyPairGenerator.getInstance("RSA");
         kpg.initialize(2048, new SecureRandom());
         KeyPair kp = kpg.generateKeyPair();
@@ -176,7 +183,6 @@ public class ArrowFlightSqlServiceTest {
         X509Certificate cert = (X509Certificate) CertificateFactory.getInstance("X.509")
                 .generateCertificate(new ByteArrayInputStream(holder.getEncoded()));
 
-        File dir = Files.createTempDirectory("arrow-flight-ssl-").toFile();
         dir.deleteOnExit();
         File certFile = new File(dir, "cert.pem");
         File keyFile = new File(dir, "key.pem");
