@@ -57,7 +57,6 @@ import com.starrocks.http.rest.RestResult;
 import com.starrocks.persist.ColocatePersistInfo;
 import com.starrocks.qe.ConnectContext;
 import com.starrocks.server.GlobalStateMgr;
-import com.starrocks.sql.ast.UserIdentity;
 import io.netty.handler.codec.http.HttpMethod;
 import io.netty.handler.codec.http.HttpResponseStatus;
 import org.apache.logging.log4j.LogManager;
@@ -114,8 +113,7 @@ public class ColocateMetaService {
             if (redirectToLeader(request, response)) {
                 return;
             }
-            UserIdentity currentUser = ConnectContext.get().getCurrentUserIdentity();
-            checkUserOwnsAdminRole(currentUser);
+            checkUserOwnsAdminRole(ConnectContext.get());
             executeInLeaderWithAdmin(request, response);
         }
 

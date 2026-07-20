@@ -75,6 +75,7 @@ import io.netty.handler.stream.ChunkedFile;
 import io.netty.handler.stream.ChunkedInput;
 import io.netty.handler.stream.ChunkedStream;
 import io.netty.util.CharsetUtil;
+import org.apache.commons.collections4.CollectionUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -308,11 +309,32 @@ public abstract class BaseAction implements IAction {
     // operation which checks `PrivPredicate.ADMIN` in global table in old Auth framework.
     protected void checkUserOwnsAdminRole(UserIdentity currentUser) throws AccessDeniedException {
         try {
-            Set<Long> userOwnedRoles = AuthorizationMgr.getOwnedRolesByUser(currentUser);
-            if (!(currentUser.equals(UserIdentity.ROOT) ||
-                    userOwnedRoles.contains(PrivilegeBuiltinConstants.ROOT_ROLE_ID) ||
-                    (userOwnedRoles.contains(PrivilegeBuiltinConstants.DB_ADMIN_ROLE_ID) &&
-                            userOwnedRoles.contains(PrivilegeBuiltinConstants.USER_ADMIN_ROLE_ID)))) {
+            checkUserOwnsAdminRole(AuthorizationMgr.getOwnedRolesByUser(currentUser), currentUser);
+        } catch (PrivilegeException e) {
+            throw new AccessDeniedException();
+        }
+    }
+
+    protected void checkUserOwnsAdminRole(ConnectContext connectContext) throws AccessDeniedException {
+        checkUserOwnsAdminRole(connectContext.getCurrentRoleIds(), connectContext.getCurrentUserIdentity());
+    }
+
+    protected void checkUserOwnsAdminRole(Set<Long> userOwnedRoles, UserIdentity currentUser) throws AccessDeniedException {
+        if (currentUser.equals(UserIdentity.ROOT)) {
+            return;
+        }
+
+        if (CollectionUtils.isEmpty(userOwnedRoles)) {
+            throw new AccessDeniedException();
+        }
+
+        try {
+            Set<Long> allRoleIds =
+                    GlobalStateMgr.getCurrentState().getAuthorizationMgr().getAllPredecessorRoleIds(userOwnedRoles);
+
+            if (!(allRoleIds.contains(PrivilegeBuiltinConstants.ROOT_ROLE_ID) ||
+                        (allRoleIds.contains(PrivilegeBuiltinConstants.DB_ADMIN_ROLE_ID) &&
+                        allRoleIds.contains(PrivilegeBuiltinConstants.USER_ADMIN_ROLE_ID)))) {
                 throw new AccessDeniedException();
             }
         } catch (PrivilegeException e) {
