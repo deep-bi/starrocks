@@ -3892,6 +3892,32 @@ public class Config extends ConfigBase {
     @ConfField
     public static int arrow_flight_port = -1;
 
+    /**
+     * Enable TLS for the Arrow Flight SQL server. Requires arrow_flight_ssl_certificate_path
+     * and arrow_flight_ssl_private_key_path to be set.
+     */
+    @ConfField
+    public static boolean arrow_flight_ssl_enable = false;
+
+    /**
+     * Path to the PEM-encoded certificate chain file used for Arrow Flight SQL TLS.
+     */
+    @ConfField
+    public static String arrow_flight_ssl_certificate_path = "";
+
+    /**
+     * Path to the PEM-encoded private key file (PKCS#8) used for Arrow Flight SQL TLS.
+     */
+    @ConfField
+    public static String arrow_flight_ssl_private_key_path = "";
+
+    /**
+     * Whether the FE should connect to BE/CN Arrow Flight SQL ports over TLS when proxying requests.
+     * When enabled, the FE trusts the certificate at arrow_flight_ssl_certificate_path for these connections as well.
+     */
+    @ConfField
+    public static boolean arrow_flight_be_ssl_enable = false;
+
     @ConfField(mutable = true)
     public static int arrow_token_cache_size = 1024;
 

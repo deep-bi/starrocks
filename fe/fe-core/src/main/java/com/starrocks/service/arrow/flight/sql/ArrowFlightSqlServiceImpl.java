@@ -77,7 +77,9 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import java.io.ByteArrayOutputStream;
+import java.io.FileInputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.nio.channels.Channels;
 import java.util.Collections;
@@ -561,7 +563,8 @@ public class ArrowFlightSqlServiceImpl implements FlightSqlProducer, AutoCloseab
                                         ServerStreamListener listener) {
         ByteString ticketHandle = ticketManager.buildBETicket(ticket.getQueryId(), ticket.getFragmentInstanceId());
         // bearerToken is null for BE connections because the queryId in the ticket serves as the validation token
-        getStreamResultFromRemoteNode(ticket.getHost(), ticket.getPort(), ticketHandle, null, "BE", listener);
+        getStreamResultFromRemoteNode(ticket.getHost(), ticket.getPort(), ticketHandle, null, "BE", listener,
+                Config.arrow_flight_be_ssl_enable);
     }
 
     private void getStreamResultFromRemoteFE(ArrowFlightSqlTicketManager.ParsedTicket ticket,
@@ -575,25 +578,27 @@ public class ArrowFlightSqlServiceImpl implements FlightSqlProducer, AutoCloseab
 
         String uuid = extractUuidFromToken(bearerToken);
         ByteString ticketHandle = ByteString.copyFromUtf8(uuid + "|" + ticket.getQueryId());
-        getStreamResultFromRemoteNode(ticket.getHost(), ticket.getPort(), ticketHandle, bearerToken, "FE", listener);
+        getStreamResultFromRemoteNode(ticket.getHost(), ticket.getPort(), ticketHandle, bearerToken, "FE", listener,
+                Config.arrow_flight_ssl_enable);
     }
 
     private void getStreamResultFromRemoteNode(String host, int port,
                                                 ByteString ticketHandle,
                                                 String bearerToken,
                                                 String targetType,
-                                                ServerStreamListener listener) {
+                                                ServerStreamListener listener,
+                                                boolean useTls) {
         FlightStream stream = null;
         String nodeKey = host + ":" + port;
 
         try {
-            FlightClient client = getOrCreateClient(nodeKey, host, port);
+            FlightClient client = getOrCreateClient(nodeKey, host, port, useTls);
             FlightSql.TicketStatementQuery ticketStatement = FlightSql.TicketStatementQuery.newBuilder()
                     .setStatementHandle(ticketHandle)
                     .build();
             Ticket ticket = new Ticket(Any.pack(ticketStatement).toByteArray());
 
-            stream = getStreamWithRetry(client, ticket, nodeKey, host, port, bearerToken);
+            stream = getStreamWithRetry(client, ticket, nodeKey, host, port, bearerToken, useTls);
             final FlightStream streamToCancel = stream;
 
             listener.setOnCancelHandler(() -> {
@@ -635,16 +640,30 @@ public class ArrowFlightSqlServiceImpl implements FlightSqlProducer, AutoCloseab
         }
     }
 
-    private FlightClient getOrCreateClient(String key, String host, int port) throws Exception {
-        return clientCache.get(key, () -> {
+    private FlightClient getOrCreateClient(String key, String host, int port, boolean useTls) throws Exception {
+        return clientCache.get(key, () -> buildFlightClient(host, port, useTls));
+    }
+
+    private FlightClient buildFlightClient(String host, int port, boolean useTls) throws IOException {
+        if (useTls) {
+            // Peer is TLS-only; trust the same certificate this FE was configured with. This assumes
+            // all TLS peers share the same certificate (or a CA covered by it).
+            Location location = Location.forGrpcTls(host, port);
+            FlightClient.Builder builder = FlightClient.builder().allocator(rootAllocator).location(location).useTls();
+
+            try (InputStream trustedCert = new FileInputStream(Config.arrow_flight_ssl_certificate_path)) {
+                builder.trustedCertificates(trustedCert);
+                return builder.build();
+            }
+        } else {
             Location location = Location.forGrpcInsecure(host, port);
             return FlightClient.builder().allocator(rootAllocator).location(location).build();
-        });
+        }
     }
 
     private FlightStream getStreamWithRetry(FlightClient client, Ticket ticket,
                                             String key, String host, int port,
-                                            String bearerToken) throws Exception {
+                                            String bearerToken, boolean useTls) throws Exception {
         try {
             if (bearerToken != null) {
                 CredentialCallOption authOption = new CredentialCallOption(new BearerCredentialWriter(bearerToken));
@@ -655,7 +674,7 @@ public class ArrowFlightSqlServiceImpl implements FlightSqlProducer, AutoCloseab
             LOG.warn("[ARROW] Failed to get stream from {}:{}, retrying with new client", host, port, e);
 
             clientCache.invalidate(key);
-            FlightClient freshClient = getOrCreateClient(key, host, port);
+            FlightClient freshClient = getOrCreateClient(key, host, port, useTls);
             if (bearerToken != null) {
                 CredentialCallOption authOption = new CredentialCallOption(new BearerCredentialWriter(bearerToken));
                 return freshClient.getStream(ticket, authOption);
@@ -698,7 +717,7 @@ public class ArrowFlightSqlServiceImpl implements FlightSqlProducer, AutoCloseab
         String nodeKey = feHost + ":" + fePort;
 
         try {
-            FlightClient client = getOrCreateClient(nodeKey, feHost, fePort);
+            FlightClient client = getOrCreateClient(nodeKey, feHost, fePort, Config.arrow_flight_ssl_enable);
             FlightDescriptor descriptor = FlightDescriptor.command(Any.pack(command).toByteArray());
             CredentialCallOption authOption = new CredentialCallOption(new BearerCredentialWriter(token));
 
@@ -735,7 +754,7 @@ public class ArrowFlightSqlServiceImpl implements FlightSqlProducer, AutoCloseab
         String nodeKey = feHost + ":" + fePort;
 
         try {
-            FlightClient client = getOrCreateClient(nodeKey, feHost, fePort);
+            FlightClient client = getOrCreateClient(nodeKey, feHost, fePort, Config.arrow_flight_ssl_enable);
             CredentialCallOption authOption = new CredentialCallOption(new BearerCredentialWriter(token));
 
             org.apache.arrow.flight.Action action = new org.apache.arrow.flight.Action(
@@ -777,7 +796,7 @@ public class ArrowFlightSqlServiceImpl implements FlightSqlProducer, AutoCloseab
         String nodeKey = feHost + ":" + fePort;
 
         try {
-            FlightClient client = getOrCreateClient(nodeKey, feHost, fePort);
+            FlightClient client = getOrCreateClient(nodeKey, feHost, fePort, Config.arrow_flight_ssl_enable);
             CredentialCallOption authOption = new CredentialCallOption(new BearerCredentialWriter(token));
 
             SetSessionOptionsResult result = client.setSessionOptions(request, authOption);
@@ -811,7 +830,7 @@ public class ArrowFlightSqlServiceImpl implements FlightSqlProducer, AutoCloseab
         String nodeKey = feHost + ":" + fePort;
 
         try {
-            FlightClient client = getOrCreateClient(nodeKey, feHost, fePort);
+            FlightClient client = getOrCreateClient(nodeKey, feHost, fePort, Config.arrow_flight_ssl_enable);
             CredentialCallOption authOption = new CredentialCallOption(new BearerCredentialWriter(token));
 
             CloseSessionResult result = client.closeSession(new CloseSessionRequest(), authOption);
