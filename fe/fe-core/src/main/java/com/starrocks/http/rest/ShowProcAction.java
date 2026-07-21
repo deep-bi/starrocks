@@ -54,7 +54,6 @@ import com.starrocks.qe.LeaderOpExecutor;
 import com.starrocks.qe.OriginStatement;
 import com.starrocks.qe.ShowResultSet;
 import com.starrocks.server.GlobalStateMgr;
-import com.starrocks.sql.ast.UserIdentity;
 import io.netty.handler.codec.http.HttpMethod;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -78,8 +77,7 @@ public class ShowProcAction extends RestBaseAction {
     @Override
     public void executeWithoutPassword(BaseRequest request, BaseResponse response) throws DdlException, AccessDeniedException {
         // check authority
-        UserIdentity currentUser = ConnectContext.get().getCurrentUserIdentity();
-        checkUserOwnsAdminRole(currentUser);
+        checkUserOwnsAdminRole(request.getConnectContext());
 
         String path = request.getSingleParameter("path");
         String forward = request.getSingleParameter("forward");

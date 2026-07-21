@@ -1165,6 +1165,36 @@ public class AuthorizationMgrTest {
         Assertions.assertEquals(new HashSet<>(Arrays.asList(roleIds[0])), manager.getAllPredecessorRoleIdsUnlocked(roleIds[0]));
     }
 
+    @Test
+    public void testGetAllPredecessorRoleIdsPublicApi() throws Exception {
+        AuthorizationMgr manager = ctx.getGlobalStateMgr().getAuthorizationMgr();
+        // role0 -> role1 -> role2, mirroring the nested `GRANT role TO ROLE` chain used e.g.
+        // by REST API admin-role checks (a custom role granted db_admin/user_admin, then
+        // granted to a user)
+        DDLStmtExecutor.execute(UtFrameUtils.parseStmtWithNewParser(
+                "create role gapri_role0;", ctx), ctx);
+        DDLStmtExecutor.execute(UtFrameUtils.parseStmtWithNewParser(
+                "create role gapri_role1;", ctx), ctx);
+        DDLStmtExecutor.execute(UtFrameUtils.parseStmtWithNewParser(
+                "create role gapri_role2;", ctx), ctx);
+        long role0 = manager.getRoleIdByNameNoLock("gapri_role0");
+        long role1 = manager.getRoleIdByNameNoLock("gapri_role1");
+        long role2 = manager.getRoleIdByNameNoLock("gapri_role2");
+
+        DDLStmtExecutor.execute(UtFrameUtils.parseStmtWithNewParser(
+                "grant gapri_role0 to role gapri_role1;", ctx), ctx);
+        DDLStmtExecutor.execute(UtFrameUtils.parseStmtWithNewParser(
+                "grant gapri_role1 to role gapri_role2;", ctx), ctx);
+
+        // the public, lock-acquiring wrapper must match the unlocked implementation
+        Assertions.assertEquals(new HashSet<>(Arrays.asList(role0, role1, role2)),
+                manager.getAllPredecessorRoleIds(new HashSet<>(Arrays.asList(role2))));
+        Assertions.assertEquals(new HashSet<>(Arrays.asList(role0, role1)),
+                manager.getAllPredecessorRoleIds(new HashSet<>(Arrays.asList(role1))));
+        Assertions.assertEquals(new HashSet<>(Arrays.asList(role0)),
+                manager.getAllPredecessorRoleIds(new HashSet<>(Arrays.asList(role0))));
+    }
+
     private void assertTableSelectOnTest(UserIdentity userIdentity, boolean... canSelectOnTbls) throws Exception {
         boolean[] args = canSelectOnTbls;
         Assertions.assertEquals(4, args.length);
