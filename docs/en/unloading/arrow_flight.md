@@ -153,6 +153,45 @@ arrow_flight_port = 9408
 arrow_flight_port = 9419
 ```
 
+#### Configure TLS (Optional)
+
+By default, the Arrow Flight SQL server accepts plaintext gRPC connections. To require TLS, set the following parameters in **fe.conf** and restart the FE:
+
+| Parameter                          | Default | Description                                                                                         |
+|------------------------------------| ------- |-----------------------------------------------------------------------------------------------------|
+| `arrow_flight_ssl_enable`          | `false` | Whether to enable TLS for the Arrow Flight SQL server. Requires the two parameters below to be set. |
+| `arrow_flight_be_ssl_enable`       | `false` | Whether the FE connects to BE/CN Arrow Flight over TLS                                              |
+| `arrow_flight_ssl_certificate_path` | (empty) | Path to the PEM-encoded certificate chain file.                                                     |
+| `arrow_flight_ssl_private_key_path` | (empty) | Path to the PEM-encoded, unencrypted PKCS#8 private key file.                                       |
+
+:::note
+
+- Both the certificate chain and the private key must be PEM-encoded files, and the private key must be an unencrypted PKCS#8 key. Other formats (for example, a JKS keystore, or a PKCS#1/encrypted key) are not supported.
+- If `arrow_flight_ssl_enable` is `true` but the certificate or key file cannot be found, the FE fails to start.
+- These parameters are independent from the HTTP server's `enable_https`/`ssl_keystore_*` parameters. Arrow Flight SQL TLS cannot reuse the HTTP keystore, because the underlying Arrow Flight library only accepts PEM cert/key files, not a JKS keystore.
+
+:::
+
+Example:
+
+```Properties
+// fe.conf
+arrow_flight_port = 9408
+arrow_flight_ssl_enable = true
+arrow_flight_ssl_certificate_path = /path/to/server.crt
+arrow_flight_ssl_private_key_path = /path/to/server.key
+```
+
+On the client side, connect using `grpc+tls://` instead of `grpc://`, for example `grpc+tls://127.0.0.1:9408`.
+
+:::note
+
+If you deploy multiple FEs with `arrow_flight_ssl_enable = true`, every FE must be configured with TLS (the Arrow Flight proxy feature described below forwards requests between FEs, and a plaintext FE cannot reach a TLS-only one). All FEs must also share the same certificate (or a certificate signed by a common CA) referenced by `arrow_flight_ssl_certificate_path`, since each FE trusts its own local certificate file when connecting to its peers.
+
+:::
+
+To have the FE connect to BE/CN over TLS, enable and configure TLS on the BE/CN side itself, then set `arrow_flight_be_ssl_enable = true` on the FE so it dials BE/CN using TLS as well, trusting the certificate configured in `arrow_flight_ssl_certificate_path`. This is independent of `arrow_flight_ssl_enable`, which only controls FE-to-FE and inbound client connections. Leave `arrow_flight_be_ssl_enable` at its default (`false`) if BE/CN is running without TLS.
+
 #### Configure Arrow Flight Proxy (Optional)
 
 If your BE nodes are not directly accessible from client applications (for example, when deployed in private networks or Kubernetes environments), you can enable the Arrow Flight proxy feature on the FE to route data from BE nodes through the FE.
@@ -160,7 +199,7 @@ If your BE nodes are not directly accessible from client applications (for examp
 The proxy feature is controlled by two global variables: 
 
 - `arrow_flight_proxy_enabled`: Controls whether proxy mode is enabled. Default is `true`. When enabled, there is a slight performance overhead.
-- `arrow_flight_proxy`: Specifies the proxy hostname. If empty (default), the current FE node acts as the proxy. You can set this to a specific hostname if using a different proxy endpoint.
+- `arrow_flight_proxy`: Specifies the proxy endpoint. If empty (default), the current FE node acts as the proxy. You can set this to a specific `hostname:port` if using a different proxy endpoint.
 
 To configure these variables globally for all sessions:
 
@@ -168,14 +207,18 @@ To configure these variables globally for all sessions:
 -- Enable or disable proxy mode (enabled by default)
 SET GLOBAL arrow_flight_proxy_enabled = true;
 
--- Set a specific proxy hostname (optional, defaults to current FE)
-SET GLOBAL arrow_flight_proxy = 'your-proxy-hostname:Port';
+-- Set a specific proxy endpoint (optional, defaults to current FE)
+SET GLOBAL arrow_flight_proxy = 'your-proxy-hostname:port';
+
+-- Or, if the proxy endpoint uses TLS:
+SET GLOBAL arrow_flight_proxy = 'grpcs://your-proxy-hostname:port';
 ```
 
 :::note
 
 - The proxy feature is enabled by default, which may result in 8-10% lower throughput compared to direct BE connections. If your clients have direct network access to BE nodes, or you have limited memory resources on the FE side, you can disable the proxy to achieve optimal performance: `SET GLOBAL arrow_flight_proxy_enabled = false;`.
 - When `arrow_flight_proxy` is empty, tickets will automatically route through the FE node that the client initially connected to.
+- **`arrow_flight_proxy` accepts only `hostname:port`, `grpc://hostname:port`, or `grpcs://hostname:port`.** This is a separate, StarRocks-specific format from the `grpc+tls://` scheme used for client connection URIs (see [Configure TLS](#configure-tls-optional) above). `grpc+tls://` is **not** accepted here and will fail with `Expected format 'hostname:port' or 'grpcs://hostname:port'`. Use `grpcs://`, not `grpc+tls://`, to point the proxy at a TLS-enabled endpoint.
 - **Important**: The `arrow_flight_proxy` and `arrow_flight_proxy_enabled` settings should be configured globally using `SET GLOBAL`. Session-level settings are not supported.
 - **Session restart required**: Changing the proxy settings only affects new sessions. Existing Arrow Flight SQL sessions will continue using their original settings until they reconnect.
 
