@@ -179,7 +179,7 @@ public class WebBaseAction extends BaseAction {
                 try {
                     Authorizer.checkSystemAction(context, PrivilegeType.NODE);
                 } catch (AccessDeniedException e) {
-                    checkUserOwnsAdminRole(context.getCurrentUserIdentity());
+                    checkUserOwnsAdminRole(context);
                 }
             }
             request.setAuthorized(true);
