@@ -26,7 +26,6 @@ import com.starrocks.http.rest.RestBaseAction;
 import com.starrocks.http.rest.RestBaseResult;
 import com.starrocks.qe.ConnectContext;
 import com.starrocks.server.GlobalStateMgr;
-import com.starrocks.sql.ast.UserIdentity;
 import io.netty.handler.codec.http.HttpMethod;
 import io.netty.handler.codec.http.HttpResponseStatus;
 import org.apache.logging.log4j.LogManager;
@@ -57,8 +56,8 @@ public class GlobalDictMetaService {
             if (redirectToLeader(request, response)) {
                 return;
             }
-            UserIdentity currentUser = ConnectContext.get().getCurrentUserIdentity();
-            checkUserOwnsAdminRole(currentUser);
+
+            checkUserOwnsAdminRole(ConnectContext.get());
             executeInLeaderWithAdmin(request, response);
         }
 

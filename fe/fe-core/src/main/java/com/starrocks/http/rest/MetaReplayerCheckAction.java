@@ -42,7 +42,6 @@ import com.starrocks.http.BaseResponse;
 import com.starrocks.http.IllegalArgException;
 import com.starrocks.qe.ConnectContext;
 import com.starrocks.server.GlobalStateMgr;
-import com.starrocks.sql.ast.UserIdentity;
 import io.netty.handler.codec.http.HttpMethod;
 
 import java.util.Map;
@@ -64,8 +63,7 @@ public class MetaReplayerCheckAction extends RestBaseAction {
 
     @Override
     protected void executeWithoutPassword(BaseRequest request, BaseResponse response) throws DdlException, AccessDeniedException {
-        UserIdentity currentUser = ConnectContext.get().getCurrentUserIdentity();
-        checkUserOwnsAdminRole(currentUser);
+        checkUserOwnsAdminRole(ConnectContext.get());
 
         Map<String, String> resultMap = GlobalStateMgr.getCurrentState().getMetaReplayState().getInfo();
 
