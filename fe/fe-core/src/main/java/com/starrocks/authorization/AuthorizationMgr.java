@@ -1691,6 +1691,15 @@ public class AuthorizationMgr {
         }
     }
 
+    public Set<Long> getAllPredecessorRoleIds(Set<Long> roleIds) throws PrivilegeException {
+        roleReadLock();
+        try {
+            return getAllPredecessorRoleIdsUnlocked(roleIds);
+        } finally {
+            roleReadUnlock();
+        }
+    }
+
     public Set<String> getAllPredecessorRoleNames(Long roleId) {
         Set<Long> resultSetIds = new HashSet<>();
         resultSetIds.add(roleId);
