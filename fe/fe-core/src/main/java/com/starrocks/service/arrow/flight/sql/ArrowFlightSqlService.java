@@ -14,6 +14,7 @@
 
 package com.starrocks.service.arrow.flight.sql;
 
+import com.starrocks.common.Config;
 import com.starrocks.service.FrontendOptions;
 import com.starrocks.service.arrow.flight.sql.auth2.ArrowFlightSqlAuthenticator;
 import com.starrocks.service.arrow.flight.sql.session.ArrowFlightSqlSessionManager;
@@ -24,6 +25,8 @@ import org.apache.arrow.memory.RootAllocator;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
+import java.io.File;
+import java.io.IOException;
 import java.util.concurrent.TimeUnit;
 
 public class ArrowFlightSqlService {
@@ -53,8 +56,15 @@ public class ArrowFlightSqlService {
 
         // Memory allocator: A memory allocator is needed to manage memory.
         BufferAllocator allocator = new RootAllocator();
-        this.location = Location.forGrpcInsecure("0.0.0.0", port);
-        this.feEndpoint = Location.forGrpcInsecure(FrontendOptions.getLocalHostAddress(), port);
+        boolean useTls = Config.arrow_flight_ssl_enable;
+
+        if (useTls) {
+            this.location = Location.forGrpcTls("0.0.0.0", port);
+            this.feEndpoint = Location.forGrpcTls(FrontendOptions.getLocalHostAddress(), port);
+        } else {
+            this.location = Location.forGrpcInsecure("0.0.0.0", port);
+            this.feEndpoint = Location.forGrpcInsecure(FrontendOptions.getLocalHostAddress(), port);
+        }
 
         ArrowFlightSqlSessionManager sessionManager = new ArrowFlightSqlSessionManager();
         ArrowFlightSqlAuthenticator authenticator = new ArrowFlightSqlAuthenticator(sessionManager);
@@ -63,9 +73,32 @@ public class ArrowFlightSqlService {
         this.producer = new ArrowFlightSqlServiceImpl(sessionManager, feEndpoint);
 
         // Constructs the server object of the Arrow Flight SQL.
-        this.flightServer = FlightServer.builder(allocator, location, producer)
-                .headerAuthenticator(authenticator)
-                .build();
+        FlightServer.Builder builder = FlightServer.builder(allocator, location, producer)
+                .headerAuthenticator(authenticator);
+
+        if (useTls) {
+            File certChain = new File(Config.arrow_flight_ssl_certificate_path);
+            File privateKey = new File(Config.arrow_flight_ssl_private_key_path);
+
+            if (!certChain.isFile() || !privateKey.isFile()) {
+                throw new IllegalArgumentException(String.format(
+                        "arrow_flight_ssl_enable is true but arrow_flight_ssl_certificate_path=[%s] and/or " +
+                                "arrow_flight_ssl_private_key_path=[%s] do not point to a readable PEM file.",
+                        Config.arrow_flight_ssl_certificate_path, Config.arrow_flight_ssl_private_key_path));
+            }
+            try {
+                builder.useTls(certChain, privateKey);
+            } catch (IOException e) {
+                throw new IllegalArgumentException("Failed to load Arrow Flight SQL TLS certificate/private key", e);
+            }
+        } else if (Config.arrow_flight_be_ssl_enable && !new File(Config.arrow_flight_ssl_certificate_path).isFile()) {
+            throw new IllegalArgumentException(String.format(
+                    "arrow_flight_be_ssl_enable is true but arrow_flight_ssl_certificate_path=[%s] does not " +
+                            "point to a readable PEM file.",
+                    Config.arrow_flight_ssl_certificate_path));
+        }
+
+        this.flightServer = builder.build();
     }
 
     public void start() {
