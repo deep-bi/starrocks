@@ -30,6 +30,7 @@ import com.starrocks.sql.ast.ExecuteAsStmt;
 import com.starrocks.sql.ast.GrantPrivilegeStmt;
 import com.starrocks.sql.ast.RevokePrivilegeStmt;
 import com.starrocks.sql.ast.UserIdentity;
+import com.starrocks.sql.ast.group.AlterGroupProviderStmt;
 import com.starrocks.sql.ast.group.CreateGroupProviderStmt;
 import com.starrocks.sql.ast.group.DropGroupProviderStmt;
 import com.starrocks.sql.ast.group.ShowCreateGroupProviderStmt;
@@ -228,6 +229,34 @@ public class GroupProviderPermissionTest {
     }
 
     /**
+     * Test case: Non-admin user attempting to ALTER GROUP PROVIDER
+     * Test point: Should parse successfully but fail during permission check
+     * Expected error: (5203, 'Access denied; you need (at least one of) the SECURITY privilege(s) on SYSTEM for this operation.')
+     */
+    @Test
+    public void testAlterGroupProviderPermissionDenied() throws Exception {
+        String sql = "ALTER GROUP PROVIDER unix_group_provider SET (\"ldap_cache_refresh_interval\" = \"600\")";
+
+        // Parse should succeed regardless of user context
+        AlterGroupProviderStmt stmt =
+                (AlterGroupProviderStmt) SqlParser.parseSingleStatement(sql, userCtx.getSessionVariable().getSqlMode());
+
+        Assertions.assertNotNull(stmt, "Statement should parse successfully");
+        Assertions.assertEquals("unix_group_provider", stmt.getName(), "Provider name should match");
+
+        // Test permission check - should fail for non-admin user
+        Assertions.assertThrows(AccessDeniedException.class, () -> {
+            Authorizer.checkSystemAction(userCtx, PrivilegeType.SECURITY);
+        }, "Non-admin user should not have SECURITY privilege for ALTER GROUP PROVIDER");
+
+        ExecuteAsExecutor.execute(new ExecuteAsStmt(new UserIdentity("security_user", "%"), false), securityUserCtx);
+        // Test permission check - should succeed for user with SECURITY privilege
+        Assertions.assertDoesNotThrow(() -> {
+            Authorizer.checkSystemAction(securityUserCtx, PrivilegeType.SECURITY);
+        }, "User with SECURITY privilege should pass permission check for ALTER GROUP PROVIDER");
+    }
+
+    /**
      * Test case: Non-admin user attempting to CREATE GROUP PROVIDER
      * Test point: Should parse successfully but fail during permission check
      * Based on: execute as u1 with no revert; create group provider if not exists unix_group_provider2 properties(...)
@@ -358,6 +387,7 @@ public class GroupProviderPermissionTest {
                 "SHOW GROUP PROVIDERS",
                 "SHOW CREATE GROUP PROVIDER test_provider",
                 "CREATE GROUP PROVIDER IF NOT EXISTS test_provider PROPERTIES(\"type\" = \"unix\")",
+                "ALTER GROUP PROVIDER test_provider SET (\"ldap_cache_refresh_interval\" = \"600\")",
                 "DROP GROUP PROVIDER IF EXISTS test_provider"
         };
 
@@ -669,6 +699,7 @@ public class GroupProviderPermissionTest {
                 "SHOW GROUP PROVIDERS",
                 "SHOW CREATE GROUP PROVIDER test_provider",
                 "CREATE GROUP PROVIDER IF NOT EXISTS test_provider PROPERTIES(\"type\" = \"unix\")",
+                "ALTER GROUP PROVIDER test_provider SET (\"ldap_cache_refresh_interval\" = \"600\")",
                 "DROP GROUP PROVIDER IF EXISTS test_provider"
         };
 

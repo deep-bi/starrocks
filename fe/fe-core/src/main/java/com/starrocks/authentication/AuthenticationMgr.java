@@ -21,6 +21,7 @@ import com.starrocks.authorization.PrivilegeException;
 import com.starrocks.authorization.UserPrivilegeCollectionV2;
 import com.starrocks.common.DdlException;
 import com.starrocks.common.Pair;
+import com.starrocks.common.util.PrintableMap;
 import com.starrocks.mysql.MysqlPassword;
 import com.starrocks.mysql.privilege.AuthPlugin;
 import com.starrocks.persist.EditLog;
@@ -579,7 +580,7 @@ public class AuthenticationMgr {
                 EditLog editLog = GlobalStateMgr.getCurrentState().getEditLog();
                 editLog.logAlterSecurityIntegration(name, alterProps);
                 LOG.info("finished to alter security integration '{}' with updated properties {}",
-                        name, alterProps);
+                        name, new PrintableMap<>(alterProps, "=", true, false, true));
             }
         }
     }
@@ -649,6 +650,33 @@ public class AuthenticationMgr {
         } catch (DdlException e) {
             LOG.error("Failed to create group provider '{}'", name, e);
         }
+    }
+
+    public void alterGroupProvider(String name, Map<String, String> alterProps, boolean isReplay) throws DdlException {
+        GroupProvider groupProvider = nameToGroupProviderMap.get(name);
+        if (groupProvider == null) {
+            throw new DdlException("Group provider '" + name + "' does not exist");
+        } else {
+            // COW
+            Map<String, String> newProps = Maps.newHashMap(groupProvider.getProperties());
+            // update props
+            newProps.putAll(alterProps);
+            GroupProvider newGroupProvider = GroupProviderFactory.createGroupProvider(name, newProps);
+            newGroupProvider.init();
+            groupProvider.destroy();
+            // update map
+            nameToGroupProviderMap.put(name, newGroupProvider);
+            if (!isReplay) {
+                EditLog editLog = GlobalStateMgr.getCurrentState().getEditLog();
+                editLog.logEdit(OperationType.OP_ALTER_GROUP_PROVIDER, new GroupProviderLog(name, alterProps));
+                LOG.info("finished to alter group provider '{}' with updated properties {}",
+                        name, new PrintableMap<>(alterProps, "=", true, false, true));
+            }
+        }
+    }
+
+    public void replayAlterGroupProvider(String name, Map<String, String> alterProps) throws DdlException {
+        alterGroupProvider(name, alterProps, true);
     }
 
     public void dropGroupProviderStatement(DropGroupProviderStmt stmt, ConnectContext context) throws DdlException {

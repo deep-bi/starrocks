@@ -253,6 +253,32 @@ In this example, since `ldap_user_search_attr` is not configured, the system wil
 
 This approach is particularly suitable for Microsoft AD environments, as group members in AD may lack simple username attributes.
 
+## Alter a group provider
+
+You can alter the properties of an existing group provider with `ALTER GROUP PROVIDER`.
+
+### Syntax
+
+```SQL
+ALTER GROUP PROVIDER <group_provider_name> SET
+(
+    "key" = "value"[, ...]
+)
+```
+
+Only the properties supported by the group provider's type can be altered. The `type` property itself cannot be changed. Properties that are not specified in the `ALTER GROUP PROVIDER` statement retain their current values.
+
+### Example
+
+Update the LDAP cache refresh interval of `ldap_group_provider`:
+
+```SQL
+ALTER GROUP PROVIDER ldap_group_provider SET
+(
+    "ldap_cache_refresh_interval" = "600"
+);
+```
+
 ## Combine group provider with a security integration
 
 After creating the group provider, you can combine it with a security integration to allow users specified by the group provider to log in to StarRocks. For more information on creating a security integration, see [Authenticate with Security Integration](./authentication/security_integration.md).
