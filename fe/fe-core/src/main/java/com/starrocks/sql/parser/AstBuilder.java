@@ -482,6 +482,7 @@ import com.starrocks.sql.ast.feedback.AddPlanAdvisorStmt;
 import com.starrocks.sql.ast.feedback.ClearPlanAdvisorStmt;
 import com.starrocks.sql.ast.feedback.DelPlanAdvisorStmt;
 import com.starrocks.sql.ast.feedback.ShowPlanAdvisorStmt;
+import com.starrocks.sql.ast.group.AlterGroupProviderStmt;
 import com.starrocks.sql.ast.group.CreateGroupProviderStmt;
 import com.starrocks.sql.ast.group.DropGroupProviderStmt;
 import com.starrocks.sql.ast.group.ShowCreateGroupProviderStmt;
@@ -6898,6 +6899,18 @@ public class AstBuilder extends StarRocksBaseVisitor<ParseNode> {
             }
         }
         return new CreateGroupProviderStmt(name, propertyMap, context.IF() != null, createPos(context));
+    }
+
+    @Override
+    public ParseNode visitAlterGroupProviderStatement(
+            StarRocksParser.AlterGroupProviderStatementContext context) {
+        String name = ((Identifier) visit(context.identifier())).getValue();
+        Map<String, String> properties = new HashMap<>();
+        List<Property> propertyList = visit(context.propertyList().property(), Property.class);
+        for (Property property : propertyList) {
+            properties.put(property.getKey(), property.getValue());
+        }
+        return new AlterGroupProviderStmt(name, properties, createPos(context));
     }
 
     @Override

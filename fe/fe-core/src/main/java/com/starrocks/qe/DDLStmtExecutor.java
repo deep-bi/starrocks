@@ -142,6 +142,7 @@ import com.starrocks.sql.ast.SubmitTaskStmt;
 import com.starrocks.sql.ast.SyncStmt;
 import com.starrocks.sql.ast.TruncateTableStmt;
 import com.starrocks.sql.ast.UninstallPluginStmt;
+import com.starrocks.sql.ast.group.AlterGroupProviderStmt;
 import com.starrocks.sql.ast.group.CreateGroupProviderStmt;
 import com.starrocks.sql.ast.group.DropGroupProviderStmt;
 import com.starrocks.sql.ast.integration.AlterSecurityIntegrationStatement;
@@ -634,6 +635,15 @@ public class DDLStmtExecutor {
             ErrorReport.wrapWithRuntimeException(() -> {
                 AuthenticationMgr authenticationMgr = GlobalStateMgr.getCurrentState().getAuthenticationMgr();
                 authenticationMgr.createGroupProviderStatement(statement, context);
+            });
+            return null;
+        }
+
+        @Override
+        public ShowResultSet visitAlterGroupProviderStatement(AlterGroupProviderStmt statement, ConnectContext context) {
+            ErrorReport.wrapWithRuntimeException(() -> {
+                AuthenticationMgr authenticationMgr = GlobalStateMgr.getCurrentState().getAuthenticationMgr();
+                authenticationMgr.alterGroupProvider(statement.getName(), statement.getProperties(), false);
             });
             return null;
         }
