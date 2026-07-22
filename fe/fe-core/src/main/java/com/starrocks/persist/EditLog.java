@@ -1300,6 +1300,12 @@ public class EditLog {
                             groupProviderLog.getName(), groupProviderLog.getPropertyMap());
                     break;
                 }
+                case OperationType.OP_ALTER_GROUP_PROVIDER: {
+                    GroupProviderLog groupProviderLog = (GroupProviderLog) journal.data();
+                    GlobalStateMgr.getCurrentState().getAuthenticationMgr().replayAlterGroupProvider(
+                            groupProviderLog.getName(), groupProviderLog.getPropertyMap());
+                    break;
+                }
                 case OperationType.OP_DROP_GROUP_PROVIDER: {
                     GroupProviderLog groupProviderLog = (GroupProviderLog) journal.data();
                     GlobalStateMgr.getCurrentState().getAuthenticationMgr().replayDropGroupProvider(groupProviderLog.getName());

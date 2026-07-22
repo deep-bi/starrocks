@@ -272,6 +272,7 @@ public class EditLogDeserializer {
             .put(OperationType.OP_ALTER_SECURITY_INTEGRATION, SecurityIntegrationPersistInfo.class)
             .put(OperationType.OP_DROP_SECURITY_INTEGRATION, SecurityIntegrationPersistInfo.class)
             .put(OperationType.OP_CREATE_GROUP_PROVIDER, GroupProviderLog.class)
+            .put(OperationType.OP_ALTER_GROUP_PROVIDER, GroupProviderLog.class)
             .put(OperationType.OP_DROP_GROUP_PROVIDER, GroupProviderLog.class)
             .put(OperationType.OP_CREATE_SPM_BASELINE_LOG, BaselinePlan.Info.class)
             .put(OperationType.OP_DROP_SPM_BASELINE_LOG, BaselinePlan.Info.class)

@@ -19,6 +19,7 @@ import com.starrocks.authentication.GroupProvider;
 import com.starrocks.qe.ConnectContext;
 import com.starrocks.server.GlobalStateMgr;
 import com.starrocks.sql.ast.UserIdentity;
+import com.starrocks.sql.ast.group.AlterGroupProviderStmt;
 import com.starrocks.sql.ast.group.CreateGroupProviderStmt;
 import com.starrocks.sql.ast.group.DropGroupProviderStmt;
 import com.starrocks.sql.parser.NodePosition;
@@ -125,6 +126,68 @@ public class GroupProviderStatementAnalyzerTest {
 
         Assertions.assertTrue(exception.getMessage().contains("Group Provider '" + TEST_PROVIDER_NAME + "' already exists"),
                 "Error message should indicate provider already exists: " + exception.getMessage());
+    }
+
+    /**
+     * Test case: Analyze Alter Group Provider when provider exists
+     * Test point: Should pass analysis without error
+     */
+    @Test
+    public void testAnalyzeAlterGroupProviderWhenExists() throws Exception {
+        Map<String, String> properties = createUnixGroupProviderProperties();
+        CreateGroupProviderStmt createStmt =
+                new CreateGroupProviderStmt(TEST_PROVIDER_NAME, properties, false, NodePosition.ZERO);
+        authenticationMgr.createGroupProviderStatement(createStmt, ctx);
+
+        Map<String, String> alterProps = new HashMap<>();
+        alterProps.put("ldap_cache_refresh_interval", "600");
+        AlterGroupProviderStmt alterStmt = new AlterGroupProviderStmt(TEST_PROVIDER_NAME, alterProps, NodePosition.ZERO);
+
+        // Should not throw exception
+        GroupProviderStatementAnalyzer.analyze(alterStmt, ctx);
+    }
+
+    /**
+     * Test case: Analyze Alter Group Provider when provider does not exist
+     * Test point: Should throw SemanticException with appropriate error message
+     */
+    @Test
+    public void testAnalyzeAlterGroupProviderWhenNotExists() throws Exception {
+        Map<String, String> alterProps = new HashMap<>();
+        alterProps.put("ldap_cache_refresh_interval", "600");
+        AlterGroupProviderStmt alterStmt =
+                new AlterGroupProviderStmt(NON_EXISTENT_PROVIDER_NAME, alterProps, NodePosition.ZERO);
+
+        SemanticException exception = Assertions.assertThrows(SemanticException.class, () -> {
+            GroupProviderStatementAnalyzer.analyze(alterStmt, ctx);
+        });
+
+        Assertions.assertTrue(
+                exception.getMessage().contains("Group Provider '" + NON_EXISTENT_PROVIDER_NAME + "' not found"),
+                "Error message should indicate provider not found: " + exception.getMessage());
+    }
+
+    /**
+     * Test case: Analyze Alter Group Provider attempting to change the 'type' property
+     * Test point: Should throw SemanticException since 'type' is immutable
+     */
+    @Test
+    public void testAnalyzeAlterGroupProviderCannotChangeType() throws Exception {
+        Map<String, String> properties = createUnixGroupProviderProperties();
+        CreateGroupProviderStmt createStmt =
+                new CreateGroupProviderStmt(TEST_PROVIDER_NAME, properties, false, NodePosition.ZERO);
+        authenticationMgr.createGroupProviderStatement(createStmt, ctx);
+
+        Map<String, String> alterProps = new HashMap<>();
+        alterProps.put("type", "ldap");
+        AlterGroupProviderStmt alterStmt = new AlterGroupProviderStmt(TEST_PROVIDER_NAME, alterProps, NodePosition.ZERO);
+
+        SemanticException exception = Assertions.assertThrows(SemanticException.class, () -> {
+            GroupProviderStatementAnalyzer.analyze(alterStmt, ctx);
+        });
+
+        Assertions.assertTrue(exception.getMessage().contains("'type' property cannot be changed"),
+                "Error message should indicate type cannot be changed: " + exception.getMessage());
     }
 
     /**
