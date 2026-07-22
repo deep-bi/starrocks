@@ -22,6 +22,7 @@ import com.starrocks.qe.ConnectContext;
 import com.starrocks.server.GlobalStateMgr;
 import com.starrocks.sql.ast.AstVisitor;
 import com.starrocks.sql.ast.StatementBase;
+import com.starrocks.sql.ast.group.AlterGroupProviderStmt;
 import com.starrocks.sql.ast.group.CreateGroupProviderStmt;
 import com.starrocks.sql.ast.group.DropGroupProviderStmt;
 import com.starrocks.sql.ast.group.ShowCreateGroupProviderStmt;
@@ -56,6 +57,20 @@ public class GroupProviderStatementAnalyzer {
             if (authenticationMgr.getGroupProvider(statement.getName()) != null && !statement.isIfNotExists()) {
                 throw new SemanticException("Group Provider '" + statement.getName() + "' already exists");
             }
+            return null;
+        }
+
+        @Override
+        public Void visitAlterGroupProviderStatement(AlterGroupProviderStmt statement, ConnectContext context) {
+            AuthenticationMgr authenticationMgr = GlobalStateMgr.getCurrentState().getAuthenticationMgr();
+            if (authenticationMgr.getGroupProvider(statement.getName()) == null) {
+                throw new SemanticException("Group Provider '" + statement.getName() + "' not found");
+            }
+
+            if (statement.getProperties().containsKey(GroupProvider.GROUP_PROVIDER_PROPERTY_TYPE_KEY)) {
+                throw new SemanticException("'type' property cannot be changed");
+            }
+
             return null;
         }
 
