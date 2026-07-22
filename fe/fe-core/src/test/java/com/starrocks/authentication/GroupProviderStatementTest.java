@@ -19,6 +19,7 @@ import com.starrocks.persist.EditLog;
 import com.starrocks.qe.ConnectContext;
 import com.starrocks.server.GlobalStateMgr;
 import com.starrocks.sql.ast.UserIdentity;
+import com.starrocks.sql.ast.group.AlterGroupProviderStmt;
 import com.starrocks.sql.ast.group.CreateGroupProviderStmt;
 import com.starrocks.sql.ast.group.DropGroupProviderStmt;
 import com.starrocks.sql.parser.NodePosition;
@@ -135,6 +136,63 @@ public class GroupProviderStatementTest {
 
         Assertions.assertTrue(exception.getMessage().contains("Group provider '" + TEST_PROVIDER_NAME + "' already exists"),
                 "Error message should indicate provider already exists: " + exception.getMessage());
+    }
+
+    /**
+     * Test case: Alter Group Provider when provider exists
+     * Test point: Should update the property while leaving others untouched (COW merge)
+     */
+    @Test
+    public void testAlterGroupProviderWhenExists() throws Exception {
+        Map<String, String> properties = createUnixGroupProviderProperties();
+        CreateGroupProviderStmt createStmt =
+                new CreateGroupProviderStmt(TEST_PROVIDER_NAME, properties, false, NodePosition.ZERO);
+        authenticationMgr.createGroupProviderStatement(createStmt, ctx);
+
+        Map<String, String> alterProps = new HashMap<>();
+        alterProps.put("ldap_cache_refresh_interval", "600");
+        AlterGroupProviderStmt alterStmt = new AlterGroupProviderStmt(TEST_PROVIDER_NAME, alterProps, NodePosition.ZERO);
+        authenticationMgr.alterGroupProvider(alterStmt.getName(), alterStmt.getProperties(), false);
+
+        GroupProvider provider = authenticationMgr.getGroupProvider(TEST_PROVIDER_NAME);
+        Assertions.assertNotNull(provider, "Group provider should still exist after alter");
+        Assertions.assertEquals("unix", provider.getType(), "Type should remain unchanged");
+        Assertions.assertEquals("600", provider.getProperties().get("ldap_cache_refresh_interval"),
+                "Updated property should be applied");
+    }
+
+    /**
+     * Test case: Alter Group Provider when provider does not exist
+     * Test point: Should throw DdlException with appropriate error message
+     */
+    @Test
+    public void testAlterGroupProviderWhenNotExists() throws Exception {
+        Map<String, String> alterProps = new HashMap<>();
+        alterProps.put("ldap_cache_refresh_interval", "600");
+        AlterGroupProviderStmt alterStmt =
+                new AlterGroupProviderStmt(NON_EXISTENT_PROVIDER_NAME, alterProps, NodePosition.ZERO);
+
+        DdlException exception = Assertions.assertThrows(DdlException.class, () -> {
+            authenticationMgr.alterGroupProvider(alterStmt.getName(), alterStmt.getProperties(), false);
+        });
+
+        Assertions.assertTrue(
+                exception.getMessage().contains("Group provider '" + NON_EXISTENT_PROVIDER_NAME + "' does not exist"),
+                "Error message should indicate provider does not exist: " + exception.getMessage());
+    }
+
+    /**
+     * Test case: Test AlterGroupProviderStmt constructor and getters
+     * Test point: Verify proper initialization of statement properties
+     */
+    @Test
+    public void testAlterGroupProviderStmtProperties() {
+        Map<String, String> properties = new HashMap<>();
+        properties.put("ldap_cache_refresh_interval", "600");
+        AlterGroupProviderStmt stmt = new AlterGroupProviderStmt(TEST_PROVIDER_NAME, properties, NodePosition.ZERO);
+
+        Assertions.assertEquals(TEST_PROVIDER_NAME, stmt.getName(), "Provider name should match");
+        Assertions.assertEquals(properties, stmt.getProperties(), "Properties should match");
     }
 
     /**
