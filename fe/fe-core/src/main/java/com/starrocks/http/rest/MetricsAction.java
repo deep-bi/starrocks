@@ -47,7 +47,6 @@ import com.starrocks.metric.MetricRepo;
 import com.starrocks.metric.MetricVisitor;
 import com.starrocks.metric.PrometheusMetricVisitor;
 import com.starrocks.metric.SimpleCoreMetricVisitor;
-import com.starrocks.qe.ConnectContext;
 import com.starrocks.sql.ast.UserIdentity;
 import io.netty.handler.codec.http.HttpMethod;
 import org.apache.logging.log4j.LogManager;
