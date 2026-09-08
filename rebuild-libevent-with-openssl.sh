@@ -26,6 +26,17 @@ SOURCE_TP="${STARROCKS_THIRDPARTY:-/var/local/thirdparty}"
 CUSTOM_TP="${SOURCE_TP}/custom"
 CUSTOM_INSTALLED="${CUSTOM_TP}/installed"
 
+# Without this, cmake falls back to the ambient `cc` (ccache -> GCC 4.8.5, the base
+# image's system compiler), not the gcc-toolset-10 (actually GCC 14) build-thirdparty.sh
+# uses. GCC 4.8.5 predates -W(no-error=)incompatible-pointer-types as a named option.
+if [ -z "${STARROCKS_GCC_HOME}" ]; then
+    error "STARROCKS_GCC_HOME environment variable is not set"
+    exit 1
+fi
+export CC="${STARROCKS_GCC_HOME}/bin/gcc"
+export CXX="${STARROCKS_GCC_HOME}/bin/g++"
+export PATH="${STARROCKS_GCC_HOME}/bin:${PATH}"
+
 LIBEVENT_COMMIT="24236aed01798303745470e6c498bf606e88724a"
 LIBEVENT_SHORT="24236ae"
 LIBEVENT_DOWNLOAD="https://github.com/libevent/libevent/archive/${LIBEVENT_SHORT}.zip"
@@ -90,6 +101,10 @@ fi
 # Step 4: Build libevent with OpenSSL
 info "Building libevent with OpenSSL support..."
 mkdir build && cd build
+# GCC 14 promotes this check from a warning to an error by default. evutil.c predates
+# that change and reinterprets struct evutil_addrinfo* as struct addrinfo* when calling
+# the system getaddrinfo/freeaddrinfo; demote it back to a warning rather than an error.
+CFLAGS="-Wno-error=incompatible-pointer-types" \
 cmake \
     -DCMAKE_INSTALL_PREFIX="${CUSTOM_INSTALLED}" \
     -DBUILD_SHARED_LIBS=OFF \
