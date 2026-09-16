@@ -171,7 +171,7 @@ public class MetricsAction extends RestBaseAction {
                 ActionAuthorizationInfo authInfo = getAuthorizationInfo(request);
                 ConnectContext authCtx = new ConnectContext();
                 currentUser = checkPassword(authInfo, authCtx);
-                checkUserOwnsAdminRole(currentUser, authCtx.getCurrentRoleIds());
+                checkUserOwnsAdminRole(authCtx);
             } catch (AccessDeniedException e) {
                 // disable Table related metrics collection due to AccessDenied
                 isCollectTableMetrics = false;
