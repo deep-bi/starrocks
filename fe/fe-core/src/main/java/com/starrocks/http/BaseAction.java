@@ -319,17 +319,17 @@ public abstract class BaseAction implements IAction {
             if (currentRoleIds != null) {
                 userOwnedRoles.addAll(currentRoleIds);
             }
-            checkUserOwnsAdminRole(userOwnedRoles, currentUser);
+            verifyUserOwnsAdminRole(currentUser, userOwnedRoles);
         } catch (PrivilegeException e) {
             throw new AccessDeniedException();
         }
     }
 
     protected void checkUserOwnsAdminRole(ConnectContext connectContext) throws AccessDeniedException {
-        checkUserOwnsAdminRole(connectContext.getCurrentRoleIds(), connectContext.getCurrentUserIdentity());
+        verifyUserOwnsAdminRole(connectContext.getCurrentUserIdentity(), connectContext.getCurrentRoleIds());
     }
 
-    protected void checkUserOwnsAdminRole(Set<Long> userOwnedRoles, UserIdentity currentUser) throws AccessDeniedException {
+    private void verifyUserOwnsAdminRole(UserIdentity currentUser, Set<Long> userOwnedRoles) throws AccessDeniedException {
         if (currentUser.equals(UserIdentity.ROOT)) {
             return;
         }
