@@ -293,9 +293,9 @@ public class PaimonMetadataTest {
                 ));
         Identifier tblIdentifier = new Identifier("db1", "tbl1");
         org.apache.paimon.partition.Partition partition1 = new Partition(Map.of("year", "2020", "month", "1"),
-                100L, 1L, 1L, 1741327322000L, true);
+                100L, 1L, 1L, 1741327322000L, 1, true);
         org.apache.paimon.partition.Partition partition2 = new Partition(Map.of("year", "2020", "month", "2"),
-                100L, 1L, 1L, 1741327322000L, true);
+                100L, 1L, 1L, 1741327322000L, 1, true);
 
         new Expectations() {
             {
@@ -327,9 +327,9 @@ public class PaimonMetadataTest {
                 Arrays.asList(new DataField(0, "dt", new org.apache.paimon.types.DateType(true))));
         Identifier tblIdentifier = new Identifier("db1", "tbl_date_null");
         org.apache.paimon.partition.Partition partitionDate = new Partition(
-                Map.of("dt", "19723"), 100L, 1L, 1L, 1741327322000L, true);
+                Map.of("dt", "19723"), 100L, 1L, 1L, 1741327322000L, 1, true);
         org.apache.paimon.partition.Partition partitionNull = new Partition(
-                Map.of("dt", "__DEFAULT_PARTITION__"), 50L, 1L, 1L, 1741327322000L, true);
+                Map.of("dt", "__DEFAULT_PARTITION__"), 50L, 1L, 1L, 1741327322000L, 1, true);
 
         new Expectations() {
             {
