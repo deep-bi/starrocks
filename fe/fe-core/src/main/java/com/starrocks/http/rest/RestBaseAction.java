@@ -143,8 +143,13 @@ public class RestBaseAction extends BaseAction {
     @Override
     public void execute(BaseRequest request, BaseResponse response) throws DdlException, AccessDeniedException {
         ActionAuthorizationInfo authInfo = getAuthorizationInfo(request);
-        // check password
-        UserIdentity currentUser = checkPassword(authInfo);
+        // authenticate into a scratch context so the group derived role ids and the verified token are kept;
+        // an ephemeral security integration user has no stored roles to rebuild them from
+        ConnectContext authCtx = new ConnectContext();
+        UserIdentity currentUser = checkPassword(authInfo, authCtx);
+        Set<Long> currentRoleIds = authCtx.getCurrentRoleIds();
+        Set<String> currentGroups = authCtx.getGroups();
+        String currentAuthToken = authCtx.getAuthToken();
 
         HttpConnectContext ctx = request.getConnectContext();
 
@@ -152,9 +157,13 @@ public class RestBaseAction extends BaseAction {
         UserIdentity prevUserIdentity = ctx.getCurrentUserIdentity();
         Set<Long> prevRoleIds = ctx.getCurrentRoleIds();
         String prevUserName = ctx.getQualifiedUser();
+        Set<String> prevGroups = ctx.getGroups();
+        String prevAuthToken = ctx.getAuthToken();
 
         ctx.setCurrentUserIdentity(currentUser);
-        ctx.setCurrentRoleIds(currentUser);
+        ctx.setCurrentRoleIds(currentRoleIds);
+        ctx.setGroups(currentGroups);
+        ctx.setAuthToken(currentAuthToken);
         ctx.setQualifiedUser(authInfo.fullUserName);
 
         if (ctx.isRegistered() && prevUserName != null && !prevUserName.equals(authInfo.fullUserName)) {
@@ -163,6 +172,8 @@ public class RestBaseAction extends BaseAction {
             if (!userChangeRes.first) {
                 ctx.setCurrentUserIdentity(prevUserIdentity);
                 ctx.setCurrentRoleIds(prevRoleIds);
+                ctx.setGroups(prevGroups);
+                ctx.setAuthToken(prevAuthToken);
                 ctx.setQualifiedUser(prevUserName);
                 throw new StarRocksHttpException(SERVICE_UNAVAILABLE, userChangeRes.second);
             }

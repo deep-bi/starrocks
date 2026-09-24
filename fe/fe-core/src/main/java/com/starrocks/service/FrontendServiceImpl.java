@@ -1161,13 +1161,13 @@ public class FrontendServiceImpl implements FrontendService.Iface {
 
     private void checkPasswordAndLoadPriv(String user, String passwd, String db, String tbl,
                                           String clientIp) throws AuthenticationException {
-        UserIdentity currentUser = AuthenticationHandler.authenticate(new ConnectContext(), user, clientIp,
-                passwd.getBytes(StandardCharsets.UTF_8));
+        // authenticate() populates the context with the groups and role ids of the matched identity, including
+        // the group derived roles an ephemeral security integration user depends on, so authorize on that same
+        // context rather than rebuilding one from the identity alone.
+        ConnectContext context = new ConnectContext();
+        AuthenticationHandler.authenticate(context, user, clientIp, passwd.getBytes(StandardCharsets.UTF_8));
         // check INSERT action on table
         try {
-            ConnectContext context = new ConnectContext();
-            context.setCurrentUserIdentity(currentUser);
-            context.setCurrentRoleIds(currentUser);
             Authorizer.checkTableAction(context, db, tbl, PrivilegeType.INSERT);
         } catch (AccessDeniedException e) {
             throw new AuthenticationException(
@@ -1767,11 +1767,11 @@ public class FrontendServiceImpl implements FrontendService.Iface {
                 " target cluster if you don't want to check the authorization and privilege.";
 
         // 1. check user and password
-        UserIdentity userIdentity;
+        ConnectContext context = new ConnectContext();
         try {
             BaseAction.ActionAuthorizationInfo authInfo = BaseAction.parseAuthInfo(
                     authParams.getUser(), authParams.getPasswd(), authParams.getHost());
-            userIdentity = BaseAction.checkPassword(authInfo);
+            BaseAction.checkPassword(authInfo, context);
         } catch (Exception e) {
             LOG.warn("Failed to check TAuthenticateParams [user: {}, host: {}, db: {}, tables: {}]",
                     authParams.user, authParams.getHost(), authParams.getDb_name(), authParams.getTable_names(), e);
@@ -1785,9 +1785,6 @@ public class FrontendServiceImpl implements FrontendService.Iface {
         try {
             String dbName = authParams.getDb_name();
             for (String tableName : authParams.getTable_names()) {
-                ConnectContext context = new ConnectContext();
-                context.setCurrentUserIdentity(userIdentity);
-                context.setCurrentRoleIds(userIdentity);
                 Authorizer.checkTableAction(context, dbName, tableName, PrivilegeType.INSERT);
             }
             return new TStatus(TStatusCode.OK);
