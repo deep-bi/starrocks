@@ -88,6 +88,7 @@ import java.io.RandomAccessFile;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -315,8 +316,23 @@ public abstract class BaseAction implements IAction {
         }
     }
 
+    /**
+     * Checks the stored roles widened by the role ids authentication resolved on the context. A security
+     * integration user is ephemeral and owns no stored roles, so its administrative rights exist only in the
+     * group derived ids on the context; a stored user may hold an admin role that is granted but not default.
+     */
     protected void checkUserOwnsAdminRole(ConnectContext connectContext) throws AccessDeniedException {
-        checkUserOwnsAdminRole(connectContext.getCurrentRoleIds(), connectContext.getCurrentUserIdentity());
+        UserIdentity currentUser = connectContext.getCurrentUserIdentity();
+        Set<Long> roleIds = new HashSet<>();
+        try {
+            roleIds.addAll(AuthorizationMgr.getOwnedRolesByUser(currentUser));
+        } catch (PrivilegeException e) {
+            // ephemeral users have no stored privilege collection; rely on the context role ids alone
+        }
+        if (connectContext.getCurrentRoleIds() != null) {
+            roleIds.addAll(connectContext.getCurrentRoleIds());
+        }
+        checkUserOwnsAdminRole(roleIds, currentUser);
     }
 
     protected void checkUserOwnsAdminRole(Set<Long> userOwnedRoles, UserIdentity currentUser) throws AccessDeniedException {
@@ -342,7 +358,7 @@ public abstract class BaseAction implements IAction {
         }
     }
 
-    // return currentUserIdentity from StarRocks auth
+    // authenticate into a fresh context so callers can read the groups, role ids and token authentication resolved
     public static ConnectContext checkPassword(ActionAuthorizationInfo authInfo) throws AccessDeniedException {
         try {
             ConnectContext context = new ConnectContext();

@@ -144,17 +144,23 @@ public class RestBaseAction extends BaseAction {
     @Override
     public void execute(BaseRequest request, BaseResponse response) throws DdlException, AccessDeniedException {
         ActionAuthorizationInfo authInfo = getAuthorizationInfo(request);
-        // check password
+        // carry the group derived role ids and the verified token over from authentication;
+        // an ephemeral security integration user has no stored roles to rebuild them from
         ConnectContext currentContext = checkPassword(authInfo);
+
         HttpConnectContext ctx = request.getConnectContext();
 
         // Change user for ConnectContext if necessary
         UserIdentity prevUserIdentity = ctx.getCurrentUserIdentity();
         Set<Long> prevRoleIds = ctx.getCurrentRoleIds();
         String prevUserName = ctx.getQualifiedUser();
+        Set<String> prevGroups = ctx.getGroups();
+        String prevAuthToken = ctx.getAuthToken();
 
         ctx.setCurrentUserIdentity(currentContext.getCurrentUserIdentity());
         ctx.setCurrentRoleIds(currentContext.getCurrentRoleIds());
+        ctx.setGroups(currentContext.getGroups());
+        ctx.setAuthToken(currentContext.getAuthToken());
         ctx.setQualifiedUser(authInfo.fullUserName);
 
         if (ctx.isRegistered() && prevUserName != null && !prevUserName.equals(authInfo.fullUserName)) {
@@ -163,6 +169,8 @@ public class RestBaseAction extends BaseAction {
             if (!userChangeRes.first) {
                 ctx.setCurrentUserIdentity(prevUserIdentity);
                 ctx.setCurrentRoleIds(prevRoleIds);
+                ctx.setGroups(prevGroups);
+                ctx.setAuthToken(prevAuthToken);
                 ctx.setQualifiedUser(prevUserName);
                 throw new StarRocksHttpException(SERVICE_UNAVAILABLE, userChangeRes.second);
             }
