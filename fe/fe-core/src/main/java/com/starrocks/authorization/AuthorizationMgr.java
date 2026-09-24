@@ -49,7 +49,6 @@ import com.starrocks.sql.ast.RevokePrivilegeStmt;
 import com.starrocks.sql.ast.RevokeRoleStmt;
 import com.starrocks.sql.ast.UserIdentity;
 import com.starrocks.sql.parser.NodePosition;
-import org.apache.commons.collections4.CollectionUtils;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.jetbrains.annotations.NotNull;
@@ -63,7 +62,6 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
@@ -899,6 +897,17 @@ public class AuthorizationMgr {
 
             try {
                 roleReadLock();
+                // 1.1 Roles held through external groups are not stored on the user, so derive them again from
+                // the groups rather than trusting the session's role ids: a role dropped since login then drops
+                // out on the next load, and the same activated-role restriction applies.
+                if (!userIdentity.isEphemeral()) {
+                    Set<Long> groupRoleIds = getGroupMappedRoleIdsUnlocked(groups);
+                    if (roleIdsSpecified != null) {
+                        groupRoleIds.retainAll(roleIdsSpecified);
+                    }
+                    validRoleIds.addAll(groupRoleIds);
+                }
+
                 // 2. Get all predecessors base on step 1
                 // The main purpose of the secondary verification of UserPrivilegeCollection here is.
                 // Because the user's permissions may be revoked while the session is not disconnected,
@@ -994,8 +1003,14 @@ public class AuthorizationMgr {
 
     public UserPrivilegeCollectionV2 getUserPrivilegeCollectionUnlocked(UserIdentity userIdentity)
             throws PrivilegeException {
+        return getUserPrivilegeCollectionUnlocked(userIdentity, true);
+    }
+
+    public UserPrivilegeCollectionV2 getUserPrivilegeCollectionUnlocked(UserIdentity userIdentity,
+                                                                        boolean exceptionIfNotExists)
+            throws PrivilegeException {
         UserPrivilegeCollectionV2 userCollection = userToPrivilegeCollection.get(userIdentity);
-        if (userCollection == null) {
+        if (userCollection == null && exceptionIfNotExists) {
             throw new PrivilegeException("cannot find user " + (userIdentity == null ? "null" :
                     userIdentity.toString()));
         }
@@ -1389,7 +1404,12 @@ public class AuthorizationMgr {
         }
     }
 
-    protected Set<Long> getRoleIdsByUserUnlocked(UserIdentity user, Set<String> userGroups) throws PrivilegeException {
+    protected Set<Long> getRoleIdsByUserUnlocked(UserIdentity user) throws PrivilegeException {
+        return getRoleIdsByUserUnlocked(user, Set.of());
+    }
+
+    protected Set<Long> getRoleIdsByUserUnlocked(UserIdentity user, Set<String> userGroups)
+            throws PrivilegeException {
         Set<Long> ret = new HashSet<>();
 
         UserPrivilegeCollectionV2 privileges = getUserPrivilegeCollectionUnlockedAllowNull(user);
@@ -1403,21 +1423,24 @@ public class AuthorizationMgr {
             }
         }
 
-        if (CollectionUtils.isNotEmpty(userGroups)) {
-            for (String name : userGroups) {
-                Optional.ofNullable(roleNameToId.get(name)).ifPresent(ret::add);
-            }
-        }
-
+        ret.addAll(getGroupMappedRoleIdsUnlocked(userGroups));
         return ret;
     }
 
-    protected Set<Long> getRoleIdsByUserUnlocked(UserIdentity user) throws PrivilegeException {
+    /**
+     * Roles a user holds through its external groups: a group maps onto the role of the same name. Groups with no
+     * such role are skipped, since a directory normally holds far more groups than the cluster defines roles.
+     * Immutable built-in roles (root, db_admin, cluster_admin, user_admin, security_admin) are never mapped, so a
+     * directory group named "root" cannot confer root; those roles must be granted explicitly.
+     */
+    protected Set<Long> getGroupMappedRoleIdsUnlocked(Set<String> userGroups) {
         Set<Long> ret = new HashSet<>();
-
-        for (long roleId : getUserPrivilegeCollectionUnlocked(user).getAllRoles()) {
-            // role may be removed
-            if (getRolePrivilegeCollectionUnlocked(roleId, false) != null) {
+        if (userGroups == null) {
+            return ret;
+        }
+        for (String group : userGroups) {
+            Long roleId = roleNameToId.get(group);
+            if (roleId != null && !PrivilegeBuiltinConstants.IMMUTABLE_BUILT_IN_ROLE_IDS.contains(roleId)) {
                 ret.add(roleId);
             }
         }
@@ -1447,6 +1470,8 @@ public class AuthorizationMgr {
         return getDefaultRoleIdsByUser(user, Set.of());
     }
 
+    // an ephemeral user has no stored privilege collection, so a missing user contributes no default roles
+    // and only the group mapped ones apply
     public Set<Long> getDefaultRoleIdsByUser(UserIdentity user, Set<String> userGroups) throws PrivilegeException {
         userReadLock();
         try {
@@ -1464,12 +1489,7 @@ public class AuthorizationMgr {
                         }
                     }
                 }
-
-                if (CollectionUtils.isNotEmpty(userGroups)) {
-                    for (String roleName : userGroups) {
-                        Optional.ofNullable(roleNameToId.get(roleName)).ifPresent(ret::add);
-                    }
-                }
+                ret.addAll(getGroupMappedRoleIdsUnlocked(userGroups));
             } finally {
                 roleReadUnlock();
             }
