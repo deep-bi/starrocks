@@ -55,9 +55,11 @@ import com.starrocks.thrift.TScanRangeLocation;
 import com.starrocks.thrift.TScanRangeLocations;
 import com.starrocks.thrift.TSchemaScanNode;
 import com.starrocks.thrift.TUserIdentity;
+import com.starrocks.thrift.TUserRoles;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.stream.Collectors;
 
@@ -205,6 +207,13 @@ public class SchemaScanNode extends ScanNode {
         msg.schema_scan_node.setPort(frontendPort);
 
         TUserIdentity tCurrentUser = ConnectContext.get().getCurrentUserIdentity().toThrift();
+        // Forward the session's active roles: the FE rebuilds the caller's privileges from this identity when the
+        // BE fetches schema rows, and roles held through external groups are not stored on the user.
+        if (ConnectContext.get().getCurrentRoleIds() != null) {
+            TUserRoles currentRoles = new TUserRoles();
+            currentRoles.setRole_id_list(new ArrayList<>(ConnectContext.get().getCurrentRoleIds()));
+            tCurrentUser.setCurrent_role_ids(currentRoles);
+        }
         msg.schema_scan_node.setCurrent_user_ident(tCurrentUser);
 
         if (tableId != null) {
