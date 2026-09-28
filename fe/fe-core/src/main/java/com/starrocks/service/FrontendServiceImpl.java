@@ -50,6 +50,7 @@ import com.starrocks.analysis.TupleId;
 import com.starrocks.authentication.AuthenticationException;
 import com.starrocks.authentication.AuthenticationHandler;
 import com.starrocks.authentication.AuthenticationMgr;
+import com.starrocks.authentication.UserIdentityUtils;
 import com.starrocks.authorization.AccessDeniedException;
 import com.starrocks.authorization.PrivilegeBuiltinConstants;
 import com.starrocks.authorization.PrivilegeType;
@@ -357,6 +358,7 @@ import com.starrocks.thrift.TUniqueId;
 import com.starrocks.thrift.TUpdateExportTaskStatusRequest;
 import com.starrocks.thrift.TUpdateResourceUsageRequest;
 import com.starrocks.thrift.TUpdateResourceUsageResponse;
+import com.starrocks.thrift.TUserIdentity;
 import com.starrocks.thrift.TUserPrivDesc;
 import com.starrocks.thrift.TVerboseVariableRecord;
 import com.starrocks.thrift.TWarehouseInfo;
@@ -443,7 +445,8 @@ public class FrontendServiceImpl implements FrontendService.Iface {
         }
         ConnectContext context = new ConnectContext();
         context.setCurrentUserIdentity(currentUser);
-        context.setCurrentRoleIds(currentUser);
+        UserIdentityUtils.setCurrentRoleIds(context, currentUser,
+                params.isSetCurrent_user_ident() ? params.getCurrent_user_ident() : null);
 
         MetadataMgr metadataMgr = GlobalStateMgr.getCurrentState().getMetadataMgr();
         List<String> dbNames = metadataMgr.listDbNames(context, catalogName);
@@ -500,7 +503,8 @@ public class FrontendServiceImpl implements FrontendService.Iface {
 
         ConnectContext context = new ConnectContext();
         context.setCurrentUserIdentity(currentUser);
-        context.setCurrentRoleIds(currentUser);
+        UserIdentityUtils.setCurrentRoleIds(context, currentUser,
+                params.isSetCurrent_user_ident() ? params.getCurrent_user_ident() : null);
 
         MetadataMgr metadataMgr = GlobalStateMgr.getCurrentState().getMetadataMgr();
         Database db = metadataMgr.getDb(context, catalogName, params.db);
@@ -571,7 +575,8 @@ public class FrontendServiceImpl implements FrontendService.Iface {
                     try {
                         ConnectContext context = new ConnectContext();
                         context.setCurrentUserIdentity(currentUser);
-                        context.setCurrentRoleIds(currentUser);
+                        UserIdentityUtils.setCurrentRoleIds(context, currentUser,
+                                params.isSetCurrent_user_ident() ? params.getCurrent_user_ident() : null);
                         Authorizer.checkAnyActionOnTableLikeObject(context, params.db, table);
                     } catch (AccessDeniedException e) {
                         continue;
@@ -606,7 +611,8 @@ public class FrontendServiceImpl implements FrontendService.Iface {
                                     try {
                                         ConnectContext context = new ConnectContext();
                                         context.setCurrentUserIdentity(currentUser);
-                                        context.setCurrentRoleIds(currentUser);
+                                        UserIdentityUtils.setCurrentRoleIds(context, currentUser,
+                                                params.isSetCurrent_user_ident() ? params.getCurrent_user_ident() : null);
                                         Authorizer.checkAnyActionOnTableLikeObject(context, db.getFullName(), tbl);
                                     } catch (AccessDeniedException e) {
                                         continue OUTER;
@@ -749,7 +755,8 @@ public class FrontendServiceImpl implements FrontendService.Iface {
             try {
                 ConnectContext context = new ConnectContext();
                 context.setCurrentUserIdentity(currentUser);
-                context.setCurrentRoleIds(currentUser);
+                UserIdentityUtils.setCurrentRoleIds(context, currentUser,
+                        request.getAuth_info().getCurrent_user_ident());
                 if (item.getTable_database() == null || item.getTable_name() == null) {
                     return true;
                 }
@@ -772,7 +779,8 @@ public class FrontendServiceImpl implements FrontendService.Iface {
             try {
                 ConnectContext context = new ConnectContext();
                 context.setCurrentUserIdentity(currentUser);
-                context.setCurrentRoleIds(currentUser);
+                UserIdentityUtils.setCurrentRoleIds(context, currentUser,
+                        request.getAuth_info().getCurrent_user_ident());
                 Authorizer.checkTableAction(context, item.getDatabase_name(), item.getTable_name(),
                         PrivilegeType.SELECT);
                 return false;
@@ -883,7 +891,8 @@ public class FrontendServiceImpl implements FrontendService.Iface {
         }
         ConnectContext context = new ConnectContext();
         context.setCurrentUserIdentity(currentUser);
-        context.setCurrentRoleIds(currentUser);
+        UserIdentityUtils.setCurrentRoleIds(context, currentUser,
+                params.isSetCurrent_user_ident() ? params.getCurrent_user_ident() : null);
 
         long limit = params.isSetLimit() ? params.getLimit() : -1;
 
@@ -892,7 +901,8 @@ public class FrontendServiceImpl implements FrontendService.Iface {
         // describe_table interface only once, which can reduce RPC time from BE to FE, and
         // the amount of data. In additional,we need add db_name & table_name values to TColumnDesc.
         if (!params.isSetDb() && StringUtils.isBlank(params.getTable_name())) {
-            describeWithoutDbAndTable(currentUser, columns, limit);
+            describeWithoutDbAndTable(currentUser,
+                    params.isSetCurrent_user_ident() ? params.getCurrent_user_ident() : null, columns, limit);
             return result;
         }
 
@@ -927,11 +937,12 @@ public class FrontendServiceImpl implements FrontendService.Iface {
 
     // get describeTable without db name and table name parameter, so we need iterate over
     // dbs and tables, when reach limit, we break;
-    private void describeWithoutDbAndTable(UserIdentity currentUser, List<TColumnDef> columns, long limit) {
+    private void describeWithoutDbAndTable(UserIdentity currentUser, TUserIdentity tUserIdent,
+                                           List<TColumnDef> columns, long limit) {
         GlobalStateMgr globalStateMgr = GlobalStateMgr.getCurrentState();
         ConnectContext context = new ConnectContext();
         context.setCurrentUserIdentity(currentUser);
-        context.setCurrentRoleIds(currentUser);
+        UserIdentityUtils.setCurrentRoleIds(context, currentUser, tUserIdent);
 
         List<String> dbNames = globalStateMgr.getLocalMetastore().listDbNames(context);
         boolean reachLimit;
@@ -1161,13 +1172,13 @@ public class FrontendServiceImpl implements FrontendService.Iface {
 
     private void checkPasswordAndLoadPriv(String user, String passwd, String db, String tbl,
                                           String clientIp) throws AuthenticationException {
-        UserIdentity currentUser = AuthenticationHandler.authenticate(new ConnectContext(), user, clientIp,
-                passwd.getBytes(StandardCharsets.UTF_8));
+        // authenticate() populates the context with the groups and role ids of the matched identity, including
+        // the group derived roles an ephemeral security integration user depends on, so authorize on that same
+        // context rather than rebuilding one from the identity alone.
+        ConnectContext context = new ConnectContext();
+        AuthenticationHandler.authenticate(context, user, clientIp, passwd.getBytes(StandardCharsets.UTF_8));
         // check INSERT action on table
         try {
-            ConnectContext context = new ConnectContext();
-            context.setCurrentUserIdentity(currentUser);
-            context.setCurrentRoleIds(currentUser);
             Authorizer.checkTableAction(context, db, tbl, PrivilegeType.INSERT);
         } catch (AccessDeniedException e) {
             throw new AuthenticationException(
@@ -1767,11 +1778,11 @@ public class FrontendServiceImpl implements FrontendService.Iface {
                 " target cluster if you don't want to check the authorization and privilege.";
 
         // 1. check user and password
-        UserIdentity userIdentity;
+        ConnectContext context = new ConnectContext();
         try {
             BaseAction.ActionAuthorizationInfo authInfo = BaseAction.parseAuthInfo(
                     authParams.getUser(), authParams.getPasswd(), authParams.getHost());
-            userIdentity = BaseAction.checkPassword(authInfo);
+            BaseAction.checkPassword(authInfo, context);
         } catch (Exception e) {
             LOG.warn("Failed to check TAuthenticateParams [user: {}, host: {}, db: {}, tables: {}]",
                     authParams.user, authParams.getHost(), authParams.getDb_name(), authParams.getTable_names(), e);
@@ -1785,9 +1796,6 @@ public class FrontendServiceImpl implements FrontendService.Iface {
         try {
             String dbName = authParams.getDb_name();
             for (String tableName : authParams.getTable_names()) {
-                ConnectContext context = new ConnectContext();
-                context.setCurrentUserIdentity(userIdentity);
-                context.setCurrentRoleIds(userIdentity);
                 Authorizer.checkTableAction(context, dbName, tableName, PrivilegeType.INSERT);
             }
             return new TStatus(TStatusCode.OK);

@@ -17,6 +17,7 @@ package com.starrocks.service;
 import com.google.common.base.Joiner;
 import com.google.common.collect.Lists;
 import com.google.gson.Gson;
+import com.starrocks.authentication.UserIdentityUtils;
 import com.starrocks.authorization.AccessDeniedException;
 import com.starrocks.authorization.AuthorizationMgr;
 import com.starrocks.authorization.PrivilegeException;
@@ -125,7 +126,8 @@ public class InformationSchemaDataSource {
         }
         ConnectContext context = new ConnectContext();
         context.setCurrentUserIdentity(currentUser);
-        context.setCurrentRoleIds(currentUser);
+        UserIdentityUtils.setCurrentRoleIds(context, currentUser,
+                authInfo.isSetCurrent_user_ident() ? authInfo.getCurrent_user_ident() : null);
 
         MetadataMgr metadataMgr = GlobalStateMgr.getCurrentState().getMetadataMgr();
         List<String> dbNames = metadataMgr.listDbNames(context, catalogName);
@@ -146,7 +148,7 @@ public class InformationSchemaDataSource {
             }
             authorizedDbs.add(fullName);
         }
-        return new AuthDbRequestResult(authorizedDbs, currentUser);
+        return new AuthDbRequestResult(authorizedDbs, currentUser, context.getCurrentRoleIds());
     }
 
     // keywords
@@ -218,10 +220,20 @@ public class InformationSchemaDataSource {
     private static class AuthDbRequestResult {
         public final List<String> authorizedDbs;
         public final UserIdentity currentUser;
+        // resolved once in getAuthDbRequestResult, so per-table checks see the same roles as the db filter
+        private final Set<Long> currentRoleIds;
 
-        public AuthDbRequestResult(List<String> authorizedDbs, UserIdentity currentUser) {
+        public AuthDbRequestResult(List<String> authorizedDbs, UserIdentity currentUser, Set<Long> currentRoleIds) {
             this.authorizedDbs = authorizedDbs;
             this.currentUser = currentUser;
+            this.currentRoleIds = currentRoleIds;
+        }
+
+        public ConnectContext newContext() {
+            ConnectContext context = new ConnectContext();
+            context.setCurrentUserIdentity(currentUser);
+            context.setCurrentRoleIds(currentRoleIds == null ? null : new HashSet<>(currentRoleIds));
+            return context;
         }
     }
 
@@ -259,9 +271,7 @@ public class InformationSchemaDataSource {
                         }
 
                         try {
-                            ConnectContext context = new ConnectContext();
-                            context.setCurrentUserIdentity(result.currentUser);
-                            context.setCurrentRoleIds(result.currentUser);
+                            ConnectContext context = result.newContext();
                             Authorizer.checkAnyActionOnTableLikeObject(context, dbName, table);
                         } catch (AccessDeniedException e) {
                             LOG.warn("failed to check db: {} table: {} authorization", dbName, table, e);
@@ -394,9 +404,7 @@ public class InformationSchemaDataSource {
                 continue;
             }
             try {
-                ConnectContext context = new ConnectContext();
-                context.setCurrentUserIdentity(result.currentUser);
-                context.setCurrentRoleIds(result.currentUser);
+                ConnectContext context = result.newContext();
                 Authorizer.checkAnyActionOnTableLikeObject(context, ele.dbName, table);
             } catch (AccessDeniedException e) {
                 LOG.warn("failed to check db: {} table: {} authorization", ele.dbName, table, e);
@@ -525,9 +533,7 @@ public class InformationSchemaDataSource {
 
         TAuthInfo authInfo = request.getAuth_info();
         AuthDbRequestResult result = getAuthDbRequestResult(authInfo);
-        ConnectContext context = new ConnectContext();
-        context.setCurrentUserIdentity(result.currentUser);
-        context.setCurrentRoleIds(result.currentUser);
+        ConnectContext context = result.newContext();
 
         PatternMatcher matcher = null;
         boolean caseSensitive = CaseSensibility.DATABASE.getCaseSensibility();
@@ -709,9 +715,7 @@ public class InformationSchemaDataSource {
         TemporaryTableMgr temporaryTableMgr = GlobalStateMgr.getCurrentState().getTemporaryTableMgr();
         TAuthInfo authInfo = request.getAuth_info();
         AuthDbRequestResult result = getAuthDbRequestResult(authInfo);
-        ConnectContext context = new ConnectContext();
-        context.setCurrentUserIdentity(result.currentUser);
-        context.setCurrentRoleIds(result.currentUser);
+        ConnectContext context = result.newContext();
 
         String catalogName = InternalCatalog.DEFAULT_INTERNAL_CATALOG_NAME;
         if (authInfo.isSetCatalog_name()) {
