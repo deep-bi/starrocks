@@ -70,7 +70,7 @@ under the License.
         <dnsjava.version>3.6.3</dnsjava.version>
         <nimbusds.version>9.37.2</nimbusds.version>
         <protobuf-java.version>3.25.5</protobuf-java.version>
-        <paimon.version>1.4.2</paimon.version>
+        <paimon.version>1.4.2-deepbi1</paimon.version>
         <delta-kernel.version>4.0.0rc1</delta-kernel.version>
         <iceberg.version>1.10.0</iceberg.version>
         <staros.version>4.0.5</staros.version>
@@ -158,6 +158,11 @@ under the License.
                 <repository>
                     <id>kunpeng</id>
                     <url>https://mirror.iscas.ac.cn/kunpeng/maven/</url>
+                </repository>
+
+                <repository>
+                    <id>deep-bi-github-artifact</id>
+                    <url>https://raw.githubusercontent.com/deep-bi/maven-repo/main</url>
                 </repository>
 
             </repositories>
