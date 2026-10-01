@@ -189,7 +189,7 @@ under the License.
     </dependencies>
 
     <build>
-        <finalName>spark-dpp-${version}</finalName>
+        <finalName>spark-dpp-${project.version}</finalName>
 
         <plugins>
             <!-- jmockit -->
