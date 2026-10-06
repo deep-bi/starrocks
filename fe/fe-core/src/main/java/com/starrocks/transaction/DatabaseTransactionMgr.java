@@ -535,6 +535,8 @@ public class DatabaseTransactionMgr {
             }
 
             persistTxnStateInTxnLevelLock(transactionState);
+            // if persistence threw, the flag stays set and this FE never publishes the transaction
+            transactionState.setCommitJournalPending(false);
 
             // 6. update nextVersion because of the failure of persistent transaction resulting in error version
             Span updateCatalogAfterCommittedSpan = TraceManager.startSpan("updateCatalogAfterCommitted", txnSpan);
@@ -859,6 +861,17 @@ public class DatabaseTransactionMgr {
         }
     }
 
+    /**
+     * Committed transactions whose COMMITTED journal entry is durable. Unlike {@link #getCommittedTxnList()},
+     * this excludes commits still being persisted, so publish tasks are never sent for a version that might
+     * be lost from the journal.
+     */
+    public List<TransactionState> getPublishableCommittedTxnList() {
+        return getCommittedTxnList().stream()
+                .filter(transactionState -> !transactionState.isCommitJournalPending())
+                .collect(Collectors.toList());
+    }
+
     public Map<Long, Long> getLakeCompactionActiveTxnMap() {
         readLock();
         try {
@@ -902,7 +915,10 @@ public class DatabaseTransactionMgr {
         readLock();
         try {
             List<Long> txnIds = transactionGraph.getTxnsWithoutDependency();
-            return txnIds.stream().map(idToRunningTransactionState::get).collect(Collectors.toList());
+            // a pending txn stays in the graph, so its dependents remain blocked behind it
+            return txnIds.stream().map(idToRunningTransactionState::get)
+                    .filter(transactionState -> transactionState == null || !transactionState.isCommitJournalPending())
+                    .collect(Collectors.toList());
         } finally {
             readUnlock();
         }
@@ -918,8 +934,10 @@ public class DatabaseTransactionMgr {
                 List<Long> txnsWithDependency = transactionGraph.getTxnsWithTxnDependencyBatch(
                         Config.lake_batch_publish_min_version_num,
                         Config.lake_batch_publish_max_version_num, txnId);
+                // the batch is a version chain, so cut it at the first commit that is not yet durable
                 List<TransactionState> states = txnsWithDependency.stream().map(idToRunningTransactionState::get)
                         .filter(Objects::nonNull)
+                        .takeWhile(transactionState -> !transactionState.isCommitJournalPending())
                         .collect(Collectors.toList());
                 if (states.isEmpty()) {
                     continue;
@@ -1368,6 +1386,8 @@ public class DatabaseTransactionMgr {
         long commitTs = Math.max(System.currentTimeMillis(), maxCommitTs + 1);
         transactionState.setCommitTime(commitTs);
         // update transaction state version
+        // set before COMMITTED becomes visible under the manager lock, cleared once the journal write returns
+        transactionState.setCommitJournalPending(true);
         transactionState.setTransactionStatus(TransactionStatus.COMMITTED);
 
         // update global transaction id
