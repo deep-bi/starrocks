@@ -387,6 +387,10 @@ public:
 
     DiagnoseDaemon* diagnose_daemon() const { return _diagnose_daemon; }
 
+    // Test hook: exposes the drain re-sample so a regression test can verify the
+    // predecessor->successor handoff is not collapsed to a false zero.
+    size_t get_running_fragments_count_for_test() const { return _get_running_fragments_count(); }
+
 private:
     void _wait_for_fragments_finish();
     size_t _get_running_fragments_count() const;
