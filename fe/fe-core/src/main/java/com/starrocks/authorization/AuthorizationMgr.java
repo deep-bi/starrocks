@@ -1003,14 +1003,8 @@ public class AuthorizationMgr {
 
     public UserPrivilegeCollectionV2 getUserPrivilegeCollectionUnlocked(UserIdentity userIdentity)
             throws PrivilegeException {
-        return getUserPrivilegeCollectionUnlocked(userIdentity, true);
-    }
-
-    public UserPrivilegeCollectionV2 getUserPrivilegeCollectionUnlocked(UserIdentity userIdentity,
-                                                                        boolean exceptionIfNotExists)
-            throws PrivilegeException {
         UserPrivilegeCollectionV2 userCollection = userToPrivilegeCollection.get(userIdentity);
-        if (userCollection == null && exceptionIfNotExists) {
+        if (userCollection == null) {
             throw new PrivilegeException("cannot find user " + (userIdentity == null ? "null" :
                     userIdentity.toString()));
         }
@@ -1478,7 +1472,7 @@ public class AuthorizationMgr {
             Set<Long> ret = new HashSet<>();
             roleReadLock();
             try {
-                UserPrivilegeCollectionV2 privileges = getUserPrivilegeCollectionUnlocked(user, false);
+                UserPrivilegeCollectionV2 privileges = getUserPrivilegeCollectionUnlockedAllowNull(user);
                 if (privileges != null) {
                     for (long roleId : privileges.getDefaultRoleIds()) {
                         // role may be removed
