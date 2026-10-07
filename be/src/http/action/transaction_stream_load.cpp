@@ -28,11 +28,14 @@
 #include <thrift/protocol/TDebugProtocol.h>
 
 #include "agent/master_info.h"
+#include "common/config.h"
 #include "common/logging.h"
+#include "common/process_exit.h"
 #include "common/utils.h"
 #include "gen_cpp/FrontendService.h"
 #include "gen_cpp/FrontendService_types.h"
 #include "gen_cpp/HeartbeatService_types.h"
+#include "http/action/utils.h"
 #include "http/http_channel.h"
 #include "http/http_common.h"
 #include "http/http_headers.h"
@@ -121,6 +124,24 @@ void TransactionManagerAction::handle(HttpRequest* req) {
     }
 
     if (boost::iequals(txn_op, TXN_BEGIN)) {
+        RequestAdmissionGuard request_admission;
+        if (!request_admission.accepted()) {
+            return _send_error_reply(req, Status::ServiceUnavailable("Service is shutting down, please retry later!"));
+        }
+        if (!should_accept_new_request()) {
+            LOG(INFO) << "[reject] BEGIN received after graceful shutdown admission window, txn_op=" << txn_op
+                      << ", uri=" << req->uri() << ", label=" << req->header(HTTP_LABEL_KEY);
+            // Redirect only when the delay window may still be used: heartbeat waiting is
+            // enabled, the FE has acknowledged the shutdown, and no leader/term handover was
+            // observed during this shutdown. Otherwise (heartbeat=false, fallback cutoff, no
+            // ack yet, or a failover downgrade) a redirect could bounce back to this BE or
+            // target a stale leader, so reply ServiceUnavailable instead.
+            if (config::graceful_exit_wait_for_frontend_heartbeat && may_redirect_to_fe_leader() &&
+                redirect_to_fe_leader(req, req->header(HTTP_LABEL_KEY), "txn BEGIN")) {
+                return;
+            }
+            return _send_error_reply(req, Status::ServiceUnavailable("Service is shutting down, please retry later!"));
+        }
         st = _exec_env->transaction_mgr()->begin_transaction(req, &resp);
     } else if (boost::iequals(txn_op, TXN_COMMIT) || boost::iequals(txn_op, TXN_PREPARE)) {
         st = _exec_env->transaction_mgr()->commit_transaction(req, &resp);
@@ -540,8 +561,8 @@ Status TransactionStreamLoadAction::_exec_plan_fragment(HttpRequest* http_req, S
         ctx->put_result.params.query_options.mem_limit = exec_mem_limit;
     }
 
-    // check reuse
-    return _exec_env->stream_load_executor()->execute_plan_fragment(ctx);
+    // Existing BEGIN transactions may cross the drain cutoff.
+    return _exec_env->stream_load_executor()->execute_plan_fragment(ctx, true);
 }
 
 void TransactionStreamLoadAction::on_chunk_data(HttpRequest* req) {

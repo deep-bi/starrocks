@@ -442,8 +442,10 @@ set(EXEC_FILES
         ./runtime/batch_write/txn_state_cache_test.cpp
         #./runtime/routine_load_task_executor_test.cpp
         ./runtime/routine_load/data_consumer_test.cpp
+        ./runtime/routine_load_task_executor_admission_test.cpp
         ./runtime/small_file_mgr_test.cpp
         ./runtime/snapshot_loader_test.cpp
+        ./runtime/stream_load_executor_admission_test.cpp
         ./runtime/stream_load_pipe_test.cpp
         ./runtime/time_bounded_stream_load_pipe_test.cpp
         ./runtime/string_value_test.cpp
