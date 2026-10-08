@@ -40,6 +40,7 @@ import com.google.common.collect.HashMultimap;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Multimap;
 import com.google.common.collect.Range;
+import com.google.common.hash.Hashing;
 import com.starrocks.analysis.Expr;
 import com.starrocks.analysis.ExprSubstitutionMap;
 import com.starrocks.analysis.LiteralExpr;
@@ -92,6 +93,7 @@ import com.starrocks.sql.analyzer.RelationId;
 import com.starrocks.sql.analyzer.Scope;
 import com.starrocks.sql.analyzer.SelectAnalyzer;
 import com.starrocks.sql.analyzer.SemanticException;
+import com.starrocks.system.Backend;
 import com.starrocks.system.SystemInfoService;
 import com.starrocks.thrift.TColumn;
 import com.starrocks.thrift.TDataSink;
@@ -117,6 +119,7 @@ import org.apache.logging.log4j.Logger;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -128,6 +131,10 @@ import java.util.stream.Collectors;
 
 public class OlapTableSink extends DataSink {
     private static final Logger LOG = LogManager.getLogger(OlapTableSink.class);
+    private static final Comparator<PrimaryReplicaCandidate> PRIMARY_REPLICA_PREFERENCE = Comparator
+            .comparingLong(PrimaryReplicaCandidate::assignments)
+            .thenComparingLong(PrimaryReplicaCandidate::tieBreak)
+            .thenComparingLong(PrimaryReplicaCandidate::backendId);
 
     // input variables
     private OlapTable dstTable;
@@ -304,14 +311,13 @@ public class OlapTableSink extends DataSink {
         TOlapTablePartitionParam partitionParam = createPartition(tSink.getDb_id(), dstTable, tupleDescriptor,
                 enableAutomaticPartition, automaticBucketSize, getOpenPartitions());
         tSink.setPartition(partitionParam);
-        tSink.setLocation(createLocation(dstTable, partitionParam, enableReplicatedStorage, warehouseId));
+        // use one eligibility snapshot for location selection and both sink flags
+        boolean colocateMVIndex = canUseColocateMVIndex(dstTable);
+        completeLocation(tSink, partitionParam, colocateMVIndex);
         tSink.setNodes_info(GlobalStateMgr.getCurrentState().createNodesInfo(warehouseId,
                 getSystemInfoService(dstTable)));
         tSink.setPartial_update_mode(this.partialUpdateMode);
         tSink.setAutomatic_bucket_size(automaticBucketSize);
-        if (canUseColocateMVIndex(dstTable)) {
-            tSink.setEnable_colocate_mv_index(true);
-        }
 
         Map<Long, Long> doubleWritePartitions = dstTable.getDoubleWritePartitions();
         if (!doubleWritePartitions.isEmpty()) {
@@ -329,7 +335,7 @@ public class OlapTableSink extends DataSink {
                 TOlapTablePartitionParam partitionParam2 = createPartition(tSink2.getDb_id(), dstTable, tupleDescriptor,
                         false, automaticBucketSize, doubleWritePartitionIds);
                 tSink2.setPartition(partitionParam2);
-                tSink2.setLocation(createLocation(dstTable, partitionParam2, enableReplicatedStorage, warehouseId));
+                completeLocation(tSink2, partitionParam2, colocateMVIndex);
                 tSink2.setIgnore_out_of_partition(true);
 
                 TDataSink tDataSink2 = new TDataSink();
@@ -346,6 +352,14 @@ public class OlapTableSink extends DataSink {
         }
 
         LOG.debug("tDataSink: {}", tDataSink);
+    }
+
+    private void completeLocation(TOlapTableSink sink, TOlapTablePartitionParam partitionParam,
+                                  boolean colocateMVIndex) throws StarRocksException {
+        LocationResult result = createLocation(dstTable, partitionParam, enableReplicatedStorage,
+                warehouseId, colocateMVIndex);
+        sink.setLocation(result.location());
+        sink.setEnable_colocate_mv_index(result.colocateMVIndex());
     }
 
     @Override
@@ -787,13 +801,20 @@ public class OlapTableSink extends DataSink {
     public static TOlapTableLocationParam createLocation(OlapTable table, TOlapTablePartitionParam partitionParam,
                                                          boolean enableReplicatedStorage,
                                                          long warehouseId) throws StarRocksException {
+        return createLocation(table, partitionParam, enableReplicatedStorage, warehouseId,
+                canUseColocateMVIndex(table)).location();
+    }
+
+    private static LocationResult createLocation(OlapTable table, TOlapTablePartitionParam partitionParam,
+                                                 boolean enableReplicatedStorage, long warehouseId,
+                                                 boolean colocateMVIndex) throws StarRocksException {
         TOlapTableLocationParam locationParam = new TOlapTableLocationParam();
         // replica -> path hash
         Multimap<Long, Long> allBePathsMap = HashMultimap.create();
         Map<Long, Long> bePrimaryMap = new HashMap<>();
         SystemInfoService infoService = getSystemInfoService(table);
         if (partitionParam.getPartitions() == null) {
-            return locationParam;
+            return new LocationResult(locationParam, colocateMVIndex);
         }
         for (TOlapTablePartition tPhysicalPartition : partitionParam.getPartitions()) {
             PhysicalPartition physicalPartition = table.getPhysicalPartition(tPhysicalPartition.getId());
@@ -801,8 +822,9 @@ public class OlapTableSink extends DataSink {
             // `selectedBackedIds` keeps the selected backendIds for 1st index which will be used to choose the later index's
             // tablets' replica in colocate mv index optimization.
             List<Long> selectedBackedIds = Lists.newArrayList();
+            List<MaterializedIndex> indexes = physicalPartition.getMaterializedIndices(IndexExtState.ALL);
             LOG.debug("partition: {}, physical partition: {}", tPhysicalPartition, physicalPartition);
-            for (MaterializedIndex index : physicalPartition.getMaterializedIndices(IndexExtState.ALL)) {
+            for (MaterializedIndex index : indexes) {
                 for (int idx = 0; idx < index.getTablets().size(); ++idx) {
                     Tablet tablet = index.getTablets().get(idx);
                     if (table.isCloudNativeTableOrMaterializedView()) {
@@ -826,17 +848,46 @@ public class OlapTableSink extends DataSink {
 
                         List<Replica> replicas = Lists.newArrayList(bePathsMap.keySet());
                         if (enableReplicatedStorage) {
-                            int lowUsageIndex = findPrimaryReplica(table, bePrimaryMap, infoService, index,
-                                    selectedBackedIds, idx, replicas);
+                            // make the fallback independent of replica iteration order
+                            replicas.sort(Comparator.comparingLong(Replica::getBackendId));
+                            int lowUsageIndex;
+                            if (colocateMVIndex && index != indexes.get(0)) {
+                                // colocate sender requires the same primary for every index in a bucket
+                                long primaryBackendId = selectedBackedIds.get(idx);
+                                lowUsageIndex = -1;
+                                for (int i = 0; i < replicas.size(); i++) {
+                                    if (replicas.get(i).getBackendId() == primaryBackendId) {
+                                        lowUsageIndex = i;
+                                        break;
+                                    }
+                                }
+                            } else {
+                                List<LocalTablet> colocatedTablets = new ArrayList<>();
+                                if (colocateMVIndex) {
+                                    for (MaterializedIndex colocatedIndex : indexes) {
+                                        colocatedTablets.add((LocalTablet) colocatedIndex.getTablets().get(idx));
+                                    }
+                                }
+                                lowUsageIndex = findPrimaryReplica(bePrimaryMap, infoService,
+                                        tablet.getId(), physicalPartition.getVisibleVersion(), replicas, colocatedTablets);
+                            }
                             if (lowUsageIndex != -1) {
                                 bePrimaryMap.put(replicas.get(lowUsageIndex).getBackendId(),
                                         bePrimaryMap.getOrDefault(replicas.get(lowUsageIndex).getBackendId(), (long) 0)
                                                 + 1);
                                 // replicas[0] will be the primary replica
                                 Collections.swap(replicas, 0, lowUsageIndex);
-                                selectedBackedIds.add(replicas.get(0).getBackendId());
                             } else {
-                                LOG.warn("Tablet {} replicas {} all has write fail flag", tablet.getId(), replicas);
+                                if (colocateMVIndex) {
+                                    // rebuild all locations with independent primaries and a matching sink flag
+                                    LOG.debug("Disable colocate index loading for table {} at tablet {}",
+                                            table.getId(), tablet.getId());
+                                    return createLocation(table, partitionParam, enableReplicatedStorage, warehouseId, false);
+                                }
+                                LOG.warn("Tablet {} replicas {} have no available primary", tablet.getId(), replicas);
+                            }
+                            if (index == indexes.get(0)) {
+                                selectedBackedIds.add(replicas.get(0).getBackendId());
                             }
                         }
                         locationParam
@@ -887,61 +938,92 @@ public class OlapTableSink extends DataSink {
             throw new DdlException(st.getErrorMsg());
         }
         LOG.debug("location param: {}", locationParam);
-        return locationParam;
+        return new LocationResult(locationParam, colocateMVIndex);
+    }
+
+    private record LocationResult(TOlapTableLocationParam location, boolean colocateMVIndex) {
     }
 
     @VisibleForTesting
-    public static int findPrimaryReplica(OlapTable table,
-                                         Map<Long, Long> bePrimaryMap,
-                                         SystemInfoService infoService,
-                                         MaterializedIndex index,
-                                         List<Long> selectedBackedIds,
-                                         List<Replica> replicas) {
-        return findPrimaryReplica(table, bePrimaryMap, infoService,
-                index, selectedBackedIds, 0, replicas);
-    }
-
-    private static int findPrimaryReplica(OlapTable table,
-                                          Map<Long, Long> bePrimaryMap,
-                                          SystemInfoService infoService,
-                                          MaterializedIndex index,
-                                          List<Long> selectedBackedIds,
-                                          int idx,
-                                          List<Replica> replicas) {
-        // TODO: Check different index's tablet with the same `idx` must be colocate?
-        if (canUseColocateMVIndex(table) && selectedBackedIds.size() == index.getTablets().size()) {
-            for (int i = 0; i < replicas.size(); i++) {
-                if (replicas.get(i).getBackendId() == selectedBackedIds.get(idx)) {
-                    return i;
-                }
-            }
-            return -1;
-        }
-
-        int lowUsageIndex = -1;
+    static int findPrimaryReplica(Map<Long, Long> bePrimaryMap,
+                                  SystemInfoService infoService,
+                                  long tabletId,
+                                  long visibleVersion,
+                                  List<Replica> replicas,
+                                  List<LocalTablet> colocatedTablets) {
+        List<PrimaryReplicaCandidate> candidates = new ArrayList<>(replicas.size());
+        int bestHealth = Integer.MAX_VALUE;
+        int lowestVersionPressure = Long.SIZE;
+        candidateLoop:
         for (int i = 0; i < replicas.size(); i++) {
             Replica replica = replicas.get(i);
-            boolean isHealthy = !replica.getLastWriteFail()
-                    && !infoService.getBackend(replica.getBackendId()).getLastWriteFail();
-            
-            // The isAlive() flag indicates node availability during shutdown sequences.
-            // For single-replica configurations, we bypass node status checks to maintain
-            // loading operation continuity despite shutdown transitions.
-            if (replicas.size() > 1) {
-                isHealthy = isHealthy && infoService.getBackend(replica.getBackendId()).isAlive();
+            Backend backend = infoService.getBackend(replica.getBackendId());
+            // preserve the existing single-replica shutdown behavior, candidate membership and quorum
+            // have already been checked, suitability only changes which replica is first in the list
+            if (backend == null || (replicas.size() > 1 && !backend.isAlive())) {
+                continue;
             }
-            
-            if (lowUsageIndex == -1 && isHealthy) {
-                lowUsageIndex = i;
+            int health = primaryReplicaHealth(replica, backend, visibleVersion);
+            int versionPressure = primaryReplicaVersionPressure(replica);
+            for (LocalTablet tablet : colocatedTablets) {
+                Replica colocatedReplica = tablet.getReplicaByBackendId(replica.getBackendId());
+                if (colocatedReplica == null || colocatedReplica.isBad()
+                        || (colocatedReplica.getState() != Replica.ReplicaState.NORMAL
+                        && colocatedReplica.getState() != Replica.ReplicaState.ALTER
+                        && colocatedReplica.getState() != Replica.ReplicaState.DECOMMISSION)) {
+                    continue candidateLoop;
+                }
+                // backend is only as suitable as its least suitable replica in this bucket
+                health = Math.max(health, primaryReplicaHealth(colocatedReplica, backend, visibleVersion));
+                versionPressure = Math.max(versionPressure, primaryReplicaVersionPressure(colocatedReplica));
             }
-            if (lowUsageIndex != -1
-                    && bePrimaryMap.getOrDefault(replica.getBackendId(), (long) 0) < bePrimaryMap
-                    .getOrDefault(replicas.get(lowUsageIndex).getBackendId(), (long) 0)
-                    && isHealthy) {
-                lowUsageIndex = i;
+            // a stable tie break per tablet avoids preferring low backend ids across independent loads
+            long tieBreak = Hashing.murmur3_128().newHasher().putLong(tabletId)
+                    .putLong(replica.getBackendId()).hash().asLong();
+            candidates.add(new PrimaryReplicaCandidate(i, health, versionPressure,
+                    bePrimaryMap.getOrDefault(replica.getBackendId(), 0L), tieBreak, replica.getBackendId()));
+            if (health < bestHealth) {
+                bestHealth = health;
+                lowestVersionPressure = versionPressure;
+            } else if (health == bestHealth) {
+                lowestVersionPressure = Math.min(lowestVersionPressure, versionPressure);
             }
         }
-        return lowUsageIndex;
+
+        PrimaryReplicaCandidate best = null;
+        for (PrimaryReplicaCandidate candidate : candidates) {
+            // balance within the lowest and adjacent pressure bands in the best health tier
+            // a small difference such as 127 versus 128 must not override assignment counts
+            // unknown counts remain a fallback when this tier has no reported counts
+            if (candidate.health() != bestHealth
+                    || candidate.versionPressure() > lowestVersionPressure + 1
+                    || (candidate.versionPressure() == Long.SIZE && lowestVersionPressure < Long.SIZE)) {
+                continue;
+            }
+            if (best == null || PRIMARY_REPLICA_PREFERENCE.compare(candidate, best) < 0) {
+                best = candidate;
+            }
+        }
+        return best == null ? -1 : best.index();
+    }
+
+    private static int primaryReplicaHealth(Replica replica, Backend backend, long visibleVersion) {
+        // prefer error-free replicas, then catch-up within each tier
+        // degraded replicas remain deterministic fallbacks, and remain available as secondaries regardless of their tier
+        int health = replica.isErrorState() || replica.getLastWriteFail() || backend.getLastWriteFail()
+                || replica.getLastFailedVersion() > 0 ? 2 : 0;
+        return health + (replica.getVersion() >= visibleVersion ? 0 : 1);
+    }
+
+    private static int primaryReplicaVersionPressure(Replica replica) {
+        long count = replica.getVersionCount();
+        // compare relative pressure from asynchronous reports, not an assumed tablet_max_versions
+        // unknown counts must never look like an empty, ready replica
+        return count < 0 ? Long.SIZE : Long.SIZE - Long.numberOfLeadingZeros(count);
+    }
+
+    private record PrimaryReplicaCandidate(int index, int health, int versionPressure,
+                                           long assignments, long tieBreak, long backendId) {
     }
 
     private static boolean canUseColocateMVIndex(OlapTable table) {

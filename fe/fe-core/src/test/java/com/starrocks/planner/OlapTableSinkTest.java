@@ -615,10 +615,7 @@ public class OlapTableSinkTest {
         bePrimaryMap.put(be2.getId(), 0L);
         bePrimaryMap.put(be3.getId(), 1L);
 
-        OlapTable olapTable = new OlapTable();
         SystemInfoService infoService = GlobalStateMgr.getCurrentState().getNodeMgr().getClusterInfo();
-        MaterializedIndex index = new MaterializedIndex(1L, MaterializedIndex.IndexState.NORMAL);
-        List<Long> selectedBackedIds = Lists.newArrayList();
 
         //1.check primary replica selection in multiple replica
         Replica replica1 = new Replica(11L, be1.getId(), Replica.ReplicaState.NORMAL, 1, 0);
@@ -632,8 +629,8 @@ public class OlapTableSinkTest {
         multipleReplicaList.add(replica2);
         multipleReplicaList.add(replica3);
 
-        int lowUsageIndex1 = OlapTableSink.findPrimaryReplica(olapTable, bePrimaryMap, infoService,
-                index, selectedBackedIds, multipleReplicaList);
+        int lowUsageIndex1 = OlapTableSink.findPrimaryReplica(bePrimaryMap, infoService,
+                1, 1, multipleReplicaList, Collections.emptyList());
         //note: even though in bePrimaryMap, primary replica num in be2 < primary replica num in be3,
         //      but be2 is in shutting down, so choose replica3 as primary replica.
         Assertions.assertEquals(multipleReplicaList.get(lowUsageIndex1).getId(), replica3.getId());
@@ -645,8 +642,8 @@ public class OlapTableSinkTest {
         List<Replica> singleReplicaList = new ArrayList<>();
         singleReplicaList.add(replica4);
 
-        int lowUsageIndex2 = OlapTableSink.findPrimaryReplica(olapTable, bePrimaryMap, infoService,
-                index, selectedBackedIds, singleReplicaList);
+        int lowUsageIndex2 = OlapTableSink.findPrimaryReplica(bePrimaryMap, infoService,
+                1, 1, singleReplicaList, Collections.emptyList());
         //note: even though be2 is in shutting down, to ensure the load job can be loaded normally,
         //      be2 SHUTDOWN status could not be checked, so choose replica4 as primary replica. 
         Assertions.assertEquals(singleReplicaList.get(lowUsageIndex2).getId(), replica4.getId());
