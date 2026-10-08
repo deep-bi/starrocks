@@ -175,7 +175,11 @@ build_libevent() {
 
     mkdir -p ${BUILD_DIR}
     cd ${BUILD_DIR}
-    CFLAGS="-std=c99 -D_BSD_SOURCE -fno-omit-frame-pointer -g -ggdb -O2 -I${TP_INCLUDE_DIR}" \
+    # GCC 14 promotes this check from a warning to an error by default. evutil.c predates
+    # that change and reinterprets struct evutil_addrinfo* as struct addrinfo* when calling
+    # the system getaddrinfo/freeaddrinfo; demote it back to a warning rather than an error.
+    CFLAGS="-std=c99 -D_BSD_SOURCE -fno-omit-frame-pointer -g -ggdb -O2 -I${TP_INCLUDE_DIR} \
+-Wno-error=incompatible-pointer-types" \
 	    CPPFLAGS="-I${TP_INCLUDE_DIR}" \
 	    LDFLAGS="-L${TP_LIB_DIR}" \
 	    ${CMAKE_CMD} -G "${CMAKE_GENERATOR}" -DCMAKE_INSTALL_PREFIX="${TP_INSTALL_DIR}" -DEVENT__DISABLE_TESTS=ON \
