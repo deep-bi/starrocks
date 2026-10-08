@@ -288,7 +288,7 @@ public class CatalogRecycleBinTest {
 
         Partition partitionWithTwoPhysicalPartitions = new Partition(1L, 3L, "pt", new MaterializedIndex(), null);
         PhysicalPartition extraPhysicalPartition =
-                new PhysicalPartition(4L, partitionWithTwoPhysicalPartitions.getId(), new MaterializedIndex());
+                new PhysicalPartition(4L, "exPt", partitionWithTwoPhysicalPartitions.getId(), new MaterializedIndex());
         partitionWithTwoPhysicalPartitions.addSubPartition(extraPhysicalPartition);
         bin.setPartitionInfo(1L,
                 new RecycleRangePartitionInfo(11L, 22L, partitionWithTwoPhysicalPartitions,
