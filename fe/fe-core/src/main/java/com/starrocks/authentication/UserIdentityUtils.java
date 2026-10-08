@@ -79,8 +79,19 @@ public class UserIdentityUtils {
     public static void setAuthInfoFromThrift(ConnectContext context, TUserIdentity tUserIdent) {
         UserIdentity userIdentity = UserIdentityUtils.fromThrift(tUserIdent);
         context.setCurrentUserIdentity(userIdentity);
-        if (tUserIdent.isSetCurrent_role_ids()) {
-            context.setCurrentRoleIds(new HashSet<>(tUserIdent.current_role_ids.getRole_id_list()));
+        setCurrentRoleIds(context, userIdentity, tUserIdent);
+    }
+
+    /**
+     * Sets the role ids of a context rebuilt from a thrift identity: the ones the originating session forwarded in
+     * {@code tUserIdent} if any, else the user's stored default roles. Forwarded ids are the only source for users
+     * whose roles are not stored on them (an ephemeral user mapped to roles through its external groups), and they
+     * also carry any SET ROLE the session ran.
+     */
+    public static void setCurrentRoleIds(ConnectContext context, UserIdentity userIdentity, TUserIdentity tUserIdent) {
+        if (tUserIdent != null && tUserIdent.isSetCurrent_role_ids()
+                && tUserIdent.getCurrent_role_ids().isSetRole_id_list()) {
+            context.setCurrentRoleIds(new HashSet<>(tUserIdent.getCurrent_role_ids().getRole_id_list()));
         } else {
             context.setCurrentRoleIds(userIdentity);
         }

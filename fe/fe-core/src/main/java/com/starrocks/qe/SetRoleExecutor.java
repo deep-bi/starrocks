@@ -44,13 +44,13 @@ public class SetRoleExecutor {
     public static void execute(SetRoleStmt stmt, ConnectContext context) throws StarRocksException, PrivilegeException {
         AuthorizationMgr manager = GlobalStateMgr.getCurrentState().getAuthorizationMgr();
         UserIdentity user = context.getCurrentUserIdentity();
-        Set<Long> roleIdsForUser = manager.getRoleIdsByUser(user);
+        Set<Long> roleIdsForUser = manager.getRoleIdsByUser(user, context.getGroups());
         Set<Long> roleIds;
 
         if (stmt.getSetRoleType().equals(SetRoleType.NONE)) {
             roleIds = new HashSet<>();
         } else if (stmt.getSetRoleType().equals(SetRoleType.DEFAULT)) {
-            roleIds = manager.getDefaultRoleIdsByUser(user);
+            roleIds = manager.getDefaultRoleIdsByUser(user, context.getGroups());
         } else if (stmt.getSetRoleType().equals(SetRoleType.ALL)) {
             roleIds = roleIdsForUser;
 
