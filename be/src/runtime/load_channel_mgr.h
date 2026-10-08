@@ -44,6 +44,7 @@
 #include <unordered_map>
 
 #include "common/compiler_util.h"
+#include "common/process_exit.h"
 #include "common/statusor.h"
 #include "gen_cpp/InternalService_types.h"
 #include "gen_cpp/Types_types.h"
@@ -135,6 +136,13 @@ public:
 
     void close();
 
+    // Drain-visible work: channels still in the map. Open RPCs share process_exit
+    // shutdown_work. Callbacks/flush after map erase are remote replica work.
+    size_t pending_work_count() const;
+
+    void inc_open_rpc_inflight() { inc_shutdown_work(); }
+    void dec_open_rpc_inflight() { dec_shutdown_work(); }
+
     ThreadPool* async_rpc_pool() { return _async_rpc_pool.get(); }
 
     std::shared_ptr<LoadChannel> TEST_get_load_channel(UniqueId load_id) {
@@ -164,7 +172,7 @@ private:
     std::shared_ptr<LoadChannel> _find_load_channel(int64_t txn_id);
     void _start_load_channels_clean();
 
-    // lock protect the load channel map and aborted load channels map.
+    // lock protects the load channel map and aborted load channels map.
     // performance is not critical here, so rw lock is not used.
     mutable bthread::Mutex _lock;
     // load id -> load channel
