@@ -190,7 +190,26 @@ If you deploy multiple FEs with `arrow_flight_ssl_enable = true`, every FE must 
 
 :::
 
-To have the FE connect to BE/CN over TLS, enable and configure TLS on the BE/CN side itself, then set `arrow_flight_be_ssl_enable = true` on the FE so it dials BE/CN using TLS as well, trusting the certificate configured in `arrow_flight_ssl_certificate_path`. This is independent of `arrow_flight_ssl_enable`, which only controls FE-to-FE and inbound client connections. Leave `arrow_flight_be_ssl_enable` at its default (`false`) if BE/CN is running without TLS.
+To enable TLS for the Arrow Flight SQL server on the BE, configure the following parameters in **be.conf** and restart the BE:
+
+| Parameter                              | Default | Description                                                                 |
+|----------------------------------------|---------|-----------------------------------------------------------------------------|
+| `arrow_flight_ssl_enable`              | `false` | Whether to enable TLS for the Arrow Flight SQL server on the BE.            |
+| `arrow_flight_ssl_cert_file`           | (empty) | Path to the PEM-encoded server certificate.                                 |
+| `arrow_flight_ssl_key_file`            | (empty) | Path to the PEM-encoded server private key.                                 |
+| `arrow_flight_ssl_ca_cert_file`        | (empty) | Path to the PEM-encoded CA certificate bundle used to verify client certs.  |
+| `arrow_flight_ssl_require_client_auth` | `false` | Whether to require client certificates (mTLS).                              |
+
+:::note
+
+- `arrow_flight_ssl_cert_file` and `arrow_flight_ssl_key_file` are required when `arrow_flight_ssl_enable` is `true`.
+- `arrow_flight_ssl_ca_cert_file` is required when `arrow_flight_ssl_require_client_auth` is `true`.
+- The certificate, private key, and CA certificate bundle must be PEM-encoded files.
+- These parameters configure TLS for the BE Arrow Flight SQL server and are independent of the FE Arrow Flight SQL TLS configuration.
+
+To have the FE connect to BE/CN over TLS, enable and configure TLS on the BE/CN side itself, then set `arrow_flight_be_ssl_enable = true` and configure `arrow_flight_ssl_certificate_path` in fe.conf. If TLS is enabled on the BE/CN but `arrow_flight_be_ssl_enable = true` is not set on the FE, or `arrow_flight_ssl_certificate_path` is not configured, the FE will not be able to establish a connection to the TLS-enabled BE/CN.
+
+:::
 
 #### Configure Arrow Flight Proxy (Optional)
 
