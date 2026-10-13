@@ -40,8 +40,10 @@
 #include <gtest/gtest.h>
 #include <rapidjson/document.h>
 
+#include <atomic>
 #include <cstring>
 
+#include "common/config.h"
 #include "common/process_exit.h"
 #include "gen_cpp/FrontendService_types.h"
 #include "gen_cpp/HeartbeatService_types.h"
@@ -55,17 +57,22 @@
 #include "util/brpc_stub_cache.h"
 #include "util/concurrent_limiter.h"
 #include "util/cpu_info.h"
+#include "util/time.h"
 
 class mg_connection;
 
 namespace starrocks {
-
 extern void (*s_injected_send_reply)(HttpRequest*, HttpStatus, std::string_view);
+
 extern std::atomic<bool> k_starrocks_exit;
+extern std::atomic<bool> k_starrocks_force_reject;
+extern std::atomic<int64_t> k_starrocks_fe_aware_shutdown_ms;
 
 namespace {
 static std::string k_response_str;
+static HttpStatus k_response_status = HttpStatus::INTERNAL_SERVER_ERROR;
 static void inject_send_reply(HttpRequest* request, HttpStatus status, std::string_view content) {
+    k_response_status = status;
     k_response_str = content;
 }
 } // namespace
@@ -83,11 +90,15 @@ public:
     static void TearDownTestSuite() { s_injected_send_reply = nullptr; }
 
     void SetUp() override {
+        k_starrocks_exit.store(false);
+        k_starrocks_force_reject.store(false);
+        k_starrocks_fe_aware_shutdown_ms.store(0);
         k_stream_load_begin_result = TLoadTxnBeginResult();
         k_stream_load_commit_result = TLoadTxnCommitResult();
         k_stream_load_rollback_result = TLoadTxnRollbackResult();
         k_stream_load_put_result = TStreamLoadPutResult();
         k_response_str = "";
+        k_response_status = HttpStatus::INTERNAL_SERVER_ERROR;
         config::streaming_load_max_mb = 1;
 
         _env._load_stream_mgr = new LoadStreamMgr();
@@ -109,6 +120,9 @@ public:
         if (_evhttp_req != nullptr) {
             evhttp_request_free(_evhttp_req);
         }
+        k_starrocks_exit.store(false);
+        k_starrocks_force_reject.store(false);
+        k_starrocks_fe_aware_shutdown_ms.store(0);
     }
 
 private:
@@ -187,27 +201,34 @@ TEST_F(StreamLoadActionTest, process_exit_abort_stream_load) {
     request._headers.emplace(HttpHeaders::CONTENT_LENGTH, "0");
     request.set_handler(&action);
 
-    // set process exit in progress flag
     k_starrocks_exit.store(true);
+    k_starrocks_fe_aware_shutdown_ms.store(MonotonicMillis() - config::graceful_exit_reject_delay_ms - 1);
 
-    action.on_header(&request);
-    action.handle(&request);
+    int rc = action.on_header(&request);
 
-    rapidjson::Document doc;
-    doc.Parse(k_response_str.c_str());
-
+    ASSERT_EQ(-1, rc);
     // {
     //   "TxnId": -1,
     //   "Status": "Fail",
-    //   "Message", "Service is shutting down, please retry later!",
+    //   "Message": "Service is shutting down, please retry later!",
     //   ...
     // }
+    rapidjson::Document doc;
+    doc.Parse(k_response_str.c_str());
     ASSERT_STREQ("Fail", doc["Status"].GetString()) << k_response_str;
     ASSERT_EQ(-1, doc["TxnId"].GetInt());
     ASSERT_STREQ("Service is shutting down, please retry later!", doc["Message"].GetString());
+    auto* content_type = evhttp_find_header(evhttp_request_get_output_headers(_evhttp_req), "Content-Type");
+    ASSERT_NE(content_type, nullptr);
+    ASSERT_STREQ("application/json", content_type);
+    auto* location = evhttp_find_header(evhttp_request_get_output_headers(_evhttp_req), HttpHeaders::LOCATION);
+    ASSERT_EQ(location, nullptr);
+    ASSERT_EQ(nullptr, request.handler_ctx());
+    ASSERT_EQ(0, shutdown_work_inflight());
 
     // restore the flags
     k_starrocks_exit.store(false);
+    k_starrocks_fe_aware_shutdown_ms.store(0);
 }
 
 TEST_F(StreamLoadActionTest, put_fail) {
@@ -628,6 +649,25 @@ TEST_F(StreamLoadActionTest, url_table_key_decode_fail) {
     request._params.emplace(HTTP_TABLE_KEY, "%RR");
     request.set_handler(&action);
     ASSERT_EQ(-1, action.on_header(&request));
+}
+
+TEST_F(StreamLoadActionTest, on_header_rejects_when_force_reject) {
+    force_reject_exec_plan_fragment();
+    StreamLoadAction action(&_env, _limiter.get());
+    HttpRequest request(_evhttp_req);
+    request.set_handler(&action);
+    ASSERT_EQ(-1, action.on_header(&request));
+    ASSERT_EQ(HttpStatus::OK, k_response_status);
+    rapidjson::Document doc;
+    doc.Parse(k_response_str.c_str());
+    ASSERT_STREQ("Fail", doc["Status"].GetString()) << k_response_str;
+    ASSERT_EQ(-1, doc["TxnId"].GetInt());
+    ASSERT_STREQ("Service is shutting down, please retry later!", doc["Message"].GetString());
+    auto* content_type = evhttp_find_header(evhttp_request_get_output_headers(_evhttp_req), "Content-Type");
+    ASSERT_NE(content_type, nullptr);
+    ASSERT_STREQ("application/json", content_type);
+    ASSERT_EQ(nullptr, request.handler_ctx());
+    ASSERT_EQ(0, shutdown_work_inflight());
 }
 
 } // namespace starrocks

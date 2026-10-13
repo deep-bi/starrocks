@@ -19,10 +19,12 @@ import com.github.benmanes.caffeine.cache.Caffeine;
 import com.google.common.annotations.VisibleForTesting;
 import com.starrocks.catalog.Database;
 import com.starrocks.common.Config;
+import com.starrocks.common.LabelAlreadyUsedException;
 import com.starrocks.common.StarRocksException;
 import com.starrocks.server.GlobalStateMgr;
 import com.starrocks.system.ComputeNode;
 import com.starrocks.transaction.TransactionState;
+import com.starrocks.transaction.TransactionStatus;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.checkerframework.checker.nullness.qual.NonNull;
@@ -118,15 +120,53 @@ public class TransactionLoadCoordinatorMgr {
      *
      * @param label         the transaction label
      * @param warehouseName the name of the warehouse
+     * @param dbName        the database name, used to look up the transaction state
      * @return the allocated {@link ComputeNode}
      * @throws StarRocksException if allocation fails or no suitable node is found
      */
-    public @NonNull ComputeNode allocate(String label, String warehouseName) throws StarRocksException {
+    public @NonNull ComputeNode allocate(String label, String warehouseName, String dbName)
+            throws StarRocksException {
+        // Return the cached coordinator while it is available: repeated BEGINs for the same
+        // label keep reaching the BE that owns the stream context and fail with the normal
+        // LABEL_ALREADY_EXISTS error there.
+        Long existingNodeId = cache.getIfPresent(label);
+        if (existingNodeId != null) {
+            // A node missing from the cluster (dropped) propagates the error; only a node
+            // that is still registered but unavailable falls through to the guard below.
+            ComputeNode node = getNodeFromId(existingNodeId);
+            if (node.isAvailable()) {
+                return node;
+            }
+        }
+
+        // Before picking a new coordinator, stop retries of a label that already owns a live
+        // transaction: selecting another node would orphan the original transaction's
+        // LOAD/COMMIT routing, and redirecting the retry back to its (unavailable)
+        // coordinator would bounce 307s between FE and that BE. The cache is left untouched
+        // so the live transaction's later LOAD/COMMIT still resolve to its original owner.
+        TransactionState txnState = getLabelTransactionState(label, dbName);
+        if (txnState != null && txnState.getTransactionStatus() != TransactionStatus.ABORTED) {
+            throw new LabelAlreadyUsedException(label, txnState.getTransactionStatus());
+        }
+        cache.invalidate(label);
+
         List<Long> nodeIds = LoadAction.selectNodes(warehouseName);
         Long chosenNodeId = nodeIds.get(0);
         ComputeNode node = getNodeFromId(chosenNodeId);
         cache.put(label, chosenNodeId);
         return node;
+    }
+
+    /**
+     * Returns the FE transaction state for the label, or null when there is none.
+     */
+    private TransactionState getLabelTransactionState(String label, String dbName) throws StarRocksException {
+        GlobalStateMgr globalStateMgr = GlobalStateMgr.getCurrentState();
+        Database db = globalStateMgr.getLocalMetastore().getDb(dbName);
+        if (db == null) {
+            return null;
+        }
+        return globalStateMgr.getGlobalTransactionMgr().getLabelTransactionState(db.getId(), label);
     }
 
     /**
@@ -144,7 +184,7 @@ public class TransactionLoadCoordinatorMgr {
     }
 
     /**
-     * Remove key form cache. It is only used in test cases
+     * Remove key form cache.
      *
      * @param label  the transaction label
      */
@@ -154,7 +194,7 @@ public class TransactionLoadCoordinatorMgr {
     }
 
     /**
-     * Calculate the length of the cache. It is only used in test cases
+     * Calculate the length of the cache.
      */
     @VisibleForTesting
     public long size() {
@@ -162,7 +202,7 @@ public class TransactionLoadCoordinatorMgr {
     }
 
     /**
-     * It is only used in test cases
+     * Put a label with its coordinator node id into the cache.
      */
     @VisibleForTesting
     public void put(String key, Long value) {
@@ -170,10 +210,15 @@ public class TransactionLoadCoordinatorMgr {
     }
 
     /**
-     * Checks if a transaction label exists in the cache.
-     *
-     * @param label the transaction label
-     * @return true if the label exists in the cache, false otherwise
+     * Peek the cached txn id without mutating state.
+     */
+    @VisibleForTesting
+    public Long getTxnId(String label) {
+        return cache.getIfPresent(label);
+    }
+
+    /**
+     * Checks if a label exists in the cache.
      */
     public boolean existInCache(String label) {
         return cache.getIfPresent(label) != null;
