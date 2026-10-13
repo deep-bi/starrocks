@@ -13,8 +13,15 @@
 
     <properties>
         <java-extensions.home>${basedir}/../</java-extensions.home>
-        <paimon.version>1.3.1</paimon.version>
+        <paimon.version>1.4.2-deepbi1</paimon.version>
     </properties>
+
+    <repositories>
+        <repository>
+            <id>deep-bi-github-artifact</id>
+            <url>https://raw.githubusercontent.com/deep-bi/maven-repo/main</url>
+        </repository>
+    </repositories>
 
     <dependencies>
         <dependency>
