@@ -70,8 +70,11 @@ static StatusOr<TTransactionStatus::type> get_txn_status(const AuthInfo& auth, s
 static bool wait_txn_visible_until(const AuthInfo& auth, std::string_view db, std::string_view table, int64_t txn_id,
                                    int64_t deadline);
 
-Status StreamLoadExecutor::execute_plan_fragment(StreamLoadContext* ctx) {
-    if (process_exit_in_progress()) {
+Status StreamLoadExecutor::execute_plan_fragment(StreamLoadContext* ctx, bool admission_already_granted) {
+    // Count before rejection so drain covers the check-to-register gap.
+    ShutdownWorkGuard load_guard;
+    // New fragments reject after cutoff; already admitted loads may continue.
+    if (!admission_already_granted && !should_accept_new_request()) {
         return Status::ServiceUnavailable("Service is shutting down, please retry later!");
     }
 
