@@ -14,6 +14,7 @@
 
 #include "storage/tablet_updates_test.h"
 
+#include <limits>
 #include <random>
 
 #include "script/script.h"
@@ -3432,6 +3433,63 @@ TEST_F(TabletUpdatesTest, get_rowsets_for_incremental_snapshot) {
     test_get_rowsets_for_incremental_snapshot({2, 3, 4, 5, 6, 7}, {3, 3, 5, 5, 7}, {3, 5, 7}, false, false);
     // after gc, there will only be version:7 left, should get empty rowset list
     test_get_rowsets_for_incremental_snapshot({2, 3, 4, 5, 6, 7}, {3, 3, 5, 5, 7}, {}, true, false);
+}
+
+TEST_F(TabletUpdatesTest, get_rowsets_for_incremental_snapshot_version_ratio) {
+    srand(GetCurrentTimeMicros());
+    const auto saved_ratio = config::max_incremental_clone_version_ratio;
+    const auto saved_max_versions = config::tablet_max_versions;
+    DeferOp restore([&]() {
+        config::max_incremental_clone_version_ratio = saved_ratio;
+        config::tablet_max_versions = saved_max_versions;
+    });
+    config::tablet_max_versions = 1000;
+    const std::vector<int64_t> versions = {2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12};
+
+    // ratio 1.0 keeps the existing limit (tablet_max_versions), 8 missing versions are served incrementally
+    config::max_incremental_clone_version_ratio = 1.0;
+    test_get_rowsets_for_incremental_snapshot(versions, {3, 10, 13}, {3, 4, 5, 6, 7, 8, 9, 10}, false, false);
+
+    // 1000 * 0.0078125 (2^-7) = 7.8125, so the limit is 7 missing versions
+    config::max_incremental_clone_version_ratio = 0.0078125;
+    ASSERT_EQ(7, TabletUpdates::calc_max_incremental_clone_versions(config::tablet_max_versions,
+                                                                    config::max_incremental_clone_version_ratio));
+    // 6 missing versions, below the limit: incremental clone
+    test_get_rowsets_for_incremental_snapshot(versions, {3, 8, 13}, {3, 4, 5, 6, 7, 8}, false, false);
+    // 7 missing versions, at the limit: switch to full clone, no incremental rowsets
+    test_get_rowsets_for_incremental_snapshot(versions, {3, 9, 13}, {}, false, false);
+    // 8 missing versions, above the limit: switch to full clone, no incremental rowsets
+    test_get_rowsets_for_incremental_snapshot(versions, {3, 10, 13}, {}, false, false);
+}
+
+TEST_F(TabletUpdatesTest, calc_max_incremental_clone_versions) {
+    // ratio 1.0 keeps the existing limit
+    EXPECT_EQ(1000, TabletUpdates::calc_max_incremental_clone_versions(1000, 1.0));
+    EXPECT_EQ(500, TabletUpdates::calc_max_incremental_clone_versions(1000, 0.5));
+    // the result is rounded down
+    EXPECT_EQ(2, TabletUpdates::calc_max_incremental_clone_versions(5, 0.5));
+    EXPECT_EQ(7, TabletUpdates::calc_max_incremental_clone_versions(1000, 0.0078125));
+    // small limits never go below 1
+    EXPECT_EQ(1, TabletUpdates::calc_max_incremental_clone_versions(1, 0.5));
+    EXPECT_EQ(1, TabletUpdates::calc_max_incremental_clone_versions(3, 0.1));
+    EXPECT_EQ(1, TabletUpdates::calc_max_incremental_clone_versions(0, 1.0));
+    // a ratio outside of (0, 1] is ignored and 1.0 is used
+    EXPECT_EQ(1000, TabletUpdates::calc_max_incremental_clone_versions(1000, 0.0));
+    EXPECT_EQ(1000, TabletUpdates::calc_max_incremental_clone_versions(1000, -0.5));
+    EXPECT_EQ(1000, TabletUpdates::calc_max_incremental_clone_versions(1000, 1.5));
+    EXPECT_EQ(1000, TabletUpdates::calc_max_incremental_clone_versions(1000, std::numeric_limits<double>::quiet_NaN()));
+    EXPECT_EQ(1000, TabletUpdates::calc_max_incremental_clone_versions(1000, std::numeric_limits<double>::infinity()));
+}
+
+TEST_F(TabletUpdatesTest, incremental_clone_fallback_reason) {
+    // the version limit is 5: below, at and above it
+    EXPECT_EQ(nullptr, TabletUpdates::incremental_clone_fallback_reason(4, 100, 5));
+    EXPECT_NE(nullptr, TabletUpdates::incremental_clone_fallback_reason(5, 100, 5));
+    EXPECT_NE(nullptr, TabletUpdates::incremental_clone_fallback_reason(6, 100, 5));
+    // the existing fallback to full clone stays in effect: 2 rowsets in a full clone, 2 * 20 = 40
+    EXPECT_EQ(nullptr, TabletUpdates::incremental_clone_fallback_reason(39, 2, 1000));
+    EXPECT_NE(nullptr, TabletUpdates::incremental_clone_fallback_reason(40, 2, 1000));
+    EXPECT_NE(nullptr, TabletUpdates::incremental_clone_fallback_reason(41, 2, 1000));
 }
 
 void TabletUpdatesTest::test_load_snapshot_primary(int64_t num_version, const std::vector<uint64_t>& holes) {
