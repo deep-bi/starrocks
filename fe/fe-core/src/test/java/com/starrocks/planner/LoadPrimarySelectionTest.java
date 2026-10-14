@@ -54,6 +54,8 @@ import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -506,6 +508,109 @@ public class LoadPrimarySelectionTest {
             });
             Assertions.assertTrue(error.getMessage().contains("Check quorum number failed"), error.getMessage());
         }
+    }
+
+    @ParameterizedTest(name = "{0}, stream={1}")
+    @CsvSource({
+            "last_write_fail, false", "last_write_fail, true",
+            "error_state, false", "error_state, true",
+            "version_lag, false", "version_lag, true"
+    })
+    public void testDegradedCommonPrimaryFallsBackToHealthyIndependentPrimaries(String degradation, boolean stream)
+            throws Exception {
+        OlapTable table = createTable("colocated_degraded_" + degradation + "_" + stream);
+        addColocatedIndexes(table);
+        table.setWriteQuorum("ALL");
+        PhysicalPartition partition = table.getAllPhysicalPartitions().iterator().next();
+        boolean versionLag = degradation.equals("version_lag");
+        if (versionLag) {
+            partition.updateVisibleVersion(101);
+        }
+        Map<Long, Long> expectedPrimaries = new HashMap<>();
+        List<MaterializedIndex> indexes = partition.getMaterializedIndices(MaterializedIndex.IndexExtState.ALL);
+        for (int i = 0; i < indexes.size(); i++) {
+            long healthyBackendId = 10001L + i;
+            for (Tablet tablet : indexes.get(i).getTablets()) {
+                expectedPrimaries.put(tablet.getId(), healthyBackendId);
+                for (Replica replica : ((LocalTablet) tablet).getImmutableReplicas()) {
+                    replica.setVersionCount(100);
+                    if (replica.getBackendId() == healthyBackendId) {
+                        if (versionLag) {
+                            replica.updateVersion(101);
+                        }
+                    } else {
+                        switch (degradation) {
+                            case "last_write_fail" -> replica.setLastWriteFail(true);
+                            case "error_state" -> replica.setIsErrorState(true);
+                            case "version_lag" -> Assertions.assertEquals(100, replica.getVersion());
+                            default -> throw new IllegalArgumentException(degradation);
+                        }
+                    }
+                }
+            }
+        }
+        AtomicBoolean eligible = new AtomicBoolean(false);
+        new MockUp<OlapTable>() {
+            @Mock
+            public boolean isEnableColocateMVIndex() {
+                return eligible.get();
+            }
+        };
+        // Independent selection has a healthy primary for every tablet, with all secondaries retained.
+        TOlapTableSink independent = stream ? streamSink(table) : sqlSink(table);
+        Assertions.assertEquals(expectedPrimaries.size(), independent.getLocation().getTabletsSize());
+        for (TTabletLocation location : independent.getLocation().getTablets()) {
+            Assertions.assertEquals(expectedPrimaries.get(location.getTablet_id()), location.getNode_ids().get(0));
+            Assertions.assertEquals(Set.of(10001L, 10002L, 10003L), new HashSet<>(location.getNode_ids()));
+        }
+        eligible.set(true);
+        TOlapTableSink fallback = stream ? streamSink(table) : sqlSink(table);
+        Assertions.assertAll(
+                () -> Assertions.assertFalse(fallback.isEnable_colocate_mv_index(),
+                        "No backend is healthy across all indexes; use independent primaries"),
+                () -> Assertions.assertEquals(independent.getLocation(), fallback.getLocation(),
+                        "Colocated loading must fall back to the available healthy independent primaries"),
+                () -> Assertions.assertTrue(fallback.isEnable_replicated_storage()),
+                () -> Assertions.assertEquals(table.writeQuorum(), fallback.getWrite_quorum_type()));
+    }
+
+    @ParameterizedTest(name = "colocated={0}, stream={1}")
+    @CsvSource({"false, false", "false, true", "true, false", "true, true"})
+    public void testAllReplicasOneVersionBehindStillPlan(boolean colocated, boolean stream) throws Exception {
+        OlapTable table = createTable("all_replicas_lagging_" + colocated + "_" + stream);
+        addColocatedIndexes(table);
+        table.setWriteQuorum("ALL");
+        Set<Long> expectedTablets = new HashSet<>();
+        for (PhysicalPartition partition : table.getAllPhysicalPartitions()) {
+            // Model a visible-version advance before the corresponding replica reports arrive.
+            partition.updateVisibleVersion(101);
+            for (MaterializedIndex index : partition.getMaterializedIndices(MaterializedIndex.IndexExtState.ALL)) {
+                for (Tablet tablet : index.getTablets()) {
+                    expectedTablets.add(tablet.getId());
+                    for (Replica replica : ((LocalTablet) tablet).getImmutableReplicas()) {
+                        Assertions.assertEquals(100, replica.getVersion());
+                        replica.setVersionCount(100);
+                    }
+                }
+            }
+        }
+        new MockUp<OlapTable>() {
+            @Mock
+            public boolean isEnableColocateMVIndex() {
+                return colocated;
+            }
+        };
+        TOlapTableSink sink = stream ? streamSink(table) : sqlSink(table);
+        Assertions.assertTrue(sink.isEnable_replicated_storage());
+        Assertions.assertEquals(table.writeQuorum(), sink.getWrite_quorum_type());
+        Assertions.assertEquals(expectedTablets.size(), sink.getLocation().getTabletsSize());
+        Set<Long> actualTablets = new HashSet<>();
+        for (TTabletLocation location : sink.getLocation().getTablets()) {
+            actualTablets.add(location.getTablet_id());
+            Assertions.assertEquals(3, location.getNode_idsSize());
+            Assertions.assertEquals(Set.of(10001L, 10002L, 10003L), new HashSet<>(location.getNode_ids()));
+        }
+        Assertions.assertEquals(expectedTablets, actualTablets);
     }
 
     @Test
