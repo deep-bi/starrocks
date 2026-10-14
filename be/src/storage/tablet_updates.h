@@ -320,6 +320,14 @@ public:
     Status get_rowsets_for_incremental_snapshot(const std::vector<int64_t>& missing_version_ranges,
                                                 std::vector<RowsetSharedPtr>& rowsets);
 
+    // max(1, floor(tablet_max_versions * ratio)). A ratio outside of (0, 1] is ignored and 1.0 is used.
+    static size_t calc_max_incremental_clone_versions(int64_t tablet_max_versions, double ratio);
+
+    // Returns the reason why an incremental clone should be replaced by a full clone, or nullptr if the
+    // incremental clone can be used.
+    static const char* incremental_clone_fallback_reason(size_t num_missing_versions, size_t num_rowset_full_clone,
+                                                         size_t max_incremental_versions);
+
     void to_rowset_meta_pb(const std::vector<RowsetMetaSharedPtr>& rowset_metas,
                            std::vector<RowsetMetaPB>& rowset_metas_pb);
 
