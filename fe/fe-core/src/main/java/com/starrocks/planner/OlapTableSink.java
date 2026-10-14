@@ -990,6 +990,11 @@ public class OlapTableSink extends DataSink {
             }
         }
 
+        if (!colocatedTablets.isEmpty() && bestHealth > 0) {
+            // try independent primaries before accepting a degraded common candidate
+            return -1;
+        }
+
         PrimaryReplicaCandidate best = null;
         for (PrimaryReplicaCandidate candidate : candidates) {
             // balance within the lowest and adjacent pressure bands in the best health tier
@@ -1009,7 +1014,7 @@ public class OlapTableSink extends DataSink {
 
     private static int primaryReplicaHealth(Replica replica, Backend backend, long visibleVersion) {
         // prefer error-free replicas, then catch-up within each tier
-        // degraded replicas remain deterministic fallbacks, and remain available as secondaries regardless of their tier
+        // degraded replicas remain deterministic fallbacks for independent selection, and remain available as secondaries
         int health = replica.isErrorState() || replica.getLastWriteFail() || backend.getLastWriteFail()
                 || replica.getLastFailedVersion() > 0 ? 2 : 0;
         return health + (replica.getVersion() >= visibleVersion ? 0 : 1);
