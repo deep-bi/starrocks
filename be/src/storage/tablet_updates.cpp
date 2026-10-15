@@ -5586,7 +5586,7 @@ Status TabletUpdates::get_missing_version_ranges(std::vector<int64_t>& missing_v
 size_t TabletUpdates::calc_max_incremental_clone_versions(int64_t tablet_max_versions, double ratio) {
     // The negated form also rejects NaN.
     if (!(ratio > 0.0 && ratio <= 1.0)) {
-        LOG(WARNING) << "max_incremental_clone_version_ratio must be in (0, 1], got " << ratio << ", use 1.0 instead";
+        LOG(WARNING) << "max_incremental_clone_version_ratio must be in (0, 1], got " << ratio << ", using 1.0 instead";
         ratio = 1.0;
     }
     const auto limit = static_cast<int64_t>(std::floor(static_cast<double>(tablet_max_versions) * ratio));
