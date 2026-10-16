@@ -866,6 +866,11 @@ CONF_Bool(dump_trace_info, "true");
 // number of version exceeds this value, new write
 // requests will fail.
 CONF_mInt16(tablet_max_versions, "1000");
+// Upper bound of the versions a Primary Key tablet serves through an incremental clone, as a ratio of
+// tablet_max_versions: max(1, floor(tablet_max_versions * ratio)). When the number of missing versions
+// reaches it, the clone falls back to a full clone. The default 1.0 keeps the previous behavior.
+// Valid range is (0, 1]. A value outside of this range is ignored and 1.0 is used.
+CONF_mDouble(max_incremental_clone_version_ratio, "1.0");
 
 // The maximum number of pending versions allowed for a primary key tablet
 CONF_mInt32(tablet_max_pending_versions, "1000");

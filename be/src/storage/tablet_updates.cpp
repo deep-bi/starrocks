@@ -5583,6 +5583,27 @@ Status TabletUpdates::get_missing_version_ranges(std::vector<int64_t>& missing_v
     return Status::OK();
 }
 
+size_t TabletUpdates::calc_max_incremental_clone_versions(int64_t tablet_max_versions, double ratio) {
+    // The negated form also rejects NaN.
+    if (!(ratio > 0.0 && ratio <= 1.0)) {
+        LOG(WARNING) << "max_incremental_clone_version_ratio must be in (0, 1], got " << ratio << ", using 1.0 instead";
+        ratio = 1.0;
+    }
+    const auto limit = static_cast<int64_t>(std::floor(static_cast<double>(tablet_max_versions) * ratio));
+    return static_cast<size_t>(std::max<int64_t>(1, limit));
+}
+
+const char* TabletUpdates::incremental_clone_fallback_reason(size_t num_missing_versions, size_t num_rowset_full_clone,
+                                                             size_t max_incremental_versions) {
+    if (num_missing_versions >= max_incremental_versions) {
+        return "missing versions reach the incremental clone version limit";
+    }
+    if (num_missing_versions >= num_rowset_full_clone * 20) {
+        return "missing versions reach 20 times the rowsets of a full clone";
+    }
+    return nullptr;
+}
+
 Status TabletUpdates::get_rowsets_for_incremental_snapshot(const std::vector<int64_t>& missing_version_ranges,
                                                            std::vector<RowsetSharedPtr>& rowsets) {
     // TODO: also find rowsets in pending_rowsets
@@ -5617,14 +5638,20 @@ Status TabletUpdates::get_rowsets_for_incremental_snapshot(const std::vector<int
             return Status::NotFound(msg);
         }
         size_t num_rowset_full_clone = _edit_version_infos.back()->rowsets.size();
+        const size_t max_incremental_versions = calc_max_incremental_clone_versions(
+                config::tablet_max_versions, config::max_incremental_clone_version_ratio);
         // TODO: make better estimates about incremental / full clone costs
         // currently only consider number of rowsets, should also consider number of actual files and data size to
         // reflect the actual cost
-        if (versions.size() >= config::tablet_max_versions || versions.size() >= num_rowset_full_clone * 20) {
+        if (const char* reason =
+                    incremental_clone_fallback_reason(versions.size(), num_rowset_full_clone, max_incremental_versions);
+            reason != nullptr) {
             string msg = strings::Substitute(
-                    "get_rowsets_for_snapshot: too many rowsets for incremental clone "
-                    "#rowset:$0 #rowset_for_full_clone:$1 switch to full clone $2",
-                    versions.size(), num_rowset_full_clone, _debug_version_info(false));
+                    "get_rowsets_for_snapshot: too many rowsets for incremental clone, reason:$0 "
+                    "#rowset:$1 #rowset_for_full_clone:$2 max_incremental_clone_version_ratio:$3 "
+                    "tablet_max_versions:$4 max_incremental_versions:$5 switch to full clone $6",
+                    reason, versions.size(), num_rowset_full_clone, config::max_incremental_clone_version_ratio,
+                    config::tablet_max_versions, max_incremental_versions, _debug_version_info(false));
             VLOG(1) << msg;
             return Status::OK();
         }
