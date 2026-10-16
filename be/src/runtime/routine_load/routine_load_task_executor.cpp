@@ -38,10 +38,12 @@
 #include <memory>
 #include <thread>
 
+#include "common/process_exit.h"
 #include "common/status.h"
 #include "runtime/routine_load/data_consumer_group.h"
 #include "runtime/routine_load/kafka_consumer_pipe.h"
 #include "runtime/stream_load/stream_load_context.h"
+#include "testutil/sync_point.h"
 #include "util/defer_op.h"
 #include "util/stopwatch.hpp"
 #include "util/uid_util.h"
@@ -269,6 +271,14 @@ Status RoutineLoadTaskExecutor::submit_task(const TRoutineLoadTask& task) {
         return Status::OK();
     }
 
+    // Drain-visible before the admission check so wait_for_finish cannot sample 0 while
+    // this RPC is still in submit_task / queued.
+    inc_shutdown_work();
+    if (!should_accept_new_request()) {
+        dec_shutdown_work();
+        return Status::ServiceUnavailable("Service is shutting down, please retry later!");
+    }
+
     // create the context
     auto* ctx = new StreamLoadContext(_exec_env);
     ctx->load_type = TLoadType::ROUTINE_LOAD;
@@ -322,6 +332,7 @@ Status RoutineLoadTaskExecutor::submit_task(const TRoutineLoadTask& task) {
     default:
         LOG(WARNING) << "unknown load source type: " << task.type;
         delete ctx;
+        dec_shutdown_work();
         return Status::InternalError("unknown load source type");
     }
 
@@ -343,7 +354,16 @@ Status RoutineLoadTaskExecutor::submit_task(const TRoutineLoadTask& task) {
                                             if (ctx->unref()) {
                                                 delete ctx;
                                             }
-                                        }] { exec_task(ctx, capture0, capture1); })
+                                            dec_shutdown_work();
+                                        }] {
+                     bool skip_exec = false;
+                     TEST_SYNC_POINT_CALLBACK("RoutineLoadTaskExecutor::submit_task:before_exec", &skip_exec);
+                     if (skip_exec) {
+                         capture1(ctx);
+                     } else {
+                         exec_task(ctx, capture0, capture1, true);
+                     }
+                 })
                  .ok()) {
         // failed to submit task, clear and return
         LOG(WARNING) << "failed to submit routine load task: " << ctx->brief();
@@ -351,6 +371,7 @@ Status RoutineLoadTaskExecutor::submit_task(const TRoutineLoadTask& task) {
         if (ctx->unref()) {
             delete ctx;
         }
+        dec_shutdown_work();
         return Status::InternalError("failed to submit routine load task");
     } else {
         LOG(INFO) << "submit a new routine load task: " << ctx->brief() << ", current tasks num: " << _task_map.size();
@@ -359,7 +380,7 @@ Status RoutineLoadTaskExecutor::submit_task(const TRoutineLoadTask& task) {
 }
 
 void RoutineLoadTaskExecutor::exec_task(StreamLoadContext* ctx, DataConsumerPool* consumer_pool,
-                                        const ExecFinishCallback& cb) {
+                                        const ExecFinishCallback& cb, bool admission_already_granted) {
 #define HANDLE_ERROR(stmt, err_msg)                                       \
     do {                                                                  \
         Status _status_ = (stmt);                                         \
@@ -413,7 +434,8 @@ void RoutineLoadTaskExecutor::exec_task(StreamLoadContext* ctx, DataConsumerPool
     HANDLE_ERROR(_exec_env->load_stream_mgr()->put(ctx->id, pipe), "failed to add pipe")
 
     // execute plan fragment, async
-    HANDLE_ERROR(_exec_env->stream_load_executor()->execute_plan_fragment(ctx), "failed to execute plan fragment")
+    HANDLE_ERROR(_exec_env->stream_load_executor()->execute_plan_fragment(ctx, admission_already_granted),
+                 "failed to execute plan fragment")
 
     // start to consume, this may block a while
     HANDLE_ERROR(consumer_grp->start_all(ctx), "consuming failed")
