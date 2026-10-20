@@ -2005,6 +2005,15 @@ Starting from version 3.3.0, the system defaults to refreshing one partition at 
 - Description: Whether to select local replicas for queries. Local replicas reduce the network transmission cost. If this parameter is set to TRUE, the CBO preferentially selects tablet replicas on BEs that have the same IP address as the current FE. If this parameter is set to `FALSE`, both local replicas and non-local replicas can be selected.
 - Introduced in: -
 
+##### load_primary_replica_version_lag_tolerance
+
+- Default: 64
+- Type: Long
+- Unit: Versions
+- Is mutable: Yes
+- Description: For shared-nothing tables using replicated storage, the maximum gap below the partition visible version that does not lower a replica's load-primary preference. Replicas within this tolerance compete with caught-up replicas using reported version pressure and primary-assignment balancing. Larger gaps lower preference but do not exclude a replica or change write quorum. Error and write-failure penalties remain in effect. Set to `0` for strict catch-up preference; negative values are treated as `0`. Applies to both ordinary and colocated primary selection during initial load planning.
+- Introduced in: -
+
 ##### max_distribution_pruner_recursion_depth
 
 - Default: 100
