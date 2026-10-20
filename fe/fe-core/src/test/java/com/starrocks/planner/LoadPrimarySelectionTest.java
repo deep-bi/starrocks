@@ -27,6 +27,7 @@ import com.starrocks.catalog.PhysicalPartition;
 import com.starrocks.catalog.Replica;
 import com.starrocks.catalog.Tablet;
 import com.starrocks.catalog.TabletMeta;
+import com.starrocks.common.Config;
 import com.starrocks.common.FeConstants;
 import com.starrocks.load.streamload.StreamLoadInfo;
 import com.starrocks.qe.ConnectContext;
@@ -51,6 +52,7 @@ import com.starrocks.utframe.UtFrameUtils;
 import mockit.Mock;
 import mockit.MockUp;
 import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -73,6 +75,7 @@ public class LoadPrimarySelectionTest {
     private SystemInfoService infoService;
     private List<Replica> replicas;
     private Map<Long, Long> assignments;
+    private long originalVersionLagTolerance;
 
     @BeforeAll
     public static void beforeClass() throws Exception {
@@ -87,6 +90,8 @@ public class LoadPrimarySelectionTest {
 
     @BeforeEach
     public void setUp() {
+        originalVersionLagTolerance = Config.load_primary_replica_version_lag_tolerance;
+        Config.load_primary_replica_version_lag_tolerance = 64;
         infoService = new SystemInfoService();
         replicas = new ArrayList<>();
         assignments = new HashMap<>();
@@ -96,6 +101,11 @@ public class LoadPrimarySelectionTest {
             infoService.addBackend(backend);
             replicas.add(replica(id, 100, 100));
         }
+    }
+
+    @AfterEach
+    public void tearDown() {
+        Config.load_primary_replica_version_lag_tolerance = originalVersionLagTolerance;
     }
 
     private static Replica replica(long backendId, long version, long count) {
@@ -115,15 +125,16 @@ public class LoadPrimarySelectionTest {
 
     @Test
     public void testCatchUpBeforePressureAndBalancing() {
-        replicas.set(0, replica(1, 90, 1));
+        replicas.set(0, replica(1, 35, 1));
         assignments.put(2L, 10L);
         assignments.put(3L, 11L);
         Assertions.assertEquals(2, primary());
 
-        // catch up alone does not make an overloaded replica a preferred primary
-        replicas.get(0).updateVersion(100);
+        // Tolerated lag must not make an overloaded replica a preferred primary.
+        replicas.get(0).updateVersion(36);
         replicas.get(0).setVersionCount(2048);
         Assertions.assertEquals(2, primary());
+        replicas.get(0).updateVersion(100);
         replicas.get(0).setVersionCount(100);
         Assertions.assertEquals(1, primary());
 
@@ -133,10 +144,73 @@ public class LoadPrimarySelectionTest {
         Assertions.assertEquals(2, primary());
     }
 
+    @ParameterizedTest(name = "tolerance={0}, lag={1}, preferred={2}")
+    @CsvSource({
+            "0, 0, true", "0, 1, false", "16, 16, true", "16, 17, false",
+            "64, -1, true", "64, 0, true", "64, 1, true", "64, 63, true", "64, 64, true", "64, 65, false",
+            "128, 128, true", "128, 129, false", "-1, 0, true", "-1, 1, false"
+    })
+    public void testVersionLagToleranceBoundary(long tolerance, long lag, boolean preferred) {
+        Config.load_primary_replica_version_lag_tolerance = tolerance;
+        replicas = new ArrayList<>(List.of(replica(1, 1000 - lag, 100),
+                replica(2, 1000, 100), replica(3, 1000, 100)));
+        assignments.put(2L, 1L);
+        assignments.put(3L, 2L);
+        int selected = OlapTableSink.findPrimaryReplica(assignments, infoService, 1, 1000, replicas, List.of());
+        Assertions.assertEquals(preferred ? 1L : 2L, replicas.get(selected).getBackendId());
+    }
+
+    @Test
+    public void testVersionLagToleranceUpdatesTakeEffect() {
+        replicas.set(0, replica(1, 99, 100));
+        assignments.put(2L, 1L);
+        assignments.put(3L, 2L);
+        Config.load_primary_replica_version_lag_tolerance = 0;
+        Assertions.assertEquals(2, primary());
+        Config.load_primary_replica_version_lag_tolerance = 64;
+        Assertions.assertEquals(1, primary());
+        Config.load_primary_replica_version_lag_tolerance = 0;
+        Assertions.assertEquals(2, primary());
+    }
+
+    @Test
+    public void testVersionLagToleranceHandlesUnknownAndLargeVersions() {
+        Config.load_primary_replica_version_lag_tolerance = Long.MAX_VALUE;
+        replicas.set(0, replica(1, -1, 100));
+        assignments.put(2L, 1L);
+        assignments.put(3L, 2L);
+        Assertions.assertEquals(2, primary());
+
+        Config.load_primary_replica_version_lag_tolerance = 64;
+        for (long lag : new long[] {64, 65}) {
+            replicas = new ArrayList<>(List.of(replica(1, Long.MAX_VALUE - lag, 100),
+                    replica(2, Long.MAX_VALUE, 100), replica(3, Long.MAX_VALUE, 100)));
+            int selected = OlapTableSink.findPrimaryReplica(assignments, infoService, 1, Long.MAX_VALUE, replicas, List.of());
+            Assertions.assertEquals(lag == 64 ? 1L : 2L, replicas.get(selected).getBackendId());
+        }
+    }
+
+    @ParameterizedTest(name = "lag={0}, colocated={1}")
+    @CsvSource({"64, true", "65, false"})
+    public void testColocatedSelectionUsesVersionLagTolerance(long lag, boolean colocated) {
+        long visibleVersion = 100 + lag;
+        replicas.get(0).updateVersion(visibleVersion);
+        LocalTablet base = new LocalTablet(10);
+        replicas.forEach(replica -> base.addReplica(replica, false));
+        LocalTablet mv = new LocalTablet(11);
+        for (long backendId = 1; backendId <= 3; backendId++) {
+            mv.addReplica(replica(backendId, backendId == 2 ? visibleVersion : 100, 100), false);
+        }
+        int selected = OlapTableSink.findPrimaryReplica(assignments, infoService, base.getId(), visibleVersion,
+                replicas, List.of(base, mv));
+        Assertions.assertEquals(colocated, selected >= 0);
+    }
+
     @Test
     public void testReportedFailuresAndRecovery() {
         assignments.put(2L, 1L);
         assignments.put(3L, 2L);
+        replicas.set(0, replica(1, 99, 100));
         Replica first = replicas.get(0);
         first.setIsErrorState(true);
         Assertions.assertEquals(2, primary());
@@ -523,8 +597,9 @@ public class LoadPrimarySelectionTest {
         table.setWriteQuorum("ALL");
         PhysicalPartition partition = table.getAllPhysicalPartitions().iterator().next();
         boolean versionLag = degradation.equals("version_lag");
+        long visibleVersion = 100 + Config.load_primary_replica_version_lag_tolerance + 1;
         if (versionLag) {
-            partition.updateVisibleVersion(101);
+            partition.updateVisibleVersion(visibleVersion);
         }
         Map<Long, Long> expectedPrimaries = new HashMap<>();
         List<MaterializedIndex> indexes = partition.getMaterializedIndices(MaterializedIndex.IndexExtState.ALL);
@@ -536,7 +611,7 @@ public class LoadPrimarySelectionTest {
                     replica.setVersionCount(100);
                     if (replica.getBackendId() == healthyBackendId) {
                         if (versionLag) {
-                            replica.updateVersion(101);
+                            replica.updateVersion(visibleVersion);
                         }
                     } else {
                         switch (degradation) {
@@ -574,16 +649,19 @@ public class LoadPrimarySelectionTest {
                 () -> Assertions.assertEquals(table.writeQuorum(), fallback.getWrite_quorum_type()));
     }
 
-    @ParameterizedTest(name = "colocated={0}, stream={1}")
-    @CsvSource({"false, false", "false, true", "true, false", "true, true"})
-    public void testAllReplicasOneVersionBehindStillPlan(boolean colocated, boolean stream) throws Exception {
-        OlapTable table = createTable("all_replicas_lagging_" + colocated + "_" + stream);
+    @ParameterizedTest(name = "colocated={0}, stream={1}, lag={2}")
+    @CsvSource({
+            "false, false, 1", "false, true, 1", "true, false, 1", "true, true, 1",
+            "false, false, 65", "false, true, 65", "true, false, 65", "true, true, 65"
+    })
+    public void testAllReplicasLaggingStillPlan(boolean colocated, boolean stream, long lag) throws Exception {
+        OlapTable table = createTable("all_replicas_lagging_" + colocated + "_" + stream + "_" + lag);
         addColocatedIndexes(table);
         table.setWriteQuorum("ALL");
         Set<Long> expectedTablets = new HashSet<>();
         for (PhysicalPartition partition : table.getAllPhysicalPartitions()) {
             // Model a visible-version advance before the corresponding replica reports arrive.
-            partition.updateVisibleVersion(101);
+            partition.updateVisibleVersion(100 + lag);
             for (MaterializedIndex index : partition.getMaterializedIndices(MaterializedIndex.IndexExtState.ALL)) {
                 for (Tablet tablet : index.getTablets()) {
                     expectedTablets.add(tablet.getId());
@@ -601,6 +679,11 @@ public class LoadPrimarySelectionTest {
             }
         };
         TOlapTableSink sink = stream ? streamSink(table) : sqlSink(table);
+        Assertions.assertEquals(colocated, sink.isEnable_colocate_mv_index(),
+                "Uniform report lag must not disable colocated loading");
+        if (colocated) {
+            assertCommonPrimaries(sink);
+        }
         Assertions.assertTrue(sink.isEnable_replicated_storage());
         Assertions.assertEquals(table.writeQuorum(), sink.getWrite_quorum_type());
         Assertions.assertEquals(expectedTablets.size(), sink.getLocation().getTabletsSize());
@@ -611,6 +694,39 @@ public class LoadPrimarySelectionTest {
             Assertions.assertEquals(Set.of(10001L, 10002L, 10003L), new HashSet<>(location.getNode_ids()));
         }
         Assertions.assertEquals(expectedTablets, actualTablets);
+    }
+
+    @ParameterizedTest(name = "stream={0}, lag={1}")
+    @CsvSource({"false, 1", "true, 1", "false, 65", "true, 65"})
+    public void testUniformIndexLagKeepsColocatedLoading(boolean stream, long lag) throws Exception {
+        OlapTable table = createTable("uniform_index_lag_" + stream + "_" + lag);
+        addColocatedIndexes(table);
+        table.setWriteQuorum("ALL");
+        for (PhysicalPartition partition : table.getAllPhysicalPartitions()) {
+            partition.updateVisibleVersion(100 + lag);
+            // Only the base index has caught up; every replica of each MV index is uniformly behind.
+            for (Tablet tablet : partition.getBaseIndex().getTablets()) {
+                for (Replica replica : ((LocalTablet) tablet).getImmutableReplicas()) {
+                    replica.updateVersion(100 + lag);
+                }
+            }
+        }
+        new MockUp<OlapTable>() {
+            @Mock
+            public boolean isEnableColocateMVIndex() {
+                return true;
+            }
+        };
+        TOlapTableSink sink = stream ? streamSink(table) : sqlSink(table);
+        Assertions.assertTrue(sink.isEnable_colocate_mv_index(),
+                "Independent selection cannot improve the health of any tablet");
+        assertCommonPrimaries(sink);
+        Assertions.assertTrue(sink.isEnable_replicated_storage());
+        Assertions.assertEquals(table.writeQuorum(), sink.getWrite_quorum_type());
+        Assertions.assertEquals(18, sink.getLocation().getTabletsSize());
+        for (TTabletLocation location : sink.getLocation().getTablets()) {
+            Assertions.assertEquals(Set.of(10001L, 10002L, 10003L), new HashSet<>(location.getNode_ids()));
+        }
     }
 
     @Test
