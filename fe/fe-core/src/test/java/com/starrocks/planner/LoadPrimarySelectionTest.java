@@ -174,14 +174,22 @@ public class LoadPrimarySelectionTest {
     }
 
     @Test
-    public void testVersionLagToleranceHandlesUnknownAndLargeVersions() {
+    public void testHighVersionLagToleranceKeepsLaggingReplicaEligible() {
         Config.load_primary_replica_version_lag_tolerance = Long.MAX_VALUE;
-        replicas.set(0, replica(1, -1, 100));
+        // Use initialized replicas: a high tolerance allows even a large known version gap.
+        replicas = new ArrayList<>(List.of(replica(1, 1, 100),
+                replica(2, Long.MAX_VALUE, 100), replica(3, Long.MAX_VALUE, 100)));
         assignments.put(2L, 1L);
         assignments.put(3L, 2L);
-        Assertions.assertEquals(2, primary());
+        int selected = OlapTableSink.findPrimaryReplica(assignments, infoService, 1, Long.MAX_VALUE, replicas, List.of());
+        Assertions.assertEquals(1L, replicas.get(selected).getBackendId());
+    }
 
+    @Test
+    public void testVersionLagToleranceHandlesLargeVersions() {
         Config.load_primary_replica_version_lag_tolerance = 64;
+        assignments.put(2L, 1L);
+        assignments.put(3L, 2L);
         for (long lag : new long[] {64, 65}) {
             replicas = new ArrayList<>(List.of(replica(1, Long.MAX_VALUE - lag, 100),
                     replica(2, Long.MAX_VALUE, 100), replica(3, Long.MAX_VALUE, 100)));
@@ -204,6 +212,36 @@ public class LoadPrimarySelectionTest {
         int selected = OlapTableSink.findPrimaryReplica(assignments, infoService, base.getId(), visibleVersion,
                 replicas, List.of(base, mv));
         Assertions.assertEquals(colocated, selected >= 0);
+    }
+
+    @ParameterizedTest(name = "tolerance={0}, lag={1}, colocated={2}")
+    @CsvSource({"0, 1, false", "64, 64, true", "64, 65, false", "128, 128, true", "128, 129, false"})
+    public void testUniformColocatedLagRespectsTolerance(long tolerance, long lag, boolean colocated) {
+        Config.load_primary_replica_version_lag_tolerance = tolerance;
+        LocalTablet base = new LocalTablet(10);
+        replicas.forEach(replica -> base.addReplica(replica, false));
+        LocalTablet mv = new LocalTablet(11);
+        for (long backendId = 1; backendId <= 3; backendId++) {
+            mv.addReplica(replica(backendId, 100, 100), false);
+        }
+        int selected = OlapTableSink.findPrimaryReplica(assignments, infoService, base.getId(), 100 + lag,
+                replicas, List.of(base, mv));
+        Assertions.assertEquals(colocated, selected >= 0,
+                "Uniform lag beyond tolerance must trigger independent loading");
+        Assertions.assertTrue(OlapTableSink.findPrimaryReplica(assignments, infoService, base.getId(), 100 + lag,
+                replicas, List.of()) >= 0, "Lagging replicas must remain available for independent loading");
+    }
+
+    @Test
+    public void testUniformWriteFailuresDisableColocatedLoading() {
+        LocalTablet base = new LocalTablet(10);
+        replicas.forEach(replica -> {
+            replica.setLastWriteFail(true);
+            base.addReplica(replica, false);
+        });
+        Assertions.assertEquals(-1, OlapTableSink.findPrimaryReplica(assignments, infoService, base.getId(), 100,
+                replicas, List.of(base)));
+        Assertions.assertTrue(primary() > 0, "Failed replicas must remain independent fallback candidates");
     }
 
     @Test
@@ -649,13 +687,16 @@ public class LoadPrimarySelectionTest {
                 () -> Assertions.assertEquals(table.writeQuorum(), fallback.getWrite_quorum_type()));
     }
 
-    @ParameterizedTest(name = "colocated={0}, stream={1}, lag={2}")
+    @ParameterizedTest(name = "colocated={0}, stream={1}, tolerance={2}, lag={3}")
     @CsvSource({
-            "false, false, 1", "false, true, 1", "true, false, 1", "true, true, 1",
-            "false, false, 65", "false, true, 65", "true, false, 65", "true, true, 65"
+            "false, false, 64, 64", "false, true, 64, 64", "true, false, 64, 64", "true, true, 64, 64",
+            "false, false, 64, 65", "false, true, 64, 65", "true, false, 64, 65", "true, true, 64, 65",
+            "false, false, 128, 128", "false, true, 128, 128", "true, false, 128, 128", "true, true, 128, 128",
+            "false, false, 128, 129", "false, true, 128, 129", "true, false, 128, 129", "true, true, 128, 129"
     })
-    public void testAllReplicasLaggingStillPlan(boolean colocated, boolean stream, long lag) throws Exception {
-        OlapTable table = createTable("all_replicas_lagging_" + colocated + "_" + stream + "_" + lag);
+    public void testAllReplicasLaggingStillPlan(boolean colocated, boolean stream, long tolerance, long lag) throws Exception {
+        Config.load_primary_replica_version_lag_tolerance = tolerance;
+        OlapTable table = createTable("all_replicas_lagging_" + colocated + "_" + stream + "_" + tolerance + "_" + lag);
         addColocatedIndexes(table);
         table.setWriteQuorum("ALL");
         Set<Long> expectedTablets = new HashSet<>();
@@ -679,9 +720,10 @@ public class LoadPrimarySelectionTest {
             }
         };
         TOlapTableSink sink = stream ? streamSink(table) : sqlSink(table);
-        Assertions.assertEquals(colocated, sink.isEnable_colocate_mv_index(),
-                "Uniform report lag must not disable colocated loading");
-        if (colocated) {
+        boolean expectedColocation = colocated && lag <= tolerance;
+        Assertions.assertEquals(expectedColocation, sink.isEnable_colocate_mv_index(),
+                "Colocated loading must fall back when uniform lag exceeds the tolerance");
+        if (expectedColocation) {
             assertCommonPrimaries(sink);
         }
         Assertions.assertTrue(sink.isEnable_replicated_storage());
@@ -696,10 +738,14 @@ public class LoadPrimarySelectionTest {
         Assertions.assertEquals(expectedTablets, actualTablets);
     }
 
-    @ParameterizedTest(name = "stream={0}, lag={1}")
-    @CsvSource({"false, 1", "true, 1", "false, 65", "true, 65"})
-    public void testUniformIndexLagKeepsColocatedLoading(boolean stream, long lag) throws Exception {
-        OlapTable table = createTable("uniform_index_lag_" + stream + "_" + lag);
+    @ParameterizedTest(name = "stream={0}, tolerance={1}, lag={2}")
+    @CsvSource({
+            "false, 64, 1", "true, 64, 1", "false, 64, 64", "true, 64, 64", "false, 64, 65", "true, 64, 65",
+            "false, 128, 128", "true, 128, 128", "false, 128, 129", "true, 128, 129"
+    })
+    public void testUniformIndexLagRespectsTolerance(boolean stream, long tolerance, long lag) throws Exception {
+        Config.load_primary_replica_version_lag_tolerance = tolerance;
+        OlapTable table = createTable("uniform_index_lag_" + stream + "_" + tolerance + "_" + lag);
         addColocatedIndexes(table);
         table.setWriteQuorum("ALL");
         for (PhysicalPartition partition : table.getAllPhysicalPartitions()) {
@@ -718,9 +764,12 @@ public class LoadPrimarySelectionTest {
             }
         };
         TOlapTableSink sink = stream ? streamSink(table) : sqlSink(table);
-        Assertions.assertTrue(sink.isEnable_colocate_mv_index(),
-                "Independent selection cannot improve the health of any tablet");
-        assertCommonPrimaries(sink);
+        boolean expectedColocation = lag <= tolerance;
+        Assertions.assertEquals(expectedColocation, sink.isEnable_colocate_mv_index(),
+                "Uniform MV lag beyond tolerance must trigger independent loading");
+        if (expectedColocation) {
+            assertCommonPrimaries(sink);
+        }
         Assertions.assertTrue(sink.isEnable_replicated_storage());
         Assertions.assertEquals(table.writeQuorum(), sink.getWrite_quorum_type());
         Assertions.assertEquals(18, sink.getLocation().getTabletsSize());

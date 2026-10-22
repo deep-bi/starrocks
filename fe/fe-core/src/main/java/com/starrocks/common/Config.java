@@ -2443,7 +2443,7 @@ public class Config extends ConfigBase {
      * Zero requires full catch-up for the preferred tier; negative values are treated as zero.
      */
     @ConfField(mutable = true, comment = "Tolerated version lag for load-primary preference; not an eligibility limit")
-    public static long load_primary_replica_version_lag_tolerance = 64;
+    public static long load_primary_replica_version_lag_tolerance = 128;
 
     /**
      * This will limit the max recursion depth of hash distribution pruner.
