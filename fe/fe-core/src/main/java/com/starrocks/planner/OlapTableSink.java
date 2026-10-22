@@ -991,6 +991,11 @@ public class OlapTableSink extends DataSink {
             }
         }
 
+        if (!colocatedTablets.isEmpty() && bestHealth > 0) {
+            // try independent primaries before accepting a degraded common candidate
+            return -1;
+        }
+
         PrimaryReplicaCandidate best = null;
         for (PrimaryReplicaCandidate candidate : candidates) {
             // balance within the lowest and adjacent pressure bands in the best health tier
@@ -1005,38 +1010,7 @@ public class OlapTableSink extends DataSink {
                 best = candidate;
             }
         }
-        if (best != null && best.health() > 0 && !colocatedTablets.isEmpty()
-                && hasHealthierIndependentPrimary(infoService, visibleVersion, versionLagTolerance,
-                        colocatedTablets, best.backendId())) {
-            return -1;
-        }
         return best == null ? -1 : best.index();
-    }
-
-    private static boolean hasHealthierIndependentPrimary(SystemInfoService infoService, long visibleVersion,
-                                                          long versionLagTolerance, List<LocalTablet> colocatedTablets,
-                                                          long primaryBackendId) {
-        Backend primaryBackend = infoService.getBackend(primaryBackendId);
-        if (primaryBackend == null) {
-            return true;
-        }
-        for (LocalTablet tablet : colocatedTablets) {
-            Replica primaryReplica = tablet.getReplicaByBackendId(primaryBackendId);
-            if (primaryReplica == null) {
-                return true;
-            }
-            int primaryHealth = primaryReplicaHealth(primaryReplica, primaryBackend, visibleVersion, versionLagTolerance);
-            // Compare each tablet separately: another index may be caught up even when this one is uniformly behind.
-            // Keep the common primary unless an eligible independent primary would improve this tablet's health.
-            for (Replica replica : tablet.getNormalReplicaBackendPathMap(infoService, true).keySet()) {
-                Backend backend = infoService.getBackend(replica.getBackendId());
-                if (backend != null && backend.isAlive()
-                        && primaryReplicaHealth(replica, backend, visibleVersion, versionLagTolerance) < primaryHealth) {
-                    return true;
-                }
-            }
-        }
-        return false;
     }
 
     private static int primaryReplicaHealth(Replica replica, Backend backend, long visibleVersion, long versionLagTolerance) {
@@ -1044,11 +1018,7 @@ public class OlapTableSink extends DataSink {
         // degraded replicas remain deterministic fallbacks for independent selection, and remain available as secondaries
         int health = replica.isErrorState() || replica.getLastWriteFail() || backend.getLastWriteFail()
                 || replica.getLastFailedVersion() > 0 ? 2 : 0;
-        long replicaVersion = replica.getVersion();
-        // Negative versions are unknown; subtract only nonnegative versions to avoid overflow.
-        boolean caughtUp = replicaVersion >= visibleVersion
-                || (replicaVersion >= 0 && visibleVersion - replicaVersion <= versionLagTolerance);
-        return health + (caughtUp ? 0 : 1);
+        return health + (visibleVersion - replica.getVersion() <= versionLagTolerance ? 0 : 1);
     }
 
     private static int primaryReplicaVersionPressure(Replica replica) {

@@ -2007,7 +2007,7 @@ Starting from version 3.3.0, the system defaults to refreshing one partition at 
 
 ##### load_primary_replica_version_lag_tolerance
 
-- Default: 64
+- Default: 128
 - Type: Long
 - Unit: Versions
 - Is mutable: Yes
