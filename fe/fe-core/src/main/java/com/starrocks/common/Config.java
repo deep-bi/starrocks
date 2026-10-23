@@ -2641,6 +2641,14 @@ public class Config extends ConfigBase {
     public static boolean enable_local_replica_selection = false;
 
     /**
+     * Maximum lag behind the partition visible version before lowering a load primary's preference.
+     * Applies to replicated-storage loading. This does not exclude replicas or change write quorum.
+     * Zero requires full catch-up for the preferred tier; negative values are treated as zero.
+     */
+    @ConfField(mutable = true, comment = "Tolerated version lag for load-primary preference; not an eligibility limit")
+    public static long load_primary_replica_version_lag_tolerance = 128;
+
+    /**
      * This will limit the max recursion depth of hash distribution pruner.
      * eg: where `a` in (5 elements) and `b` in (4 elements) and `c` in (3 elements) and `d` in (2 elements).
      * a/b/c/d are distribution columns, so the recursion depth will be 5 * 4 * 3 * 2 = 120, larger than 100,

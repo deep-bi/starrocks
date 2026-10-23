@@ -1045,6 +1045,15 @@ Starting from version 3.3.0, the system defaults to refreshing one partition at 
 - Description: Controls the number of parallel load fragment instances created on a single host for broker and stream loads. LoadPlanner uses this value as the per-host degree of parallelism unless the session enables adaptive sink DOP; if the session variable `enable_adaptive_sink_dop` is true, the session`s `sink_degree_of_parallelism` overrides this configuration. When shuffle is required, this value is applied to fragment parallel execution (scan fragment and sink fragment parallel exec instances). When no shuffle is needed, it is used as the sink pipeline DOP. Note: loads from local files are forced to a single instance (pipeline DOP = 1, parallel exec = 1) to avoid local disk contention. Increasing this number raises per-host concurrency and throughput but may increase CPU, memory and I/O contention.
 - Introduced in: v3.2.0
 
+### `load_primary_replica_version_lag_tolerance`
+
+- Default: 128
+- Type: Long
+- Unit: Versions
+- Is mutable: Yes
+- Description: For shared-nothing tables using replicated storage, the maximum gap below the partition visible version that does not lower a replica's load-primary preference. Replicas within this tolerance compete with caught-up replicas using reported version pressure and primary-assignment balancing. Larger gaps lower preference but do not exclude a replica or change write quorum. Error and write-failure penalties remain in effect. Set to `0` for strict catch-up preference; negative values are treated as `0`. Applies to both ordinary and colocated primary selection during initial load planning.
+- Introduced in: -
+
 ### `load_straggler_wait_second`
 
 - Default: 300
