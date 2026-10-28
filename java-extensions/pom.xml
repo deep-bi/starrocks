@@ -36,7 +36,7 @@
         <hadoop.version>3.4.3</hadoop.version>
         <zookeeper.version>3.8.7</zookeeper.version>
         <iceberg.version>1.10.0</iceberg.version>
-        <log4j2.version>2.23.1</log4j2.version>
+        <log4j2.version>2.25.4</log4j2.version>
         <junit.version>5.10.3</junit.version>
         <hive-apache.version>3.1.2-22</hive-apache.version>
         <jni-connector.version>1.0.0</jni-connector.version>
@@ -45,7 +45,8 @@
         <io.netty.version>4.1.138.Final</io.netty.version>
         <protobuf-java.version>3.25.5</protobuf-java.version>
         <nimbusds.version>9.37.2</nimbusds.version>
-        <commons-io.version>2.14.0</commons-io.version>
+        <!-- commons-configuration2 2.15.0 needs commons-io 2.22.0 (HomeDirectoryLocationStrategy$Builder) -->
+        <commons-io.version>2.22.0</commons-io.version>
         <gcs.connector.version>3.0.13</gcs.connector.version>
         <slf4j.version>1.7.36</slf4j.version>
         <arrow.version>17.0.0</arrow.version>
@@ -475,6 +476,13 @@
                 <groupId>org.apache.commons</groupId>
                 <artifactId>commons-lang3</artifactId>
                 <version>3.18.0</version>
+            </dependency>
+            <!-- hadoop-common 3.4.3 brings commons-configuration2 2.10.1 (CVE fixed in 2.15.0);
+                 it ships in hadoop-lib and the hive/iceberg reader libs -->
+            <dependency>
+                <groupId>org.apache.commons</groupId>
+                <artifactId>commons-configuration2</artifactId>
+                <version>2.15.0</version>
             </dependency>
             <!-- hadoop-yarn-common drags in 2.12.7 copies of these; keep them
                  aligned with the managed jackson version -->
