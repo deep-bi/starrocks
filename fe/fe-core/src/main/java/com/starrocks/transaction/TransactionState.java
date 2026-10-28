@@ -266,6 +266,9 @@ public class TransactionState implements Writable, GsonPreProcessable {
     // these states need not be serialized
     private final Map<Long, PublishVersionTask> publishVersionTasks; // Only for OlapTable
     private boolean hasSendTask;
+    // true while COMMITTED is visible in memory but its journal entry is not yet durable. publishing in this
+    // window lets BEs apply a version that a restarted or new leader FE would not know about.
+    private volatile boolean commitJournalPending;
     private long publishVersionTime = -1;
     private long publishVersionFinishTime = -1;
 
@@ -564,6 +567,14 @@ public class TransactionState implements Writable, GsonPreProcessable {
 
     public boolean hasSendTask() {
         return this.hasSendTask;
+    }
+
+    public void setCommitJournalPending(boolean commitJournalPending) {
+        this.commitJournalPending = commitJournalPending;
+    }
+
+    public boolean isCommitJournalPending() {
+        return commitJournalPending;
     }
 
     public TUniqueId getRequestId() {
