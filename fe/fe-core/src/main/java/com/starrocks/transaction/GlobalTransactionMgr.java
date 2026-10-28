@@ -654,7 +654,7 @@ public class GlobalTransactionMgr implements MemoryTrackable {
             if (nodep) {
                 transactionStateList.addAll(dbTransactionMgr.getReadyToPublishTxnList());
             } else {
-                transactionStateList.addAll(dbTransactionMgr.getCommittedTxnList());
+                transactionStateList.addAll(dbTransactionMgr.getPublishableCommittedTxnList());
             }
         }
         return transactionStateList;
