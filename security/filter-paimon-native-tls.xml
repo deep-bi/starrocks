@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Copyright 2021-present StarRocks, Inc. All rights reserved.
+     Licensed under the Apache License, Version 2.0 -->
+<project name="paimon-java-tls" default="filter">
+    <target name="filter">
+        <property name="paimon.input.jar" location="${paimon.lib.dir}/paimon-s3-${paimon.version}.jar"/>
+        <property name="paimon.output.jar" location="${paimon.lib.dir}/paimon-s3-${paimon.version}-starrocks-jsse.jar"/>
+        <!-- This exact upstream 1.3.1 artifact is unsigned. The checksum also rejects
+             changed or newly signed inputs rather than invalidating their signatures. -->
+        <checksum file="${paimon.input.jar}" algorithm="SHA-256" property="paimon.input.sha256"/>
+        <fail message="Unexpected paimon-s3 artifact; review its signatures and native TLS contents before updating the filter">
+            <condition>
+                <not>
+                    <equals arg1="${paimon.input.sha256}"
+                            arg2="f103c3cd22590e92efad3a89414a718d4921041c32f181b74a3595c9d3a754f6"/>
+                </not>
+            </condition>
+        </fail>
+        <!-- Paimon's isolated AWS SDK cannot use the shared Hadoop HTTP policy.
+             Compile its factory against the exact classes it will load at runtime. -->
+        <dirname property="paimon.security.dir" file="${ant.file.paimon-java-tls}"/>
+        <property name="paimon.policy.build.dir" location="${paimon.lib.dir}/../paimon-s3-policy"/>
+        <delete dir="${paimon.policy.build.dir}" failonerror="true"/>
+        <unzip src="${paimon.input.jar}" dest="${paimon.policy.build.dir}/dependencies">
+            <patternset includes="paimon-plugin-s3/**/*.class"/>
+        </unzip>
+        <mkdir dir="${paimon.policy.build.dir}/classes"/>
+        <javac srcdir="${paimon.security.dir}/paimon-s3" destdir="${paimon.policy.build.dir}/classes"
+               release="17" encoding="UTF-8" includeantruntime="false">
+            <classpath path="${paimon.policy.build.dir}/dependencies/paimon-plugin-s3"/>
+            <compilerarg value="-proc:none"/>
+        </javac>
+        <!-- Preserve all entries except the native TLS binding and the HTTP factory.
+             Replace stale output only after checking the input and compiling the policy. -->
+        <delete file="${paimon.output.jar}" failonerror="true"/>
+        <zip destfile="${paimon.output.jar}">
+            <zipfileset src="${paimon.input.jar}"
+                        excludes="paimon-plugin-s3/org/wildfly/openssl/**,paimon-plugin-s3/META-INF/services/java.security.Provider,paimon-plugin-s3/**/*wfssl*,paimon-plugin-s3/com/amazonaws/http/apache/client/impl/ApacheHttpClientFactory.class"/>
+            <zipfileset dir="${paimon.policy.build.dir}/classes" prefix="paimon-plugin-s3"/>
+        </zip>
+        <delete file="${paimon.input.jar}" failonerror="true"/>
+    </target>
+</project>

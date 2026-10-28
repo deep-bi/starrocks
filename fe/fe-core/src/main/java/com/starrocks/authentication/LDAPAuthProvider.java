@@ -17,6 +17,7 @@ package com.starrocks.authentication;
 import com.google.common.base.Preconditions;
 import com.google.common.base.Strings;
 import com.starrocks.catalog.UserIdentity;
+import com.starrocks.common.Config;
 import com.starrocks.common.util.NetUtils;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -47,6 +48,7 @@ public class LDAPAuthProvider implements AuthenticationProvider {
     private final boolean useSSL;
     private final String trustStorePath;
     private final String trustStorePwd;
+    private final String trustStoreType;
     private final String ldapBindRootDN;
     private final String ldapBindRootPwd;
     private final String ldapBindBaseDN;
@@ -89,6 +91,17 @@ public class LDAPAuthProvider implements AuthenticationProvider {
                             String ldapBindDNPattern,
                             LdapGroupSource ldapGroupSource,
                             String ldapMemberOfAttr) {
+        this(ldapServerHost, ldapServerPort, useSSL, trustStorePath, trustStorePwd, ldapBindRootDN, ldapBindRootPwd,
+                ldapBindBaseDN, ldapSearchFilter, ldapUserDN, ldapBindDNPattern, ldapGroupSource, ldapMemberOfAttr,
+                Config.authentication_ldap_simple_ssl_conn_trust_store_type);
+    }
+
+    public LDAPAuthProvider(String ldapServerHost, int ldapServerPort, boolean useSSL,
+                            String trustStorePath, String trustStorePwd, String ldapBindRootDN,
+                            String ldapBindRootPwd, String ldapBindBaseDN, String ldapSearchFilter,
+                            String ldapUserDN, String ldapBindDNPattern, LdapGroupSource ldapGroupSource,
+                            String ldapMemberOfAttr, String trustStoreType) {
+        this.trustStoreType = trustStoreType;
         this.ldapGroupSource = ldapGroupSource == null ? LdapGroupSource.GROUP_PROVIDER : ldapGroupSource;
         this.ldapMemberOfAttr = Strings.isNullOrEmpty(ldapMemberOfAttr) ? "memberOf" : ldapMemberOfAttr;
         this.ldapServerHost = ldapServerHost;
@@ -363,10 +376,8 @@ public class LDAPAuthProvider implements AuthenticationProvider {
 
     private void setSSLContext(Hashtable<String, String> env) throws Exception {
         SSLContext sslContext = SslUtils.createSSLContext(
-                Optional.empty(), /* For now, we don't support server to verify us(client). */
-                Optional.empty(),
                 Strings.isNullOrEmpty(trustStorePath) ? Optional.empty() : Optional.of(new File(trustStorePath)),
-                Strings.isNullOrEmpty(trustStorePwd) ? Optional.empty() : Optional.of(trustStorePwd));
+                Strings.isNullOrEmpty(trustStorePwd) ? Optional.empty() : Optional.of(trustStorePwd), trustStoreType);
         LdapSslSocketFactory.setSslContextForCurrentThread(sslContext);
         // Refer to https://docs.oracle.com/javase/jndi/tutorial/ldap/security/ssl.html.
         env.put("java.naming.ldap.factory.socket", LdapSslSocketFactory.class.getName());

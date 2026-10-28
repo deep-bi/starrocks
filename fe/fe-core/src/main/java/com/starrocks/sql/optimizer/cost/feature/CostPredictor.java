@@ -16,6 +16,7 @@ package com.starrocks.sql.optimizer.cost.feature;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.starrocks.common.Config;
+import com.starrocks.connector.share.security.HttpAuthenticationPolicy;
 import com.starrocks.sql.plan.ExecPlan;
 import org.apache.http.HttpEntity;
 import org.apache.http.HttpStatus;
@@ -24,7 +25,6 @@ import org.apache.http.client.methods.HttpGet;
 import org.apache.http.client.methods.HttpPost;
 import org.apache.http.entity.StringEntity;
 import org.apache.http.impl.client.CloseableHttpClient;
-import org.apache.http.impl.client.HttpClients;
 import org.apache.http.util.EntityUtils;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -80,7 +80,7 @@ public abstract class CostPredictor {
                     TimeUnit.SECONDS);
         }
 
-        private final CloseableHttpClient httpClient = HttpClients.createDefault();
+        private final CloseableHttpClient httpClient = HttpAuthenticationPolicy.clientBuilder().build();
 
         /**
          * Return the singleton instance of predictor, which is thread-safe to be shared among threads

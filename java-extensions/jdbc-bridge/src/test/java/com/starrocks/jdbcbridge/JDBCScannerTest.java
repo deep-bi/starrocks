@@ -35,6 +35,65 @@ import java.util.List;
 public class JDBCScannerTest {
 
     @Test
+    public void testOracleDowngradeRejectedBeforeOpeningPool() throws Exception {
+        for (String setting : List.of("oracle.jdbc.allowedLogonVersion=12", "oracle.net.useJCEAPI=false")) {
+            JDBCScanContext context = new JDBCScanContext();
+            context.setDriverClassName("oracle.jdbc.OracleDriver");
+            context.setJdbcURL("jdbc:oracle:thin:@//127.0.0.1:1521/review?" + setting);
+            context.setUser("review-user");
+            context.setPassword("synthetic-review-password");
+            String driver = new java.io.File(Class.forName("oracle.jdbc.OracleDriver").getProtectionDomain()
+                    .getCodeSource().getLocation().toURI()).getPath();
+            JDBCScanner scanner = new JDBCScanner(driver, context);
+            ClassLoader original = Thread.currentThread().getContextClassLoader();
+            try {
+                IllegalArgumentException rejected = Assertions.assertThrows(IllegalArgumentException.class, scanner::open);
+                Assertions.assertTrue(rejected.getMessage().contains("Java FIPS requires oracle."), rejected.toString());
+            } finally {
+                Thread.currentThread().setContextClassLoader(original);
+            }
+        }
+    }
+
+    @Test
+    public void testPostgresMd5RejectedBeforeOpeningPool() throws Exception {
+        JDBCScanContext context = new JDBCScanContext();
+        context.setDriverClassName("org.postgresql.Driver");
+        context.setJdbcURL("jdbc:postgresql://127.0.0.1/review?requireAuth=md5");
+        context.setUser("review-user");
+        context.setPassword("synthetic-review-password");
+        String driver = new java.io.File(Class.forName("org.postgresql.Driver").getProtectionDomain()
+                .getCodeSource().getLocation().toURI()).getPath();
+        JDBCScanner scanner = new JDBCScanner(driver, context);
+        ClassLoader original = Thread.currentThread().getContextClassLoader();
+        try {
+            IllegalArgumentException rejected = Assertions.assertThrows(IllegalArgumentException.class, scanner::open);
+            Assertions.assertTrue(rejected.getMessage().contains("forbids PostgreSQL MD5"));
+        } finally {
+            Thread.currentThread().setContextClassLoader(original);
+        }
+    }
+
+    @Test
+    public void testMariaDbEd25519RejectedBeforeOpeningPool() throws Exception {
+        JDBCScanContext context = new JDBCScanContext();
+        context.setDriverClassName("org.mariadb.jdbc.Driver");
+        context.setJdbcURL("jdbc:mariadb://127.0.0.1/review?restrictedAuth=client_ed25519");
+        context.setUser("review-user");
+        context.setPassword("synthetic-review-password");
+        String driver = new java.io.File(Class.forName("org.mariadb.jdbc.Driver").getProtectionDomain()
+                .getCodeSource().getLocation().toURI()).getPath();
+        JDBCScanner scanner = new JDBCScanner(driver, context);
+        ClassLoader original = Thread.currentThread().getContextClassLoader();
+        try {
+            IllegalArgumentException rejected = Assertions.assertThrows(IllegalArgumentException.class, scanner::open);
+            Assertions.assertTrue(rejected.getMessage().contains("forbids MariaDB authentication plugin"));
+        } finally {
+            Thread.currentThread().setContextClassLoader(original);
+        }
+    }
+
+    @Test
     public void testOracleVarcharColumnDoesNotUseTemporalConversion() throws Exception {
         JDBCScanner scanner = createScanner("oracle.jdbc.driver.OracleDriver", "Asia/Shanghai", 1);
         setResultColumnClassNames(scanner, List.of("java.lang.String"));

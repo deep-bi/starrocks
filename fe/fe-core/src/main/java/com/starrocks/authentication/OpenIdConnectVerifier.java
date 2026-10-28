@@ -19,10 +19,15 @@ import com.nimbusds.jose.JOSEException;
 import com.nimbusds.jose.crypto.RSASSAVerifier;
 import com.nimbusds.jose.jwk.JWK;
 import com.nimbusds.jose.jwk.JWKSet;
+import com.nimbusds.jose.jwk.RSAKey;
 import com.nimbusds.jwt.JWTClaimsSet;
 import com.nimbusds.jwt.SignedJWT;
+import com.starrocks.common.util.CryptoUtils;
 
+import java.security.GeneralSecurityException;
+import java.security.KeyFactory;
 import java.security.interfaces.RSAPublicKey;
+import java.security.spec.RSAPublicKeySpec;
 import java.text.ParseException;
 import java.util.Arrays;
 import java.util.Date;
@@ -67,7 +72,8 @@ public class OpenIdConnectVerifier {
         }
     }
 
-    private static SignedJWT verifyJWT(String jwt, JWKSet jwkSet) throws AuthenticationException, ParseException, JOSEException {
+    private static SignedJWT verifyJWT(String jwt, JWKSet jwkSet)
+            throws AuthenticationException, ParseException, JOSEException, GeneralSecurityException {
         Preconditions.checkNotNull(jwt);
 
         SignedJWT signedJWT = SignedJWT.parse(jwt);
@@ -78,8 +84,15 @@ public class OpenIdConnectVerifier {
             throw new AuthenticationException("Cannot find public key for kid: " + kid);
         }
 
-        RSAPublicKey publicKey = jwk.toRSAKey().toRSAPublicKey();
+        RSAKey rsa = jwk.toRSAKey();
+        RSAPublicKey publicKey = (RSAPublicKey) KeyFactory.getInstance("RSA", CryptoUtils.fipsProvider()).generatePublic(
+                        new RSAPublicKeySpec(rsa.getModulus().decodeToBigInteger(),
+                        rsa.getPublicExponent().decodeToBigInteger()));
+        if (publicKey.getModulus().bitLength() < 2048) {
+            throw new AuthenticationException("FIPS JWT verification requires an RSA key of at least 2048 bits");
+        }
         RSASSAVerifier verifier = new RSASSAVerifier(publicKey);
+        verifier.getJCAContext().setProvider(CryptoUtils.fipsProvider());
         if (!signedJWT.verify(verifier)) {
             throw new AuthenticationException("JWT with kid " + kid + " is invalid");
         }

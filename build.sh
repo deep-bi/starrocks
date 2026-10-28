@@ -433,7 +433,7 @@ fi
 addon_mvn_opts=""
 if [ "x$WITH_MAVEN_BATCH_MODE" = "xON" ] ; then
     # this option is only available with mvn >= 3.6
-    addon_mvn_opts="--batch-mode"
+    addon_mvn_opts="${addon_mvn_opts} --batch-mode"
 fi
 
 if [ "x$DISABLE_JAVA_CHECK_STYLE" = "xON" ] ; then
@@ -544,7 +544,7 @@ if [ ${BUILD_BE} -eq 1 ] || [ ${BUILD_FORMAT_LIB} -eq 1 ] ; then
         echo "Build Java Extensions"
         cd ${STARROCKS_HOME}/java-extensions
         if [ ${CLEAN} -eq 1 ]; then
-            ${MVN_CMD} clean
+            ${MVN_CMD} $addon_mvn_opts clean
         fi
         ${MVN_CMD} $addon_mvn_opts package -DskipTests -T ${PARALLEL}
         cd ${STARROCKS_HOME}
@@ -574,7 +574,7 @@ if [ ${FE_MODULES}x != ""x ]; then
     echo "Build Frontend Modules: $FE_MODULES"
     cd ${STARROCKS_HOME}/fe
     if [ ${CLEAN} -eq 1 ]; then
-        ${MVN_CMD} clean
+        ${MVN_CMD} $addon_mvn_opts clean
     fi
     # clean phase is explicited by `--clean` option, don't bother doing clean again.
     ${MVN_CMD} $addon_mvn_opts package -am -pl ${FE_MODULES} -DskipTests -Dmaven.clean.skip=true -T ${PARALLEL}
@@ -594,13 +594,16 @@ if [ ${BUILD_FE} -eq 1 -o ${BUILD_SPARK_DPP} -eq 1 ]; then
     if [ ${BUILD_FE} -eq 1 ]; then
         install -d ${STARROCKS_OUTPUT}/fe/bin ${STARROCKS_OUTPUT}/fe/conf/ \
                    ${STARROCKS_OUTPUT}/fe/webroot/ ${STARROCKS_OUTPUT}/fe/lib/ \
-                   ${STARROCKS_OUTPUT}/fe/spark-dpp/ ${STARROCKS_OUTPUT}/fe/hive-udf
+                   ${STARROCKS_OUTPUT}/fe/spark-dpp/ ${STARROCKS_OUTPUT}/fe/hive-udf \
+                   ${STARROCKS_OUTPUT}/fe/security/
 
         cp -r -p ${STARROCKS_HOME}/bin/*_fe.sh ${STARROCKS_OUTPUT}/fe/bin/
         cp -r -p ${STARROCKS_HOME}/bin/show_fe_version.sh ${STARROCKS_OUTPUT}/fe/bin/
         cp -r -p ${STARROCKS_HOME}/bin/common.sh ${STARROCKS_OUTPUT}/fe/bin/
         cp -r -p ${STARROCKS_HOME}/conf/fe.conf ${STARROCKS_OUTPUT}/fe/conf/
         cp -r -p ${STARROCKS_HOME}/conf/udf_security.policy ${STARROCKS_OUTPUT}/fe/conf/
+        cp -p ${STARROCKS_HOME}/conf/java-fips.security ${STARROCKS_OUTPUT}/fe/conf/
+        cp -p ${STARROCKS_HOME}/security/{check-java-fips.py,java-fips-pinned-dependencies.json} ${STARROCKS_OUTPUT}/fe/security/
         cp -r -p ${STARROCKS_HOME}/conf/hadoop_env.sh ${STARROCKS_OUTPUT}/fe/conf/
         cp -r -p ${STARROCKS_HOME}/conf/core-site.xml ${STARROCKS_OUTPUT}/fe/conf/
         cp -r -p ${STARROCKS_HOME}/conf/cluster_snapshot.yaml ${STARROCKS_OUTPUT}/fe/conf/
@@ -656,6 +659,9 @@ if [ ${BUILD_BE} -eq 1 ]; then
     cp -r -p ${STARROCKS_HOME}/be/output/bin/* ${STARROCKS_OUTPUT}/be/bin/
     cp -r -p ${STARROCKS_HOME}/be/output/conf/be.conf ${STARROCKS_OUTPUT}/be/conf/
     cp -r -p ${STARROCKS_HOME}/be/output/conf/udf_security.policy ${STARROCKS_OUTPUT}/be/conf/
+    cp -p ${STARROCKS_HOME}/conf/java-fips.security ${STARROCKS_OUTPUT}/be/conf/
+    install -d ${STARROCKS_OUTPUT}/be/security/
+    cp -p ${STARROCKS_HOME}/security/{check-java-fips.py,java-fips-pinned-dependencies.json} ${STARROCKS_OUTPUT}/be/security/
     cp -r -p ${STARROCKS_HOME}/be/output/conf/be_test.conf ${STARROCKS_OUTPUT}/be/conf/
     cp -r -p ${STARROCKS_HOME}/be/output/conf/cn.conf ${STARROCKS_OUTPUT}/be/conf/
     cp -r -p ${STARROCKS_HOME}/be/output/conf/hadoop_env.sh ${STARROCKS_OUTPUT}/be/conf/
@@ -701,8 +707,7 @@ if [ ${BUILD_BE} -eq 1 ]; then
         # note that conf files will not be overwritten when doing upgrade.
         # so we have to preserve directory structure to avoid upgrade incompatibility.
         cp -r -p ${STARROCKS_HOME}/java-extensions/hadoop-lib/target/hadoop-lib ${STARROCKS_OUTPUT}/be/lib/hadoop/common
-        # https://github.com/StarRocks/starrocks/issues/71898
-        # FIXME: remove the wildfly-openssl jar, ensure it is absent before openssl library in BE thirdparty upgraded to 3.x
+        # Hadoop TLS must use BCJSSE, remove the legacy native binding from reused output directories.
         rm -rf ${STARROCKS_OUTPUT}/be/lib/hadoop/common/wildfly-openssl-2.2.5.Final.jar
         cp -r -p ${STARROCKS_HOME}/java-extensions/jdbc-bridge/target/starrocks-jdbc-bridge-jar-with-dependencies.jar ${STARROCKS_OUTPUT}/be/lib/jni-packages
         cp -r -p ${STARROCKS_HOME}/java-extensions/udf-extensions/target/udf-extensions-jar-with-dependencies.jar ${STARROCKS_OUTPUT}/be/lib/jni-packages

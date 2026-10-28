@@ -34,6 +34,7 @@ import com.starrocks.connector.ConnectorTableId;
 import com.starrocks.connector.PartitionInfo;
 import com.starrocks.connector.PartitionUtil;
 import com.starrocks.connector.exception.StarRocksConnectorException;
+import com.starrocks.connector.share.security.JdbcSecurityPolicy;
 import com.starrocks.connector.statistics.ConnectorNdvEstimator;
 import com.starrocks.qe.ConnectContext;
 import com.starrocks.sql.ast.expression.DateLiteral;
@@ -56,6 +57,7 @@ import java.sql.SQLException;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Properties;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
@@ -201,7 +203,9 @@ public class JDBCMetadata implements ConnectorMetadata {
 
     private HikariDataSource createHikariDataSource() {
         HikariConfig config = new HikariConfig();
-        config.setJdbcUrl(getJdbcUrl());
+        Properties connectionProperties = new Properties();
+        config.setJdbcUrl(JdbcSecurityPolicy.configure(getDriverName(), getJdbcUrl(), connectionProperties));
+        config.setDataSourceProperties(connectionProperties);
         config.setUsername(properties.get(JDBCResource.USER));
         config.setPassword(properties.get(JDBCResource.PASSWORD));
         config.setDriverClassName(getDriverName());

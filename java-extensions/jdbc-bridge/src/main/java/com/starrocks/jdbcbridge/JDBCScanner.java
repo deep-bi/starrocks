@@ -14,6 +14,7 @@
 
 package com.starrocks.jdbcbridge;
 
+import com.starrocks.connector.share.security.JdbcSecurityPolicy;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 
@@ -50,6 +51,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Properties;
 import java.util.Set;
 import java.util.TimeZone;
 import java.util.UUID;
@@ -95,7 +97,10 @@ public class JDBCScanner {
             Thread.currentThread().setContextClassLoader(classLoader);
             HikariConfig config = new HikariConfig();
             config.setDriverClassName(scanContext.getDriverClassName());
-            config.setJdbcUrl(scanContext.getJdbcURL());
+            Properties connectionProperties = new Properties();
+            config.setJdbcUrl(JdbcSecurityPolicy.configure(scanContext.getDriverClassName(), scanContext.getJdbcURL(),
+                    connectionProperties));
+            config.setDataSourceProperties(connectionProperties);
             config.setUsername(scanContext.getUser());
             config.setPassword(scanContext.getPassword());
             config.setMaximumPoolSize(scanContext.getConnectionPoolSize());

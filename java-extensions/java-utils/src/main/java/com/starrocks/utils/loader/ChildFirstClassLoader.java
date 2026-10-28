@@ -44,6 +44,9 @@ public class ChildFirstClassLoader extends URLClassLoader {
 
     @Override
     public Class<?> loadClass(String name, boolean resolve) throws ClassNotFoundException {
+        if (name.startsWith("org.bouncycastle.")) {
+            return parentLoader.loadClass(name, resolve);
+        }
         if (!parentFirstClass.isEmpty() && parentFirstClass.stream().anyMatch(c -> c.equals(name))) {
             return parentLoader.loadClass(name, resolve);
         }

@@ -16,17 +16,16 @@ package com.starrocks.http.rest;
 
 import com.google.common.base.Strings;
 import com.starrocks.common.Config;
+import com.starrocks.common.util.CryptoUtils;
+import com.starrocks.common.util.TlsUtils;
 import com.starrocks.http.SslUtil;
 import io.netty.handler.ssl.SslContext;
 import io.netty.handler.ssl.SslContextBuilder;
 import io.netty.handler.ssl.SslProvider;
 
-import java.io.FileInputStream;
-import java.io.InputStream;
-import java.security.KeyStore;
 import java.util.Arrays;
 import javax.net.ssl.KeyManagerFactory;
-import javax.net.ssl.SSLServerSocketFactory;
+import javax.net.ssl.SSLContext;
 
 public class HttpSSLContextLoader {
     private static SslContext sslContext;
@@ -34,7 +33,10 @@ public class HttpSSLContextLoader {
 
     public static synchronized SslContext getSslContext() throws Exception {
         if (!initialized) {
-            if (Config.enable_https && !Strings.isNullOrEmpty(Config.ssl_keystore_location)) {
+            if (Config.enable_https) {
+                if (Strings.isNullOrEmpty(Config.ssl_keystore_location)) {
+                    throw new IllegalArgumentException("HTTPS requires ssl_keystore_location");
+                }
                 sslContext = createSSLContext();
             }
             initialized = true;
@@ -43,22 +45,20 @@ public class HttpSSLContextLoader {
     }
 
     private static SslContext createSSLContext() throws Exception {
-        KeyStore keyStore = KeyStore.getInstance("JKS");
-        try (InputStream keyStoreIS = new FileInputStream(Config.ssl_keystore_location)) {
-            if (Strings.isNullOrEmpty(Config.ssl_keystore_password)) {
-                throw new IllegalArgumentException("The SSL keystore password cannot be null or empty.");
-            }
-            keyStore.load(keyStoreIS, Config.ssl_keystore_password.toCharArray());
+        if (Strings.isNullOrEmpty(Config.ssl_keystore_password)) {
+            throw new IllegalArgumentException("The SSL keystore password cannot be null or empty");
         }
-        KeyManagerFactory kmf = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm());
-        if (Config.ssl_key_password == null) {
-            throw new IllegalArgumentException("SSL key password (Config.ssl_key_password) cannot be null.");
-        }
-        kmf.init(keyStore, Config.ssl_key_password.toCharArray());
-
-        String[] supportedCiphers = ((SSLServerSocketFactory) SSLServerSocketFactory.getDefault())
-                .getSupportedCipherSuites();
+        KeyManagerFactory kmf = TlsUtils.keyManagers(Config.ssl_keystore_location, Config.ssl_keystore_type,
+                Config.ssl_keystore_password, Config.ssl_key_password);
+        SSLContext context = CryptoUtils.sslContext("TLS");
+        context.init(kmf.getKeyManagers(), TlsUtils.trustManagers(null).getTrustManagers(), CryptoUtils.secureRandom());
+        String[] supportedCiphers = context.getDefaultSSLParameters().getCipherSuites();
         String[] filteredCiphers = SslUtil.filterCipherSuites(supportedCiphers);
-        return SslContextBuilder.forServer(kmf).sslProvider(SslProvider.JDK).ciphers(Arrays.asList(filteredCiphers)).build();
+        SslContextBuilder builder = SslContextBuilder.forServer(kmf).sslProvider(SslProvider.JDK)
+                .sslContextProvider(context.getProvider()).ciphers(Arrays.asList(filteredCiphers));
+        builder.protocols("TLSv1.2", "TLSv1.3");
+        builder.trustManager(TlsUtils.trustManagers(null));
+        builder.secureRandom(CryptoUtils.secureRandom());
+        return builder.build();
     }
 }
