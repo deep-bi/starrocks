@@ -26,6 +26,7 @@ allprojects {
         maven { url = uri("https://repository.cloudera.com/repository/public/") }
         maven { url = uri("https://repository.cloudera.com/repository/cloudera-repos/") }
         maven { url = uri("https://mirror.iscas.ac.cn/kunpeng/maven/") }
+        maven { url = uri("https://raw.githubusercontent.com/deep-bi/maven-repo/main") }
     }
 }
 
@@ -62,19 +63,19 @@ subprojects {
         set("httpcore5.version", "5.4.3")
         set("hudi.version", "1.0.2")
         set("iceberg.version", "1.10.0")
-        set("io.netty.version", "4.1.137.Final")
+        set("io.netty.version", "4.1.138.Final")
         set("jackson.version", "2.21.7")
         set("jackson-annotations.version", "2.21")
         set("jetty.version", "9.4.58.v20250814")
         set("jprotobuf-starrocks.version", "1.0.0")
         set("junit.version", "5.8.2")
         set("kafka-clients.version", "3.9.1")
-        set("kudu.version", "1.17.1")
-        set("log4j.version", "2.19.0")
+        set("kudu.version", "1.17.1-deepbi1")
+        set("log4j.version", "2.25.5")
         set("luben.zstd.jni.version", "1.5.7-15")
         set("nimbusds.version", "9.37.2")
         set("odps.version", "0.48.7-public")
-        set("paimon.version", "1.3.1")
+        set("paimon.version", "1.4.2-deepbi1")
         set("parquet.version", "1.18.1")
         set("ranger.version", "2.9.0")
         set("zookeeper.version", "3.9.5")
