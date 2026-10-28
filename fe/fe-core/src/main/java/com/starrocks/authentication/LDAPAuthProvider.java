@@ -16,6 +16,7 @@ package com.starrocks.authentication;
 
 import com.google.common.base.Preconditions;
 import com.google.common.base.Strings;
+import com.starrocks.common.Config;
 import com.starrocks.common.util.NetUtils;
 import com.starrocks.qe.ConnectContext;
 import com.starrocks.sql.ast.UserIdentity;
@@ -74,7 +75,8 @@ public class LDAPAuthProvider implements AuthenticationProvider {
     @Override
     public void authenticate(ConnectContext context, UserIdentity userIdentity, byte[] authResponse)
             throws AuthenticationException {
-        //clear password terminate string
+        // clear password terminate string: the MySQL clear-password frame appends a trailing \0, while
+        // HTTP Basic sends the bare password and may even send an empty one
         byte[] clearPassword = authResponse;
         if (authResponse.length > 0 && authResponse[authResponse.length - 1] == 0) {
             clearPassword = Arrays.copyOf(authResponse, authResponse.length - 1);
@@ -92,15 +94,20 @@ public class LDAPAuthProvider implements AuthenticationProvider {
 
             // set distinguished name to auth context
             context.setDistinguishedName(distinguishedName);
-        } catch (Exception e) {
+        } catch (AuthenticationException e) {
+            // already classified (empty password, user not found): pass it through
+            LOG.warn("check password failed for user: {}", userIdentity.getUser(), e);
+            throw e;
+        } catch (javax.naming.AuthenticationException e) {
+            // the directory answered and rejected the credential: a definitive wrong password
             LOG.warn("check password failed for user: {}", userIdentity.getUser(), e);
             throw new AuthenticationException(e.getMessage());
+        } catch (Exception e) {
+            // anything else means no answer (connection refused, timeout, TLS failure); mark it transient so a
+            // caller that caches rejections does not hold a valid credential back until the directory recovers
+            LOG.warn("cannot reach the directory while authenticating user: {}", userIdentity.getUser(), e);
+            throw new AuthenticationException(e.getMessage()).asTransient();
         }
-    }
-
-    @Override
-    public boolean supportsUnnegotiatedCredential() {
-        return true;
     }
 
     private String getURL() {
@@ -135,6 +142,12 @@ public class LDAPAuthProvider implements AuthenticationProvider {
         env.put(Context.SECURITY_PRINCIPAL, dn);
         env.put(Context.INITIAL_CONTEXT_FACTORY, "com.sun.jndi.ldap.LdapCtxFactory");
         env.put(Context.PROVIDER_URL, url);
+        // without both timeouts the bind falls back to the OS TCP timeout, so an unreachable directory can pin
+        // the calling thread, which is now an HTTP worker or a thrift handler as well
+        env.put("com.sun.jndi.ldap.connect.timeout",
+                String.valueOf(Config.authentication_ldap_simple_conn_timeout_ms));
+        env.put("com.sun.jndi.ldap.read.timeout",
+                String.valueOf(Config.authentication_ldap_simple_conn_read_timeout_ms));
         if (useSSL) {
             setSSLContext(env);
         }
@@ -172,6 +185,12 @@ public class LDAPAuthProvider implements AuthenticationProvider {
         env.put(Context.SECURITY_PRINCIPAL, rootDN);
         env.put(Context.INITIAL_CONTEXT_FACTORY, "com.sun.jndi.ldap.LdapCtxFactory");
         env.put(Context.PROVIDER_URL, url);
+        // without both timeouts the bind falls back to the OS TCP timeout, so an unreachable directory can pin
+        // the calling thread, which is now an HTTP worker or a thrift handler as well
+        env.put("com.sun.jndi.ldap.connect.timeout",
+                String.valueOf(Config.authentication_ldap_simple_conn_timeout_ms));
+        env.put("com.sun.jndi.ldap.read.timeout",
+                String.valueOf(Config.authentication_ldap_simple_conn_read_timeout_ms));
         if (useSSL) {
             setSSLContext(env);
         }

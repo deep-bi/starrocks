@@ -14,12 +14,14 @@
 
 package com.starrocks.authentication;
 
+import com.starrocks.common.ErrorCode;
 import com.starrocks.mysql.MysqlCodec;
 import com.starrocks.mysql.privilege.AuthPlugin;
 import com.starrocks.qe.ConnectContext;
 import com.starrocks.sql.ast.UserIdentity;
 
 import java.io.ByteArrayOutputStream;
+import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 
 public class OAuth2AuthenticationProvider implements AuthenticationProvider {
@@ -78,14 +80,18 @@ public class OAuth2AuthenticationProvider implements AuthenticationProvider {
         }
     }
 
-    /**
-     * OAuth2 deliberately reports success when the client did not negotiate the OAuth2 plugin, and defers the real
-     * check to the MySQL command loop (ConnectProcessor), which only the MySQL protocol runs. Accepting an
-     * unnegotiated credential would therefore let any caller through on the other endpoints.
-     */
     @Override
-    public boolean supportsUnnegotiatedCredential() {
-        return false;
+    public void checkLoginSuccess(ConnectContext context) throws AuthenticationException {
+        if (context.getAuthToken() == null) {
+            String authUrl = oAuth2Context.authServerUrl() +
+                    "?response_type=code" +
+                    "&client_id=" + URLEncoder.encode(oAuth2Context.clientId(), StandardCharsets.UTF_8) +
+                    "&redirect_uri=" + URLEncoder.encode(oAuth2Context.redirectUrl(), StandardCharsets.UTF_8) +
+                    "&state=" + context.getConnectionId() +
+                    "&scope=openid";
+
+            throw new AuthenticationException(ErrorCode.ERR_OAUTH2_NOT_AUTHENTICATED, authUrl);
+        }
     }
 
     @Override

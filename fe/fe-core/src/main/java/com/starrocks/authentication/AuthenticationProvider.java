@@ -49,13 +49,10 @@ public interface AuthenticationProvider {
     }
 
     /**
-     * Whether this provider can authenticate a credential that reached the FE without the MySQL handshake, that
-     * is, on a connection that was never issued a salt ({@link ConnectContext#getAuthDataSalt()} is null).
-     * Endpoints such as Arrow Flight SQL, the HTTP REST API and the thrift service carry the credential as an
-     * opaque string and negotiate no authentication plugin, so the authentication chain cannot match a provider
-     * by plugin name for them.
+     * Some providers report success from {@link #authenticate} without verifying anything and leave the real
+     * check to the MySQL command loop. Channels that serve the request straight after authentication have no
+     * such loop, so they call this to run that check up front.
      */
-    default boolean supportsUnnegotiatedCredential() {
-        return false;
+    default void checkLoginSuccess(ConnectContext context) throws AuthenticationException {
     }
 }

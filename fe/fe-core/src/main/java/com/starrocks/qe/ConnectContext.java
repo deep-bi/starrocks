@@ -41,6 +41,7 @@ import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
 import com.google.common.collect.Sets;
 import com.starrocks.analysis.StringLiteral;
+import com.starrocks.authentication.AuthenticationProvider;
 import com.starrocks.authentication.OAuth2Context;
 import com.starrocks.authentication.UserProperty;
 import com.starrocks.authorization.AccessDeniedException;
@@ -193,6 +194,10 @@ public class ConnectContext {
     // After negotiate and switching with the client,
     // the auth plugin type used for this authentication is finally determined.
     private String authPlugin = null;
+
+    // the provider that accepted the credential, kept so a channel without a later command can still run
+    // the provider's deferred login check
+    private AuthenticationProvider authenticationProvider = null;
 
     //Auth Data salt generated at mysql negotiate used for password salting
     private byte[] authDataSalt = null;
@@ -572,6 +577,14 @@ public class ConnectContext {
 
     public OAuth2Context getOAuth2Context() {
         return oAuth2Context;
+    }
+
+    public AuthenticationProvider getAuthenticationProvider() {
+        return authenticationProvider;
+    }
+
+    public void setAuthenticationProvider(AuthenticationProvider authenticationProvider) {
+        this.authenticationProvider = authenticationProvider;
     }
 
     public void setAuthPlugin(String authPlugin) {

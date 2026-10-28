@@ -380,7 +380,6 @@ import org.jetbrains.annotations.NotNull;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -1176,7 +1175,7 @@ public class FrontendServiceImpl implements FrontendService.Iface {
         // the group derived roles an ephemeral security integration user depends on, so authorize on that same
         // context rather than rebuilding one from the identity alone.
         ConnectContext context = new ConnectContext();
-        AuthenticationHandler.authenticate(context, user, clientIp, passwd.getBytes(StandardCharsets.UTF_8));
+        AuthenticationHandler.authenticateWithClearPassword(context, user, clientIp, passwd);
         // check INSERT action on table
         try {
             Authorizer.checkTableAction(context, db, tbl, PrivilegeType.INSERT);

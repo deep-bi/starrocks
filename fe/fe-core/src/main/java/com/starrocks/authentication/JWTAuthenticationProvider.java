@@ -19,10 +19,8 @@ import com.starrocks.mysql.MysqlCodec;
 import com.starrocks.qe.ConnectContext;
 import com.starrocks.server.GlobalStateMgr;
 import com.starrocks.sql.ast.UserIdentity;
-import org.apache.commons.lang3.StringUtils;
 
 import java.nio.ByteBuffer;
-import java.nio.charset.StandardCharsets;
 
 public class JWTAuthenticationProvider implements AuthenticationProvider {
     public static final String JWT_JWKS_URL = "jwks_url";
@@ -47,31 +45,16 @@ public class JWTAuthenticationProvider implements AuthenticationProvider {
     public void authenticate(ConnectContext context, UserIdentity userIdentity, byte[] authResponse)
             throws AuthenticationException {
         try {
-            String idToken = readIdToken(context, authResponse);
+            ByteBuffer authBuffer = ByteBuffer.wrap(authResponse);
+            //1 Byte for capability mysql client
+            MysqlCodec.readInt1(authBuffer);
+            byte[] idToken = MysqlCodec.readLenEncodedString(authBuffer);
             JWKSet jwkSet = GlobalStateMgr.getCurrentState().getJwkMgr().getJwkSet(jwksUrl);
-            OpenIdConnectVerifier.verify(idToken, userIdentity.getUser(), jwkSet, principalFiled, requiredIssuer,
+            OpenIdConnectVerifier.verify(new String(idToken), userIdentity.getUser(), jwkSet, principalFiled, requiredIssuer,
                     requiredAudience);
-            context.setAuthToken(idToken);
+            context.setAuthToken(new String(idToken));
         } catch (Exception e) {
             throw new AuthenticationException(e.getMessage());
         }
-    }
-
-    @Override
-    public boolean supportsUnnegotiatedCredential() {
-        return true;
-    }
-
-    private static String readIdToken(ConnectContext context, byte[] authResponse) {
-        // The framing is added by the MySQL client side plugin, so a credential that negotiated no plugin at all
-        // is the bare token.
-        if (StringUtils.isEmpty(context.getAuthPlugin())) {
-            return StringUtils.stripEnd(new String(authResponse, StandardCharsets.UTF_8), "\0");
-        }
-
-        ByteBuffer authBuffer = ByteBuffer.wrap(authResponse);
-        //1 Byte for capability mysql client
-        MysqlCodec.readInt1(authBuffer);
-        return new String(MysqlCodec.readLenEncodedString(authBuffer), StandardCharsets.UTF_8);
     }
 }
