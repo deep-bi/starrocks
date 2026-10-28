@@ -263,6 +263,9 @@ public class HttpServerHandler extends ChannelInboundHandlerAdapter {
                 LOG.warn("receive slow http request. uri: {}, startTime: {}, latency: {} ms",
                         uri, startTime, latency);
             }
+
+            ExecuteEnv.getInstance().getScheduler().getRoleConnectionManager().unregisterConnection(request.connectContext);
+
             if (asyncHandling) {
                 ReferenceCountUtil.release(request.getRequest());
             }
