@@ -13,8 +13,15 @@
 
     <properties>
         <java-extensions.home>${basedir}/../</java-extensions.home>
-        <kudu.version>1.17.1</kudu.version>
+        <kudu.version>1.17.1-deepbi1</kudu.version>
     </properties>
+
+    <repositories>
+        <repository>
+            <id>deep-bi-github-artifact</id>
+            <url>https://raw.githubusercontent.com/deep-bi/maven-repo/main</url>
+        </repository>
+    </repositories>
 
     <dependencies>
         <dependency>
