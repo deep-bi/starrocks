@@ -44,7 +44,7 @@
         <java-utils.version>1.0.0</java-utils.version>
         <io.netty.version>4.1.138.Final</io.netty.version>
         <protobuf-java.version>3.25.5</protobuf-java.version>
-        <nimbusds.version>9.37.2</nimbusds.version>
+        <nimbusds.version>9.37.4</nimbusds.version>
         <!-- commons-configuration2 2.15.0 needs commons-io 2.22.0 (HomeDirectoryLocationStrategy$Builder) -->
         <commons-io.version>2.22.0</commons-io.version>
         <gcs.connector.version>3.0.13</gcs.connector.version>
