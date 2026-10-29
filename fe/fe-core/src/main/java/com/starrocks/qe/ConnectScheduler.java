@@ -158,6 +158,7 @@ public class ConnectScheduler {
             try {
                 roleConnectionManager.registerConnection(ctx);
             } catch (AuthenticationException e) {
+                ctx.getState().setErrorCode(e.getErrorCode());
                 return new Pair<>(false, e.getMessage());
             }
             numberConnection.incrementAndGet();
