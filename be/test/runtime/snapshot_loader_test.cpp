@@ -26,6 +26,8 @@
 #include "fs/fs_util.h"
 #include "gen_cpp/AgentService_types.h"
 #include "runtime/exec_env.h"
+#include "storage/storage_engine.h"
+#include "storage/tablet_manager.h"
 #include "util/cpu_info.h"
 
 #define private public // hack complier
@@ -125,7 +127,12 @@ protected:
         std::filesystem::create_directories(_root);
     }
 
-    void TearDown() override { std::filesystem::remove_all(_root); }
+    void TearDown() override {
+        for (int64_t tablet_id : _tablets) {
+            (void)StorageEngine::instance()->tablet_manager()->drop_tablet(tablet_id);
+        }
+        std::filesystem::remove_all(_root);
+    }
 
     // The BE names a local snapshot directory <...>/<tablet id>/<schema hash>.
     std::string local_tablet(int64_t tablet_id, const std::map<std::string, std::string>& files) {
@@ -173,9 +180,63 @@ protected:
         return request;
     }
 
-    // Fewer than 10 files per upload, so the loader never reports progress to an FE.
+    // A dropped tablet stays in the engine's shutdown queue, so its id can't be created again in this process.
+    static int64_t new_tablet_id() {
+        static int64_t next_tablet_id = 91000000;
+        return next_tablet_id++;
+    }
+
+    static std::string header_name(int64_t tablet_id) { return std::to_string(tablet_id) + ".hdr"; }
+
+    // The tablet a restore downloads into: download looks it up in the storage engine by the local path's tablet id.
+    std::string restore_target(int64_t tablet_id) {
+        TCreateTabletReq request;
+        request.tablet_id = tablet_id;
+        request.__set_version(1);
+        request.tablet_schema.schema_hash = 1234;
+        request.tablet_schema.short_key_column_count = 1;
+        request.tablet_schema.keys_type = TKeysType::DUP_KEYS;
+        request.tablet_schema.storage_type = TStorageType::COLUMN;
+        TColumn k1;
+        k1.column_name = "k1";
+        k1.__set_is_key(true);
+        k1.column_type.type = TPrimitiveType::INT;
+        request.tablet_schema.columns.push_back(k1);
+        Status st = StorageEngine::instance()->create_tablet(request);
+        CHECK(st.ok()) << st;
+        _tablets.push_back(tablet_id);
+
+        std::string dir = _root + "/restore/" + std::to_string(tablet_id) + "/1234";
+        std::filesystem::create_directories(dir);
+        return dir;
+    }
+
+    // A tablet directory of a snapshot in the repository, e.g. snapshot_dir("__ss_inc/__ss_content_inc", 10001).
+    std::string snapshot_dir(const std::string& snapshot, int64_t tablet_id) {
+        std::string dir = _root + "/repo/" + snapshot + "/__" + std::to_string(tablet_id);
+        std::filesystem::create_directories(dir);
+        return dir;
+    }
+
+    // Writes <name>.<md5 of content> as the upload does, and returns its full path.
+    static std::string remote_file(const std::string& dir, const std::string& name, const std::string& content) {
+        std::string path = dir + "/" + name;
+        write_file(path, content);
+        std::string named = path + "." + md5(path);
+        std::filesystem::rename(path, named);
+        return named;
+    }
+
+    static TDownloadReq download_request() {
+        TDownloadReq request;
+        request.__set_use_broker(false);
+        return request;
+    }
+
+    // Fewer than 10 files per upload or download, so the loader never reports progress to an FE.
     SnapshotLoader _loader{nullptr, 1L, 2L};
     const std::string _root = "./snapshot_loader_incremental_test";
+    std::vector<int64_t> _tablets;
 };
 
 // TC-100 (F1)
@@ -245,6 +306,139 @@ TEST_F(SnapshotLoaderIncrementalTest, upload_reuses_files_only_for_their_own_tab
     ASSERT_TRUE(st.ok()) << st;
     EXPECT_EQ(std::set<std::string>{}, list(remote1));
     EXPECT_EQ(std::set<std::string>{same}, list(remote2));
+}
+
+// TC-104: the snapshot's own legacy directory (the src_dest_map source) is empty; the manifest names the files.
+TEST_F(SnapshotLoaderIncrementalTest, download_builds_a_tablet_from_every_holder_in_its_manifest) {
+    int64_t tablet_id = new_tablet_id();
+    std::string local = restore_target(tablet_id);
+    std::string full = snapshot_dir("__ss_full/__ss_content", 10001);
+    std::string inc1 = snapshot_dir("__ss_inc1/__ss_content_inc", 10001);
+    std::string own = snapshot_dir("__ss_inc2/__ss_content_inc", 10001);
+    std::vector<std::string> manifest = {
+            remote_file(full, "10001_0.dat", "full rows"), remote_file(inc1, "10001_1.dat", "inc1 rows"),
+            remote_file(own, "10001_2.dat", "inc2 rows"), remote_file(own, "10001.hdr", "header")};
+    TDownloadReq request = download_request();
+    request.__set_source_files({{local, manifest}});
+
+    std::vector<int64_t> tablet_ids;
+    Status st = _loader.download({{snapshot_dir("__ss_inc2/__ss_content", 10001), local}}, request, &tablet_ids);
+
+    ASSERT_TRUE(st.ok()) << st;
+    EXPECT_EQ((std::set<std::string>{"10001_0.dat", "10001_1.dat", "10001_2.dat", header_name(tablet_id)}),
+              list(local));
+    EXPECT_EQ("full rows", read_file(local + "/10001_0.dat"));
+    EXPECT_EQ("inc1 rows", read_file(local + "/10001_1.dat"));
+    EXPECT_EQ("inc2 rows", read_file(local + "/10001_2.dat"));
+    EXPECT_EQ("header", read_file(local + "/" + header_name(tablet_id)));
+    EXPECT_EQ(std::vector<int64_t>{tablet_id}, tablet_ids);
+}
+
+// TC-105
+TEST_F(SnapshotLoaderIncrementalTest, download_skips_holder_files_that_are_not_in_the_manifest) {
+    int64_t tablet_id = new_tablet_id();
+    std::string local = restore_target(tablet_id);
+    std::string full = snapshot_dir("__ss_full/__ss_content", 10001);
+    std::string own = snapshot_dir("__ss_inc/__ss_content_inc", 10001);
+    remote_file(full, "10001_9.dat", "a rowset compacted away after the full snapshot");
+    remote_file(full, "10001.hdr", "the full snapshot's header");
+    TDownloadReq request = download_request();
+    request.__set_source_files(
+            {{local, {remote_file(full, "10001_0.dat", "full rows"), remote_file(own, "10001.hdr", "header")}}});
+
+    std::vector<int64_t> tablet_ids;
+    Status st = _loader.download({{snapshot_dir("__ss_inc/__ss_content", 10001), local}}, request, &tablet_ids);
+
+    ASSERT_TRUE(st.ok()) << st;
+    EXPECT_EQ((std::set<std::string>{"10001_0.dat", header_name(tablet_id)}), list(local));
+    EXPECT_EQ("header", read_file(local + "/" + header_name(tablet_id)));
+}
+
+// TC-106: the holder's copy of the file that is already local is corrupt, so downloading it again would fail.
+TEST_F(SnapshotLoaderIncrementalTest, download_keeps_matching_local_files_and_removes_stale_ones) {
+    int64_t tablet_id = new_tablet_id();
+    std::string local = restore_target(tablet_id);
+    write_file(local + "/10001_0.dat", "full rows");
+    write_file(local + "/10001_8.dat", "stale");
+    std::string full = snapshot_dir("__ss_full/__ss_content", 10001);
+    std::string own = snapshot_dir("__ss_inc/__ss_content_inc", 10001);
+    std::string data = remote_file(full, "10001_0.dat", "full rows");
+    write_file(data, "corrupt");
+    TDownloadReq request = download_request();
+    request.__set_source_files({{local, {data, remote_file(own, "10001.hdr", "header")}}});
+
+    std::vector<int64_t> tablet_ids;
+    Status st = _loader.download({{snapshot_dir("__ss_inc/__ss_content", 10001), local}}, request, &tablet_ids);
+
+    ASSERT_TRUE(st.ok()) << st;
+    EXPECT_EQ((std::set<std::string>{"10001_0.dat", header_name(tablet_id)}), list(local));
+    EXPECT_EQ("full rows", read_file(local + "/10001_0.dat"));
+}
+
+// TC-107: a file deleted from its holder directory, and a holder whose whole directory is gone. Every holder is
+// checked before anything is downloaded.
+TEST_F(SnapshotLoaderIncrementalTest, download_fails_naming_a_manifest_file_missing_from_its_holder) {
+    std::string own_legacy = snapshot_dir("__ss_inc/__ss_content", 10001);
+    std::string own = snapshot_dir("__ss_inc/__ss_content_inc", 10001);
+    std::string full = snapshot_dir("__ss_full/__ss_content", 10001);
+    std::string header = remote_file(own, "10001.hdr", "header");
+    std::string deleted = remote_file(full, "10001_0.dat", "full rows");
+    std::filesystem::remove(deleted);
+    std::string gone = _root + "/repo/__ss_gone/__ss_content/__10001/10001_1.dat.00000000000000000000000000000000";
+
+    for (const std::string& missing : {deleted, gone}) {
+        std::string local = restore_target(new_tablet_id());
+        TDownloadReq request = download_request();
+        request.__set_source_files({{local, {header, missing}}});
+
+        std::vector<int64_t> tablet_ids;
+        Status st = _loader.download({{own_legacy, local}}, request, &tablet_ids);
+
+        ASSERT_FALSE(st.ok()) << missing;
+        std::string message(st.message());
+        size_t slash = missing.find_last_of('/');
+        EXPECT_NE(std::string::npos, message.find(missing.substr(slash + 1))) << message;
+        EXPECT_NE(std::string::npos, message.find(missing.substr(0, slash))) << message;
+        EXPECT_EQ(std::set<std::string>{}, list(local)) << missing;
+    }
+}
+
+// TC-108
+TEST_F(SnapshotLoaderIncrementalTest, download_fails_when_a_holder_file_does_not_match_its_md5) {
+    std::string local = restore_target(new_tablet_id());
+    std::string full = snapshot_dir("__ss_full/__ss_content", 10001);
+    std::string data = remote_file(full, "10001_0.dat", "full rows");
+    write_file(data, "corrupt");
+    TDownloadReq request = download_request();
+    request.__set_source_files({{local, {data}}});
+
+    std::vector<int64_t> tablet_ids;
+    Status st = _loader.download({{snapshot_dir("__ss_inc/__ss_content", 10001), local}}, request, &tablet_ids);
+
+    ASSERT_FALSE(st.ok());
+    EXPECT_NE(std::string::npos, std::string(st.message()).find("invalid md5 of downloaded file")) << st;
+}
+
+// TC-109
+TEST_F(SnapshotLoaderIncrementalTest, download_without_source_files_keeps_todays_behaviour) {
+    int64_t tablet_id = new_tablet_id();
+    std::string local = restore_target(tablet_id);
+    std::string own = snapshot_dir("__ss_full/__ss_content", 10001);
+    remote_file(own, "10001_0.dat", "full rows");
+    remote_file(own, "10001.hdr", "header");
+
+    std::vector<int64_t> tablet_ids;
+    Status st = _loader.download({{own, local}}, download_request(), &tablet_ids);
+
+    ASSERT_TRUE(st.ok()) << st;
+    EXPECT_EQ((std::set<std::string>{"10001_0.dat", header_name(tablet_id)}), list(local));
+    EXPECT_EQ("full rows", read_file(local + "/10001_0.dat"));
+
+    std::string empty = snapshot_dir("__ss_inc/__ss_content", 10002);
+    st = _loader.download({{empty, restore_target(new_tablet_id())}}, download_request(), &tablet_ids);
+
+    ASSERT_FALSE(st.ok());
+    EXPECT_NE(std::string::npos, std::string(st.message()).find("get nothing from remote path")) << st;
 }
 
 } // namespace starrocks
