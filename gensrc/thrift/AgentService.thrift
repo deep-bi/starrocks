@@ -314,7 +314,9 @@ struct TUploadReq {
     // hdfs_write_buffer_size_kb for writing through lib hdfs directly
     6: optional i32 hdfs_write_buffer_size_kb = 0
     // properties from hdfs-site.xml, core-site.xml and load_properties
-    7: optional PlanNodes.THdfsProperties hdfs_properties 
+    7: optional PlanNodes.THdfsProperties hdfs_properties
+    // incremental backup: dest path -> files (<name>.<md5>) the base's holders already have, not to be uploaded
+    8: optional map<string, list<string>> reusable_files
 }
 
 struct TDownloadReq {

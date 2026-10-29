@@ -107,6 +107,9 @@ public class Repository implements Writable, GsonPostProcessable {
     public static final String FILE_META_INFO = "__meta";
 
     public static final String DIR_SNAPSHOT_CONTENT = "__ss_content";
+    // An FE without incremental backup only looks in __ss_content, so it finds nothing of an incremental
+    // snapshot and fails before commit instead of restoring incomplete tablets.
+    public static final String DIR_SNAPSHOT_CONTENT_INC = "__ss_content_inc";
 
     private static final String PATH_DELIMITER = "/";
     private static final String CHECKSUM_SEPARATOR = ".";
@@ -264,9 +267,13 @@ public class Repository implements Writable, GsonPostProcessable {
     // eg:
     // __starrocks_repository_repo_name/__ss_my_ss1/__ss_content/__db_10001/__tbl_10020/__part_10031/__idx_10020/__10022/
     public String getRepoTabletPathBySnapshotInfo(String label, SnapshotInfo info) {
+        return getRepoTabletPathBySnapshotInfo(label, info, false);
+    }
+
+    public String getRepoTabletPathBySnapshotInfo(String label, SnapshotInfo info, boolean incremental) {
         return Joiner.on(PATH_DELIMITER).join(location, joinPrefix(prefixRepo, name),
                 joinPrefix(PREFIX_SNAPSHOT_DIR, label),
-                DIR_SNAPSHOT_CONTENT,
+                incremental ? DIR_SNAPSHOT_CONTENT_INC : DIR_SNAPSHOT_CONTENT,
                 joinPrefix(PREFIX_DB, info.getDbId()),
                 joinPrefix(PREFIX_TBL, info.getTblId()),
                 joinPrefix(PREFIX_PART, info.getPartitionId()),

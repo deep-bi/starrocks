@@ -468,8 +468,10 @@ public class BackupHandler extends FrontendDaemon implements Writable, MemoryTra
             ErrorReport.reportDdlException(ErrorCode.ERR_COMMON_ERROR, "Snapshot with name '"
                     + stmt.getLabel() + "' already exist in repository");
         }
+        IncrementalBase incrementalBase = null;
         if (stmt.getType() == BackupType.INCREMENTAL) {
-            checkBaseSnapshot(repository, existSnapshotNames, stmt.getBaseSnapshot(), db.getOriginName());
+            incrementalBase = readBaseSnapshot(repository, existSnapshotNames, stmt.getBaseSnapshot(),
+                    db.getOriginName());
         }
 
         // Create a backup job
@@ -495,6 +497,7 @@ public class BackupHandler extends FrontendDaemon implements Writable, MemoryTra
 
         BackupJob backupJob = new BackupJob(stmt.getLabel(), dbId, dbName, tableRefPersists,
                 stmt.getTimeoutMs(), globalStateMgr, repository.getId());
+        backupJob.setIncrementalBase(incrementalBase);
         List<Function> allFunctions = Lists.newArrayList();
 
         if (!stmt.containsExternalCatalog() && (!stmt.withOnClause() || stmt.allFunction())) {
@@ -531,8 +534,9 @@ public class BackupHandler extends FrontendDaemon implements Writable, MemoryTra
         LOG.info("finished to submit backup job: {}", backupJob);
     }
 
-    private void checkBaseSnapshot(Repository repository, List<String> existSnapshotNames, String baseSnapshot,
-                                   String dbName) throws DdlException {
+    // Reads the base once, at submit, so a bad base is rejected before a job exists (REQ-BV-04..07).
+    private IncrementalBase readBaseSnapshot(Repository repository, List<String> existSnapshotNames,
+                                             String baseSnapshot, String dbName) throws DdlException {
         if (!existSnapshotNames.contains(baseSnapshot)) {
             ErrorReport.reportDdlException(ErrorCode.ERR_COMMON_ERROR, "Base snapshot '" + baseSnapshot
                     + "' does not exist in repository '" + repository.getName() + "'");
@@ -562,6 +566,7 @@ public class BackupHandler extends FrontendDaemon implements Writable, MemoryTra
             ErrorReport.reportDdlException(ErrorCode.ERR_COMMON_ERROR, "Base snapshot '" + baseSnapshot
                     + "' in repository '" + repository.getName() + "' is not complete: " + st.getErrMsg());
         }
+        return IncrementalBase.of(baseInfo, metas.get(0));
     }
 
     private Catalog getCatalog(String catalogName) throws DdlException {

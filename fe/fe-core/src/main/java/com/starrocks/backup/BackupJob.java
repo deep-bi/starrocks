@@ -160,6 +160,13 @@ public class BackupJob extends AbstractJob {
     @SerializedName(value = "backupCatalogs")
     private List<Catalog> backupCatalogs = Lists.newArrayList();
 
+    // null for a full backup
+    @SerializedName(value = "incrementalBase")
+    private IncrementalBase incrementalBase;
+    // tablet id -> every file of the tablet in this snapshot, with its holder
+    @SerializedName(value = "tabletManifests")
+    private Map<Long, List<ManifestEntry>> tabletManifests = Maps.newConcurrentMap();
+
     public BackupJob() {
         super(JobType.BACKUP);
     }
@@ -173,6 +180,18 @@ public class BackupJob extends AbstractJob {
 
     public void setTestPrimaryKey() {
         testPrimaryKey = true;
+    }
+
+    public void setIncrementalBase(IncrementalBase incrementalBase) {
+        this.incrementalBase = incrementalBase;
+    }
+
+    public IncrementalBase getIncrementalBase() {
+        return incrementalBase;
+    }
+
+    public Map<Long, List<ManifestEntry>> getTabletManifests() {
+        return tabletManifests;
     }
 
     public Path getLocalJobDirPath() {
@@ -298,6 +317,7 @@ public class BackupJob extends AbstractJob {
 
             // reset files in snapshot info with checksum filename
             info.setFiles(tabletFileMap.get(tabletId));
+            tabletManifests.put(tabletId, buildManifest(tabletId, tabletFileMap.get(tabletId)));
         }
 
         taskProgress.remove(task.getSignature());
@@ -441,6 +461,57 @@ public class BackupJob extends AbstractJob {
         }
     }
 
+    private boolean isIncremental() {
+        return incrementalBase != null;
+    }
+
+    private boolean isReusingBase() {
+        return isIncremental() && incrementalBase.isReusableBy(dbId);
+    }
+
+    // Partition level of change detection: an unchanged partition is not snapshotted, and its tablets keep the
+    // base's manifests.
+    private boolean keepBaseManifestsIfUnchanged(OlapTable table, PhysicalPartition partition,
+                                                 List<MaterializedIndex> indexes) {
+        if (!isReusingBase() || !incrementalBase.isUnchanged(table, partition)) {
+            return false;
+        }
+        Map<Long, List<ManifestEntry>> kept = Maps.newHashMap();
+        for (MaterializedIndex index : indexes) {
+            for (Tablet tablet : index.getTablets()) {
+                List<ManifestEntry> manifest = incrementalBase.getManifest(tablet.getId());
+                if (manifest == null) {
+                    return false;
+                }
+                kept.put(tablet.getId(), Lists.newArrayList(manifest));
+            }
+        }
+        tabletManifests.putAll(kept);
+        return true;
+    }
+
+    // File level of change detection: a file is reused when the base's manifest for the same tablet has the
+    // same name and md5. The BE skips the same files, from the reusable files sent with the upload task.
+    private List<ManifestEntry> buildManifest(long tabletId, List<String> filesWithChecksum) {
+        Map<String, ManifestEntry> baseEntries = baseManifest(tabletId).stream()
+                .collect(Collectors.toMap(ManifestEntry::getFile, entry -> entry));
+        List<ManifestEntry> manifest = Lists.newArrayList();
+        for (String file : filesWithChecksum) {
+            ManifestEntry baseEntry = baseEntries.get(file);
+            manifest.add(baseEntry != null ? baseEntry : new ManifestEntry(file, label, isIncremental()));
+        }
+        return manifest;
+    }
+
+    private List<String> reusableFiles(long tabletId) {
+        return baseManifest(tabletId).stream().map(ManifestEntry::getFile).collect(Collectors.toList());
+    }
+
+    private List<ManifestEntry> baseManifest(long tabletId) {
+        List<ManifestEntry> manifest = isReusingBase() ? incrementalBase.getManifest(tabletId) : null;
+        return manifest == null ? List.of() : manifest;
+    }
+
     protected void prepareSnapshotTask(PhysicalPartition partition, Table tbl, Tablet tablet, MaterializedIndex index,
                                        long visibleVersion, int schemaHash) {
         Replica replica = chooseReplica((LocalTablet) tablet, visibleVersion, schemaHash);
@@ -501,6 +572,7 @@ public class BackupJob extends AbstractJob {
             unfinishedTaskIds.clear();
             taskProgress.clear();
             taskErrMsg.clear();
+            tabletManifests.clear();
             // create snapshot tasks
             for (TableRefPersist tblRef : tableRefs) {
                 String tblName = tblRef.getName().getTbl();
@@ -524,6 +596,11 @@ public class BackupJob extends AbstractJob {
                     for (PhysicalPartition physicalPartition : partition.getSubPartitions()) {
                         long visibleVersion = physicalPartition.getVisibleVersion();
                         List<MaterializedIndex> indexes = physicalPartition.getLatestMaterializedIndices(IndexExtState.VISIBLE);
+                        if (keepBaseManifestsIfUnchanged(olapTbl, physicalPartition, indexes)) {
+                            LOG.info("partition {} is unchanged since base snapshot {}, version: {}",
+                                    physicalPartition.getId(), incrementalBase.getLabel(), visibleVersion);
+                            continue;
+                        }
                         for (MaterializedIndex index : indexes) {
                             int schemaHash = olapTbl.getSchemaHashByIndexMetaId(index.getMetaId());
                             for (Tablet tablet : index.getTablets()) {
@@ -612,12 +689,17 @@ public class BackupJob extends AbstractJob {
         LOG.info("backend {} has {} batch, total {} tasks, {}", beId, batchNum, totalNum, this);
         for (int batch = 0; batch < batchNum; batch++) {
             Map<String, String> srcToDest = Maps.newHashMap();
+            Map<String, List<String>> reusableFiles = Maps.newHashMap();
             int currentBatchTaskNum = (batch == batchNum - 1) ? totalNum - index : taskNumPerBatch;
             for (int j = 0; j < currentBatchTaskNum; j++) {
                 SnapshotInfo info = infos.get(index++);
                 String src = info.getTabletPath();
-                String dest = repo.getRepoTabletPathBySnapshotInfo(label, info);
+                String dest = repo.getRepoTabletPathBySnapshotInfo(label, info, isIncremental());
                 srcToDest.put(src, dest);
+                List<String> reusable = reusableFiles(info.getTabletId());
+                if (!reusable.isEmpty()) {
+                    reusableFiles.put(dest, reusable);
+                }
             }
             long signature = globalStateMgr.getNextId();
             UploadTask task;
@@ -628,6 +710,7 @@ public class BackupJob extends AbstractJob {
                 task = new UploadTask(null, beId, signature, jobId, dbId, srcToDest,
                         null, repo.getStorage().getProperties(), hdfsProperties);
             }
+            task.setReusableFiles(reusableFiles);
             batchTask.addTask(task);
             unfinishedTaskIds.put(signature, beId);
         }

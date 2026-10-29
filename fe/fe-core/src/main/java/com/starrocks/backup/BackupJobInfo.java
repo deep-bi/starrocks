@@ -245,6 +245,8 @@ public class BackupJobInfo implements Writable {
     public static class BackupTabletInfo {
         @SerializedName(value = "id")
         public long id;
+        @SerializedName(value = "files")
+        public List<ManifestEntry> files = Lists.newArrayList();
     }
 
     // eg: __db_10001/__tbl_10002/__part_10003/__idx_10002/__10004

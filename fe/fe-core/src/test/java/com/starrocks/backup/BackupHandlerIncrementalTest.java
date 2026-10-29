@@ -160,7 +160,8 @@ public class BackupHandlerIncrementalTest {
 
         handler.process(new ConnectContext(), incremental("inc1", BASE));
 
-        Assertions.assertTrue(handler.getJob(CatalogMocker.TEST_DB_ID) instanceof BackupJob);
+        BackupJob job = (BackupJob) handler.getJob(CatalogMocker.TEST_DB_ID);
+        Assertions.assertEquals(BASE, job.getIncrementalBase().getLabel());
     }
 
     // TC-006
@@ -235,6 +236,20 @@ public class BackupHandlerIncrementalTest {
 
         assertRejected(incremental("inc1", BASE),
                 "Can only run one backup or restore job of a database at same time");
+    }
+
+    // TC-030
+    @Test
+    public void tableWithTemporaryPartitionsKeepsTheExistingRejection() throws Exception {
+        baseInfo = baseInfoWith(CatalogMocker.TEST_DB_NAME, 1);
+        new MockUp<OlapTable>() {
+            @Mock
+            public boolean existTempPartitions() {
+                return true;
+            }
+        };
+
+        assertRejected(incremental("inc1", BASE), "Do not support backing up table with temp partitions");
     }
 
     private void assertRejected(BackupStmt stmt, String expectedMessage) {
