@@ -67,9 +67,10 @@ public class BackupHandlerIncrementalTest {
     private BackupHandler handler;
     private Database db;
 
-    // What the mocked repository holds: snapshot names, and the base's __info (null when it has none).
+    // What the mocked repository holds: snapshot names, and the base's __info and __meta (null when missing).
     private List<String> repoSnapshots;
     private BackupJobInfo baseInfo;
+    private BackupMeta baseMeta;
 
     @BeforeEach
     public void setUp() throws Exception {
@@ -83,6 +84,7 @@ public class BackupHandlerIncrementalTest {
         db = CatalogMocker.mockDb();
         repoSnapshots = Lists.newArrayList(BASE);
         baseInfo = null;
+        baseMeta = new BackupMeta(List.of(db.getTable(CatalogMocker.TEST_TBL_NAME)));
 
         new MockUp<Repository>() {
             @Mock
@@ -102,6 +104,16 @@ public class BackupHandlerIncrementalTest {
                     return new Status(Status.ErrCode.NOT_FOUND, "no __info file for snapshot " + label);
                 }
                 infos.add(baseInfo);
+                return Status.OK;
+            }
+
+            @Mock
+            public Status getSnapshotMetaFile(String label, List<BackupMeta> backupMetas, int metaVersion,
+                                              int starrocksMetaVersion) {
+                if (baseMeta == null) {
+                    return new Status(Status.ErrCode.NOT_FOUND, "no __meta file for snapshot " + label);
+                }
+                backupMetas.add(baseMeta);
                 return Status.OK;
             }
         };
@@ -161,6 +173,16 @@ public class BackupHandlerIncrementalTest {
     // TC-007
     @Test
     public void baseWithoutInfoFileIsRejected() {
+        assertRejected(incremental("inc1", BASE),
+                "Base snapshot '" + BASE + "' in repository '" + REPO + "' is not complete");
+    }
+
+    // TC-007b
+    @Test
+    public void baseWithoutMetaFileIsRejected() throws Exception {
+        baseInfo = baseInfoWith(CatalogMocker.TEST_DB_NAME, 1);
+        baseMeta = null;
+
         assertRejected(incremental("inc1", BASE),
                 "Base snapshot '" + BASE + "' in repository '" + REPO + "' is not complete");
     }

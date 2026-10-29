@@ -555,6 +555,13 @@ public class BackupHandler extends FrontendDaemon implements Writable, MemoryTra
                     + "' has snapshot format version " + baseInfo.snapshotFormatVersion
                     + ", which this FE does not support");
         }
+
+        List<BackupMeta> metas = Lists.newArrayList();
+        st = repository.getSnapshotMetaFile(baseSnapshot, metas, baseInfo.metaVersion, baseInfo.starrocksMetaVersion);
+        if (!st.ok()) {
+            ErrorReport.reportDdlException(ErrorCode.ERR_COMMON_ERROR, "Base snapshot '" + baseSnapshot
+                    + "' in repository '" + repository.getName() + "' is not complete: " + st.getErrMsg());
+        }
     }
 
     private Catalog getCatalog(String catalogName) throws DdlException {
