@@ -43,10 +43,14 @@ import com.starrocks.metric.MetricRepo;
 import com.starrocks.persist.EditLog;
 import com.starrocks.persist.TableRefPersist;
 import com.starrocks.persist.gson.GsonUtils;
+import com.starrocks.qe.ShowResultMetaFactory;
+import com.starrocks.qe.ShowResultSetMetaData;
 import com.starrocks.server.GlobalStateMgr;
 import com.starrocks.server.LocalMetastore;
 import com.starrocks.server.NodeMgr;
 import com.starrocks.sql.ast.KeysType;
+import com.starrocks.sql.ast.ShowBackupStmt;
+import com.starrocks.sql.ast.ShowSnapshotStmt;
 import com.starrocks.system.Backend;
 import com.starrocks.system.SystemInfoService;
 import com.starrocks.task.AgentBatchTask;
@@ -82,6 +86,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.FileVisitOption;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.util.Collection;
 import java.util.Comparator;
 import java.util.List;
@@ -92,7 +97,8 @@ import java.util.function.Consumer;
 import java.util.function.Function;
 
 // Change detection (test-design.md section 3), the snapshot content it decides (TC-020..045), and the job's
-// restart, cancel and timeout (TC-081, TC-087, TC-089).
+// restart, cancel and timeout (TC-081, TC-087, TC-089), and what SHOW SNAPSHOT and SHOW BACKUP show of it
+// (TC-090, TC-092).
 // Each test backs up one table, because CatalogMocker reuses tablet ids across tables.
 public class BackupJobIncrementalTest {
     private static final long REPO_ID = 20000;
@@ -678,6 +684,45 @@ public class BackupJobIncrementalTest {
         Assertions.assertEquals(List.of(), uploadedByFe);
     }
 
+    // TC-090
+    @Test
+    public void detailedShowSnapshotShowsTypeAndBase() throws Exception {
+        BackupJob full = runBackup(fullJob("full_label", TBL2), DEFAULT_LOCAL_FILES, DEFAULT_REPORTED_FILES);
+        AgentTaskQueue.clearAllTasks();
+        BackupJob incremental = runBackup(incrementalJob(TBL2, baseOf(TBL2, null, copy -> { }, info -> { })),
+                DEFAULT_LOCAL_FILES, DEFAULT_REPORTED_FILES);
+
+        JSONObject fullDetails = showSnapshotDetails(full);
+        Assertions.assertEquals("full", fullDetails.getString("type"));
+        Assertions.assertFalse(fullDetails.has("base_snapshot"));
+        JSONObject incrementalDetails = showSnapshotDetails(incremental);
+        Assertions.assertEquals("incremental", incrementalDetails.getString("type"));
+        Assertions.assertEquals(BASE, incrementalDetails.getString("base_snapshot"));
+    }
+
+    // TC-092
+    @Test
+    public void showBackupShowsTypeAndBaseDuringAndAfterTheJob() throws Exception {
+        BackupJob running = incrementalJob(TBL2, baseOf(TBL2, null, copy -> { }, info -> { }));
+        PhysicalPartition p1 = physicalPartition(TBL2, P1);
+        p1.setVisibleVersion(p1.getVisibleVersion() + 1, p1.getVisibleVersionTime() + 1);
+        runUntil(running, BackupJobState.UPLOADING);
+        assertShownTypeAndBase(running, "incremental", BASE);
+
+        AgentTaskQueue.clearAllTasks();
+        BackupJob finished = incrementalJob(TBL2, baseOf(TBL2, null, copy -> { }, info -> { }));
+        p1.setVisibleVersion(p1.getVisibleVersion() + 1, p1.getVisibleVersionTime() + 1);
+        runUntil(finished, BackupJobState.UPLOAD_INFO);
+        finished.run();
+        Assertions.assertEquals(BackupJobState.FINISHED, finished.getState());
+        assertShownTypeAndBase(finished, "incremental", BASE);
+
+        AgentTaskQueue.clearAllTasks();
+        BackupJob full = fullJob("full_label", TBL2);
+        runUntil(full, BackupJobState.UPLOADING);
+        assertShownTypeAndBase(full, "full", FeConstants.NULL_STRING);
+    }
+
     // ---- helpers ----
 
     private static final Function<Long, List<String>> DEFAULT_LOCAL_FILES = id -> List.of(id + "_0.dat", id + ".hdr");
@@ -1017,6 +1062,36 @@ public class BackupJobIncrementalTest {
             task.getSrcToDestPath().keySet().forEach(src -> ids.add(tabletIdOfSource(src)));
         }
         return ids;
+    }
+
+    // SHOW BACKUP shows getInfo() by position, under the columns the statement's metadata names.
+    private static void assertShownTypeAndBase(BackupJob job, String type, String base) {
+        ShowResultSetMetaData columns =
+                new ShowResultMetaFactory().getMetadata(new ShowBackupStmt(CatalogMocker.TEST_DB_NAME));
+        List<String> names = Lists.newArrayList();
+        for (int i = 0; i < columns.getColumnCount(); i++) {
+            names.add(columns.getColumn(i).getName());
+        }
+        List<String> row = job.getInfo();
+        Assertions.assertEquals(names.size(), row.size(), names + "\n" + row);
+        Assertions.assertEquals(type, row.get(names.indexOf("Type")), row.toString());
+        Assertions.assertEquals(base, row.get(names.indexOf("BaseSnapshot")), row.toString());
+    }
+
+    // The Details column of SHOW SNAPSHOT ... WHERE SNAPSHOT = ... AND TIMESTAMP = ..., with the repository serving
+    // the job's own __info.
+    private JSONObject showSnapshotDetails(BackupJob job) {
+        new MockUp<Repository>() {
+            @Mock
+            Status download(String remoteFilePath, String localFilePath) throws IOException {
+                Files.copy(Path.of(job.getLocalJobInfoFilePath()), Path.of(localFilePath),
+                        StandardCopyOption.REPLACE_EXISTING);
+                return Status.OK;
+            }
+        };
+        List<String> row = repo.getSnapshotInfos(job.getLabel(), "2026-10-29-00-00-00-000", null).get(0);
+        Assertions.assertEquals("OK", row.get(ShowSnapshotStmt.SNAPSHOT_DETAIL.indexOf("Status")), row.toString());
+        return new JSONObject(row.get(ShowSnapshotStmt.SNAPSHOT_DETAIL.indexOf("Details")));
     }
 
     private static Map<Long, List<ManifestEntry>> writtenManifests(BackupJob job) throws IOException {

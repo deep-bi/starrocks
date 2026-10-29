@@ -59,6 +59,7 @@ import com.starrocks.catalog.Table;
 import com.starrocks.catalog.Tablet;
 import com.starrocks.catalog.View;
 import com.starrocks.common.Config;
+import com.starrocks.common.FeConstants;
 import com.starrocks.common.StarRocksException;
 import com.starrocks.common.io.DeepCopy;
 import com.starrocks.common.util.TimeUtils;
@@ -1003,6 +1004,8 @@ public class BackupJob extends AbstractJob {
         }
         info.add(status.toString());
         info.add(String.valueOf(timeoutMs / 1000));
+        info.add(isIncremental() ? "incremental" : "full");
+        info.add(isIncremental() ? incrementalBase.getLabel() : FeConstants.NULL_STRING);
         return info;
     }
 
