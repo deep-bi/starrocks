@@ -264,8 +264,6 @@ public class HttpServerHandler extends ChannelInboundHandlerAdapter {
                         uri, startTime, latency);
             }
 
-            ExecuteEnv.getInstance().getScheduler().getRoleConnectionManager().unregisterConnection(request.connectContext);
-
             if (asyncHandling) {
                 ReferenceCountUtil.release(request.getRequest());
             }

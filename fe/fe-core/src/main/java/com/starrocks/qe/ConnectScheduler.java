@@ -38,6 +38,7 @@ import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Predicate;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
+import com.starrocks.authentication.AuthenticationException;
 import com.starrocks.authentication.AuthenticationMgr;
 import com.starrocks.authorization.AccessDeniedException;
 import com.starrocks.authorization.PrivilegeType;
@@ -153,6 +154,11 @@ public class ConnectScheduler {
                 LOG.info(userErrMsg + ", details: connectionId={}, connByUser={}",
                         ctx.getConnectionId(), connCountByUser);
                 return new Pair<>(false, userErrMsg);
+            }
+            try {
+                roleConnectionManager.registerConnection(ctx);
+            } catch (AuthenticationException e) {
+                return new Pair<>(false, e.getMessage());
             }
             numberConnection.incrementAndGet();
             currentConnAtomic.incrementAndGet();
