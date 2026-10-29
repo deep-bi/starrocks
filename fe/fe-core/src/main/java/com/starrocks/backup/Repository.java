@@ -368,6 +368,32 @@ public class Repository implements Writable, GsonPostProcessable {
         return Status.OK;
     }
 
+    // For a snapshot named without its timestamp, as a base snapshot is. A label normally has a single
+    // __info file; if there are several, the newest wins, since timestamps sort as text.
+    public Status getSnapshotInfoFile(String label, List<BackupJobInfo> infos) {
+        List<RemoteFile> results = Lists.newArrayList();
+        Status st = storage.list(assembleJobInfoFilePath(label, -1) + "*", results);
+        if (!st.ok()) {
+            return st;
+        }
+
+        String newestTimestamp = null;
+        for (RemoteFile file : results) {
+            Pair<String, String> pureFileName = decodeFileNameWithChecksum(file.getName());
+            if (pureFileName == null) {
+                continue;
+            }
+            String timestamp = disjoinPrefix(PREFIX_JOB_INFO, pureFileName.first);
+            if (newestTimestamp == null || timestamp.compareTo(newestTimestamp) > 0) {
+                newestTimestamp = timestamp;
+            }
+        }
+        if (newestTimestamp == null) {
+            return new Status(ErrCode.NOT_FOUND, "no __info file for snapshot " + label);
+        }
+        return getSnapshotInfoFile(label, newestTimestamp, infos);
+    }
+
     public Status getSnapshotMetaFile(String label, List<BackupMeta> backupMetas, int metaVersion,
                                       int starrocksMetaVersion) {
         String remoteMetaFilePath = assembleMetaInfoFilePath(label);

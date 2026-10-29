@@ -79,6 +79,10 @@ import java.util.stream.Collectors;
 public class BackupJobInfo implements Writable {
     private static final Logger LOG = LogManager.getLogger(BackupJobInfo.class);
 
+    // Snapshots made by FEs without incremental backup have no format version.
+    public static final int SNAPSHOT_FORMAT_VERSION_LEGACY = 0;
+    public static final int SNAPSHOT_FORMAT_VERSION = 1;
+
     @SerializedName(value = "name")
     public String name;
     @SerializedName(value = "dbName")
@@ -95,6 +99,9 @@ public class BackupJobInfo implements Writable {
     public int metaVersion;
     @SerializedName(value = "starrocksMetaVersion")
     public int starrocksMetaVersion;
+
+    @SerializedName(value = "snapshotFormatVersion")
+    public int snapshotFormatVersion = SNAPSHOT_FORMAT_VERSION_LEGACY;
 
     // This map is used to save the table alias mapping info when processing a restore job.
     // origin -> alias
@@ -424,6 +431,7 @@ public class BackupJobInfo implements Writable {
             // starrocks_meta_version does not exist
             jobInfo.starrocksMetaVersion = FeConstants.STARROCKS_META_VERSION;
         }
+        jobInfo.snapshotFormatVersion = root.optInt("snapshot_format_version", SNAPSHOT_FORMAT_VERSION_LEGACY);
 
         JSONObject backupObjs = root.getJSONObject("backup_objects");
         String[] tblNames = JSONObject.getNames(backupObjs);

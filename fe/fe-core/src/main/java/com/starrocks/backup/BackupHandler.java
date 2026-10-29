@@ -465,31 +465,11 @@ public class BackupHandler extends FrontendDaemon implements Writable, MemoryTra
             ErrorReport.reportDdlException(ErrorCode.ERR_COMMON_ERROR, st.getErrMsg());
         }
         if (existSnapshotNames.contains(stmt.getLabel())) {
-            if (stmt.getType() == BackupType.FULL) {
-                ErrorReport.reportDdlException(ErrorCode.ERR_COMMON_ERROR, "Snapshot with name '"
-                        + stmt.getLabel() + "' already exist in repository");
-            } else {
-                ErrorReport.reportDdlException(ErrorCode.ERR_COMMON_ERROR, "Currently does not support "
-                        + "incremental backup");
-
-                // TODO:
-                // This is a incremental backup, the existing snapshot in repository will be treated
-                // as base snapshot.
-                // But first we need to check if the existing snapshot has same meta.
-                List<BackupMeta> backupMetas = Lists.newArrayList();
-                st = repository.getSnapshotMetaFile(stmt.getLabel(), backupMetas, -1, -1);
-                if (!st.ok()) {
-                    ErrorReport.reportDdlException(ErrorCode.ERR_COMMON_ERROR,
-                            "Failed to get existing meta info for repository: "
-                                    + st.getErrMsg());
-                }
-                Preconditions.checkState(backupMetas.size() == 1);
-
-                if (!curBackupMeta.compatibleWith(backupMetas.get(0))) {
-                    ErrorReport.reportDdlException(ErrorCode.ERR_COMMON_ERROR,
-                            "Can not make incremental backup. Meta does not compatible");
-                }
-            }
+            ErrorReport.reportDdlException(ErrorCode.ERR_COMMON_ERROR, "Snapshot with name '"
+                    + stmt.getLabel() + "' already exist in repository");
+        }
+        if (stmt.getType() == BackupType.INCREMENTAL) {
+            checkBaseSnapshot(repository, existSnapshotNames, stmt.getBaseSnapshot(), db.getOriginName());
         }
 
         // Create a backup job
@@ -549,6 +529,32 @@ public class BackupHandler extends FrontendDaemon implements Writable, MemoryTra
         dbIdToBackupOrRestoreJob.put(dbId, backupJob);
 
         LOG.info("finished to submit backup job: {}", backupJob);
+    }
+
+    private void checkBaseSnapshot(Repository repository, List<String> existSnapshotNames, String baseSnapshot,
+                                   String dbName) throws DdlException {
+        if (!existSnapshotNames.contains(baseSnapshot)) {
+            ErrorReport.reportDdlException(ErrorCode.ERR_COMMON_ERROR, "Base snapshot '" + baseSnapshot
+                    + "' does not exist in repository '" + repository.getName() + "'");
+        }
+
+        List<BackupJobInfo> infos = Lists.newArrayList();
+        Status st = repository.getSnapshotInfoFile(baseSnapshot, infos);
+        if (!st.ok()) {
+            ErrorReport.reportDdlException(ErrorCode.ERR_COMMON_ERROR, "Base snapshot '" + baseSnapshot
+                    + "' in repository '" + repository.getName() + "' is not complete: " + st.getErrMsg());
+        }
+
+        BackupJobInfo baseInfo = infos.get(0);
+        if (!baseInfo.dbName.equalsIgnoreCase(dbName)) {
+            ErrorReport.reportDdlException(ErrorCode.ERR_COMMON_ERROR, "Base snapshot '" + baseSnapshot
+                    + "' was taken from database '" + baseInfo.dbName + "', not '" + dbName + "'");
+        }
+        if (baseInfo.snapshotFormatVersion > BackupJobInfo.SNAPSHOT_FORMAT_VERSION) {
+            ErrorReport.reportDdlException(ErrorCode.ERR_COMMON_ERROR, "Base snapshot '" + baseSnapshot
+                    + "' has snapshot format version " + baseInfo.snapshotFormatVersion
+                    + ", which this FE does not support");
+        }
     }
 
     private Catalog getCatalog(String catalogName) throws DdlException {
