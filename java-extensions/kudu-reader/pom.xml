@@ -13,6 +13,7 @@
 
     <properties>
         <java-extensions.home>${basedir}/../</java-extensions.home>
+        <!-- deepbi1 shades Netty 4.1.138.Final and protobuf-java 3.25.5 (upstream 1.17.1: 4.1.110 / 3.21.12) -->
         <kudu.version>1.17.1-deepbi1</kudu.version>
     </properties>
 
@@ -37,6 +38,13 @@
         <dependency>
             <groupId>org.apache.hadoop</groupId>
             <artifactId>hadoop-common</artifactId>
+            <exclusions>
+                <!-- Jetty only backs Hadoop's embedded HttpServer2; the Kudu reader never loads Hadoop classes -->
+                <exclusion>
+                    <groupId>org.eclipse.jetty</groupId>
+                    <artifactId>*</artifactId>
+                </exclusion>
+            </exclusions>
         </dependency>
 
         <dependency>
@@ -68,12 +76,6 @@
         <dependency>
             <groupId>com.github.luben</groupId>
             <artifactId>zstd-jni</artifactId>
-        </dependency>
-
-        <dependency>
-            <groupId>commons-lang</groupId>
-            <artifactId>commons-lang</artifactId>
-            <version>2.6</version>
         </dependency>
 
         <dependency>
