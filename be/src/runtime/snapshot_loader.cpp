@@ -966,7 +966,8 @@ Status SnapshotLoader::_get_manifest_files(BrokerServiceConnection* client, cons
             if (found == listed.end()) {
                 std::string msg = "file " + name + " of the snapshot's manifest is missing from " + dir;
                 LOG(WARNING) << msg;
-                return Status::InternalError(msg);
+                // NOT_FOUND makes the FE cancel the restore instead of retrying it: the file won't come back.
+                return Status::NotFound(msg);
             }
             files->emplace(found->second.name, found->second);
             dirs->emplace(found->second.name, dir);

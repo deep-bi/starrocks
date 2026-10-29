@@ -66,7 +66,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Function;
 
-// The restore side of incremental snapshots (TC-074). Same setup as RestoreJobTest.testRunBackupRangeTable:
+// The restore side of incremental snapshots (TC-074, TC-075). Same setup as RestoreJobTest.testRunBackupRangeTable:
 // test_tbl2 is dropped and restored from a mocked repository.
 public class RestoreJobIncrementalTest {
     private static final String LABEL = "inc";
@@ -197,9 +197,76 @@ public class RestoreJobIncrementalTest {
         }
     }
 
+    // TC-075: a manifest file missing from its holder won't appear by retrying, so the BE's NOT_FOUND cancels an
+    // incremental restore. Every other failure is retried as before (REQ-RS-04, REQ-CP-01).
+    @Test
+    public void missingManifestFileCancelsAnIncrementalRestore() {
+        RestoreJob job = downloadingJob("full", tabletId -> List.of(
+                new ManifestEntry(tabletId + "_0.dat.22222222222222222222222222222222", "full", false)));
+        String missing = "file 1_0.dat.22222222222222222222222222222222 of the snapshot's manifest is missing from "
+                + REPO_ROOT + "__ss_full/__ss_content/__db_1/__tbl_2/__part_3/__idx_4/__1";
+
+        failDownload(job, queuedDownloadTasks().get(0), TStatusCode.NOT_FOUND, missing);
+        job.run();
+
+        Assertions.assertEquals(RestoreJobState.CANCELLED, job.getState());
+        Assertions.assertTrue(job.getStatus().getErrMsg().contains(missing), job.getStatus().toString());
+    }
+
+    // TC-075
+    @Test
+    public void otherDownloadFailureOfAnIncrementalRestoreIsRetried() {
+        RestoreJob job = downloadingJob("full", tabletId -> List.of(
+                new ManifestEntry(tabletId + "_0.dat.22222222222222222222222222222222", "full", false)));
+
+        failDownload(job, queuedDownloadTasks().get(0), TStatusCode.RUNTIME_ERROR, "get nothing from remote path");
+        job.run();
+
+        Assertions.assertEquals(RestoreJobState.DOWNLOADING, job.getState());
+        Assertions.assertTrue(job.getStatus().ok(), job.getStatus().toString());
+    }
+
+    // TC-075
+    @Test
+    public void notFoundOnAFullRestoreIsRetriedAsBefore() {
+        RestoreJob job = downloadingJob(null, tabletId -> List.of());
+
+        failDownload(job, queuedDownloadTasks().get(0), TStatusCode.NOT_FOUND, "not found");
+        job.run();
+
+        Assertions.assertEquals(RestoreJobState.DOWNLOADING, job.getState());
+        Assertions.assertTrue(job.getStatus().ok(), job.getStatus().toString());
+    }
+
+    private static void failDownload(RestoreJob job, DownloadTask task, TStatusCode code, String message) {
+        TStatus status = new TStatus(code);
+        status.setError_msgs(List.of(message));
+        TFinishTaskRequest request = new TFinishTaskRequest(new TBackend("", 0, 1), TTaskType.DOWNLOAD,
+                task.getSignature(), status);
+        Assertions.assertFalse(job.finishTabletDownloadTask(task, request));
+    }
+
+    private List<DownloadTask> downloadTasks(String baseSnapshot, Function<Long, List<ManifestEntry>> manifest) {
+        downloadingJob(baseSnapshot, manifest);
+        return queuedDownloadTasks();
+    }
+
+    private static List<DownloadTask> queuedDownloadTasks() {
+        List<DownloadTask> tasks = Lists.newArrayList();
+        for (long beId : List.of(CatalogMocker.BACKEND1_ID, CatalogMocker.BACKEND2_ID, CatalogMocker.BACKEND3_ID)) {
+            for (AgentTask task : AgentTaskQueue.getDiffTasks(beId, Maps.newHashMap())) {
+                if (task instanceof DownloadTask) {
+                    tasks.add((DownloadTask) task);
+                }
+            }
+        }
+        Assertions.assertFalse(tasks.isEmpty());
+        return tasks;
+    }
+
     // Restores test_tbl2 from a snapshot labelled LABEL (incremental when baseSnapshot is set) and runs the job
     // until it sends its download tasks.
-    private List<DownloadTask> downloadTasks(String baseSnapshot, Function<Long, List<ManifestEntry>> manifest) {
+    private RestoreJob downloadingJob(String baseSnapshot, Function<Long, List<ManifestEntry>> manifest) {
         SystemInfoService systemInfoService = new SystemInfoService();
         new Expectations(globalStateMgr) {
             {
@@ -342,14 +409,6 @@ public class RestoreJobIncrementalTest {
         job.run();
         Assertions.assertEquals(Status.OK, job.getStatus());
         Assertions.assertEquals(RestoreJobState.DOWNLOADING, job.getState());
-        List<DownloadTask> tasks = Lists.newArrayList();
-        for (long beId : beIds) {
-            for (AgentTask task : AgentTaskQueue.getDiffTasks(beId, Maps.newHashMap())) {
-                if (task instanceof DownloadTask) {
-                    tasks.add((DownloadTask) task);
-                }
-            }
-        }
-        return tasks;
+        return job;
     }
 }

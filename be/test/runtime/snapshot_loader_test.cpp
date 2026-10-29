@@ -395,6 +395,8 @@ TEST_F(SnapshotLoaderIncrementalTest, download_fails_naming_a_manifest_file_miss
         Status st = _loader.download({{own_legacy, local}}, request, &tablet_ids);
 
         ASSERT_FALSE(st.ok()) << missing;
+        // the FE cancels the restore on NOT_FOUND instead of retrying the task (TC-075)
+        EXPECT_TRUE(st.is_not_found()) << st;
         std::string message(st.message());
         size_t slash = missing.find_last_of('/');
         EXPECT_NE(std::string::npos, message.find(missing.substr(slash + 1))) << message;

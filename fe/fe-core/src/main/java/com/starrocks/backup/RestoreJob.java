@@ -283,6 +283,11 @@ public class RestoreJob extends AbstractJob {
 
     public synchronized boolean finishTabletDownloadTask(DownloadTask task, TFinishTaskRequest request) {
         if (checkTaskStatus(task, task.getJobId(), request)) {
+            // A file of an incremental snapshot's manifest is missing from its holder: retrying won't bring it back,
+            // so the next run() cancels the job. Every other failure is retried as before.
+            if (jobInfo.isIncremental() && request.getTask_status().getStatus_code() == TStatusCode.NOT_FOUND) {
+                status = new Status(ErrCode.NOT_FOUND, taskErrMsg.get(task.getSignature()));
+            }
             return false;
         }
 
