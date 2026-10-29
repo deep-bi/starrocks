@@ -66,6 +66,9 @@ import mockit.Expectations;
 import mockit.Mock;
 import mockit.MockUp;
 import mockit.Mocked;
+import org.json.JSONArray;
+import org.json.JSONObject;
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeAll;
@@ -74,7 +77,12 @@ import org.junit.jupiter.api.Test;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.FileVisitOption;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.Collection;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -139,6 +147,15 @@ public class BackupJobIncrementalTest {
     public static void start() {
         Config.tmp_dir = "./";
         new File(BackupHandler.BACKUP_ROOT_DIR.toString()).mkdirs();
+    }
+
+    @AfterAll
+    public static void end() throws IOException {
+        if (BackupHandler.BACKUP_ROOT_DIR.toFile().exists()) {
+            try (var paths = Files.walk(BackupHandler.BACKUP_ROOT_DIR, FileVisitOption.FOLLOW_LINKS)) {
+                paths.sorted(Comparator.reverseOrder()).map(Path::toFile).forEach(File::delete);
+            }
+        }
     }
 
     @BeforeEach
@@ -496,13 +513,225 @@ public class BackupJobIncrementalTest {
         }
     }
 
+    // TC-040
+    @Test
+    public void incrementalMetadataMatchesAFullSnapshotOfTheSameState() throws Exception {
+        PhysicalPartition p1 = physicalPartition(TBL2, P1);
+        p1.setVisibleVersion(p1.getVisibleVersion() + 1, p1.getVisibleVersionTime() + 1);
+        BackupJob full = runBackup(fullJob("full_label", TBL2), DEFAULT_LOCAL_FILES, DEFAULT_REPORTED_FILES);
+        BackupJob incremental = runBackup(incrementalJob(TBL2, baseOf(TBL2, null, copy -> { }, info -> { })),
+                DEFAULT_LOCAL_FILES, DEFAULT_REPORTED_FILES);
+
+        Assertions.assertEquals(readString(full.getLocalMetaInfoFilePath()),
+                readString(incremental.getLocalMetaInfoFilePath()));
+        JSONObject fullInfo = withoutSnapshotIdentityAndManifests(readJson(full.getLocalJobInfoFilePath()));
+        JSONObject incrementalInfo = withoutSnapshotIdentityAndManifests(readJson(incremental.getLocalJobInfoFilePath()));
+        Assertions.assertTrue(fullInfo.similar(incrementalInfo), fullInfo + "\n" + incrementalInfo);
+    }
+
+    // TC-041: P1 and P5 partitions in one backup, P2 in another.
+    @Test
+    public void everyTabletHasACompleteManifest() throws Exception {
+        BackupJob withP1AndP5 = runBackup(incrementalJob(TBL2,
+                        baseOf(TBL2, List.of(CatalogMocker.TEST_PARTITION2_NAME), copy -> { }, info -> { })),
+                DEFAULT_LOCAL_FILES, DEFAULT_REPORTED_FILES);
+        assertCompleteManifests(withP1AndP5, tablets(TBL2, P1, P2));
+
+        AgentTaskQueue.clearAllTasks();
+        PhysicalPartition p1 = physicalPartition(TBL2, P1);
+        p1.setVisibleVersion(p1.getVisibleVersion() + 1, p1.getVisibleVersionTime() + 1);
+        BackupJob withP2 = runBackup(incrementalJob(TBL2, baseOf(TBL2, null, copy -> { }, info -> { })),
+                DEFAULT_LOCAL_FILES, DEFAULT_REPORTED_FILES);
+        assertCompleteManifests(withP2, tablets(TBL2, P1, P2));
+    }
+
+    // TC-042: a file unchanged since the full snapshot is still held by it, three incrementals later.
+    @Test
+    public void reusedFileKeepsPointingAtTheFullSnapshotThroughAChain() throws Exception {
+        long tabletId = CatalogMocker.TEST_BASE_TABLET_P1_ID;
+        List<ManifestEntry> manifest = runChain().get(tabletId);
+
+        Assertions.assertEquals(new ManifestEntry(tabletId + "_a.dat." + MD5_A, "full", false), manifest.get(0));
+    }
+
+    // TC-043: inc3's manifest for a tablet names each holder for its own files.
+    @Test
+    public void manifestNamesEveryHolderForItsOwnFiles() throws Exception {
+        long tabletId = CatalogMocker.TEST_BASE_TABLET_P1_ID;
+        List<ManifestEntry> manifest = runChain().get(tabletId);
+
+        Assertions.assertEquals(List.of(
+                new ManifestEntry(tabletId + "_a.dat." + MD5_A, "full", false),
+                new ManifestEntry(tabletId + "_b.dat." + MD5_B, "inc1", true),
+                new ManifestEntry(tabletId + "_c.dat." + MD5_C, "inc2", true),
+                new ManifestEntry(tabletId + ".hdr." + MD5_E, "inc2", true)), manifest);
+    }
+
+    // TC-044
+    @Test
+    public void infoRecordsFormatVersionTypeAndBase() throws Exception {
+        BackupJob full = runBackup(fullJob("full_label", TBL2), DEFAULT_LOCAL_FILES, DEFAULT_REPORTED_FILES);
+        AgentTaskQueue.clearAllTasks();
+        BackupJob incremental = runBackup(incrementalJob(TBL2, baseOf(TBL2, null, copy -> { }, info -> { })),
+                DEFAULT_LOCAL_FILES, DEFAULT_REPORTED_FILES);
+
+        JSONObject fullJson = readJson(full.getLocalJobInfoFilePath());
+        Assertions.assertEquals(BackupJobInfo.SNAPSHOT_FORMAT_VERSION, fullJson.getInt("snapshot_format_version"));
+        Assertions.assertEquals("full", fullJson.getString("type"));
+        Assertions.assertFalse(fullJson.has("base_snapshot"));
+        JSONObject incrementalJson = readJson(incremental.getLocalJobInfoFilePath());
+        Assertions.assertEquals(BackupJobInfo.SNAPSHOT_FORMAT_VERSION,
+                incrementalJson.getInt("snapshot_format_version"));
+        Assertions.assertEquals("incremental", incrementalJson.getString("type"));
+        Assertions.assertEquals(BASE, incrementalJson.getString("base_snapshot"));
+
+        BackupJobInfo parsed = BackupJobInfo.fromFile(incremental.getLocalJobInfoFilePath());
+        Assertions.assertTrue(parsed.isIncremental());
+        Assertions.assertEquals(BASE, parsed.baseSnapshot);
+        Assertions.assertFalse(BackupJobInfo.fromFile(full.getLocalJobInfoFilePath()).isIncremental());
+    }
+
+    // TC-045
+    @Test
+    public void stockParserStillReadsTheInfo() throws Exception {
+        PhysicalPartition p1 = physicalPartition(TBL2, P1);
+        p1.setVisibleVersion(p1.getVisibleVersion() + 1, p1.getVisibleVersionTime() + 1);
+        BackupJob incremental = runBackup(incrementalJob(TBL2, baseOf(TBL2, null, copy -> { }, info -> { })),
+                DEFAULT_LOCAL_FILES, DEFAULT_REPORTED_FILES);
+
+        BackupJobInfo stock = StockBackupJobInfoParser.parse(readString(incremental.getLocalJobInfoFilePath()));
+        BackupJobInfo current = BackupJobInfo.fromFile(incremental.getLocalJobInfoFilePath());
+        Assertions.assertEquals(tabletOrder(current), tabletOrder(stock));
+        Assertions.assertEquals(tablets(TBL2, P1, P2), Sets.newHashSet(tabletOrder(stock)));
+    }
+
     // ---- helpers ----
 
+    private static final Function<Long, List<String>> DEFAULT_LOCAL_FILES = id -> List.of(id + "_0.dat", id + ".hdr");
+    private static final Function<Long, List<String>> DEFAULT_REPORTED_FILES =
+            id -> List.of(dataFile(id, MD5_A), headerFile(id, MD5_C));
+
     private BackupJob incrementalJob(String tableName, IncrementalBase base) {
-        BackupJob job = new BackupJob(LABEL, CatalogMocker.TEST_DB_ID, CatalogMocker.TEST_DB_NAME,
-                tableRefs(tableName), 13600 * 1000, globalStateMgr, REPO_ID);
+        return incrementalJob(LABEL, tableName, base);
+    }
+
+    private BackupJob incrementalJob(String label, String tableName, IncrementalBase base) {
+        BackupJob job = fullJob(label, tableName);
         job.setIncrementalBase(base);
         return job;
+    }
+
+    private BackupJob fullJob(String label, String tableName) {
+        return new BackupJob(label, CatalogMocker.TEST_DB_ID, CatalogMocker.TEST_DB_NAME,
+                tableRefs(tableName), 13600 * 1000, globalStateMgr, REPO_ID);
+    }
+
+    // Runs a backup until its __meta and __info are written locally (state UPLOAD_INFO).
+    private BackupJob runBackup(BackupJob job, Function<Long, List<String>> localFiles,
+                                Function<Long, List<String>> reportedFiles) {
+        // snapshot task signatures are tablet ids, so another job's tasks would be found instead
+        AgentTaskQueue.clearAllTasks();
+        snapshotTablets(job);
+        finishUploads(job, uploadTasks(job, localFiles), reportedFiles);
+        job.run();
+        Assertions.assertEquals(BackupJobState.SAVE_META, job.getState());
+        job.run();
+        Assertions.assertEquals(Status.OK, job.getStatus());
+        Assertions.assertEquals(BackupJobState.UPLOAD_INFO, job.getState());
+        return job;
+    }
+
+    // As the next incremental reads this snapshot from the repository.
+    private static IncrementalBase baseFromWrittenFiles(BackupJob job) throws IOException {
+        return IncrementalBase.of(BackupJobInfo.fromFile(job.getLocalJobInfoFilePath()),
+                BackupMeta.fromFile(job.getLocalMetaInfoFilePath(), FeConstants.STARROCKS_META_VERSION));
+    }
+
+    // full -> inc1 -> inc2 -> inc3, with p1 changed every time; returns inc3's written manifests. Tablet 60001
+    // gets a new data file in inc1 and in inc2, and a new header in each snapshot except inc3.
+    private Map<Long, List<ManifestEntry>> runChain() throws Exception {
+        long tabletId = CatalogMocker.TEST_BASE_TABLET_P1_ID;
+        List<List<String>> chain = List.of(
+                List.of(tabletId + "_a.dat." + MD5_A, tabletId + ".hdr." + MD5_B),
+                List.of(tabletId + "_a.dat." + MD5_A, tabletId + "_b.dat." + MD5_B, tabletId + ".hdr." + MD5_C),
+                List.of(tabletId + "_a.dat." + MD5_A, tabletId + "_b.dat." + MD5_B, tabletId + "_c.dat." + MD5_C,
+                        tabletId + ".hdr." + MD5_E),
+                List.of(tabletId + "_a.dat." + MD5_A, tabletId + "_b.dat." + MD5_B, tabletId + "_c.dat." + MD5_C,
+                        tabletId + ".hdr." + MD5_E));
+        List<String> labels = List.of("full", "inc1", "inc2", "inc3");
+        PhysicalPartition p1 = physicalPartition(TBL2, P1);
+
+        BackupJob previous = null;
+        for (int i = 0; i < chain.size(); i++) {
+            AgentTaskQueue.clearAllTasks();
+            p1.setVisibleVersion(p1.getVisibleVersion() + 1, p1.getVisibleVersionTime() + 1);
+            List<String> files = chain.get(i);
+            Function<Long, List<String>> reported = id -> id == tabletId ? files : DEFAULT_REPORTED_FILES.apply(id);
+            Function<Long, List<String>> local = id -> reported.apply(id).stream()
+                    .map(f -> Repository.decodeFileNameWithChecksum(f).first).toList();
+            BackupJob job = previous == null ? fullJob(labels.get(i), TBL2)
+                    : incrementalJob(labels.get(i), TBL2, baseFromWrittenFiles(previous));
+            previous = runBackup(job, local, reported);
+        }
+        Map<Long, List<ManifestEntry>> manifests = Maps.newHashMap();
+        forEachTablet(BackupJobInfo.fromFile(previous.getLocalJobInfoFilePath()),
+                tablet -> manifests.put(tablet.id, tablet.files));
+        return manifests;
+    }
+
+    private void assertCompleteManifests(BackupJob job, Set<Long> expectedTablets) throws IOException {
+        Map<Long, List<ManifestEntry>> written = Maps.newHashMap();
+        forEachTablet(BackupJobInfo.fromFile(job.getLocalJobInfoFilePath()),
+                tablet -> written.put(tablet.id, tablet.files));
+        Assertions.assertEquals(expectedTablets, written.keySet());
+        for (Map.Entry<Long, List<ManifestEntry>> entry : written.entrySet()) {
+            Assertions.assertEquals(2, entry.getValue().size(), "tablet " + entry.getKey());
+            for (ManifestEntry file : entry.getValue()) {
+                Assertions.assertNotNull(Repository.decodeFileNameWithChecksum(file.getFile()), file.getFile());
+                Assertions.assertFalse(file.getHolder().isEmpty(), file.getFile());
+            }
+        }
+    }
+
+    private static List<Long> tabletOrder(BackupJobInfo info) {
+        List<Long> ids = Lists.newArrayList();
+        forEachTablet(info, tablet -> ids.add(tablet.id));
+        return ids;
+    }
+
+    private static String readString(String path) throws IOException {
+        return Files.readString(Path.of(path), StandardCharsets.UTF_8);
+    }
+
+    private static JSONObject readJson(String path) throws IOException {
+        return new JSONObject(readString(path));
+    }
+
+    // Drops what legitimately differs between two snapshots of the same state: the label and time, the new
+    // keys, and the manifests.
+    private static JSONObject withoutSnapshotIdentityAndManifests(JSONObject info) {
+        for (String key : List.of("name", "backup_time", "snapshot_format_version", "type", "base_snapshot")) {
+            info.remove(key);
+        }
+        clearTabletFiles(info);
+        return info;
+    }
+
+    private static void clearTabletFiles(Object node) {
+        if (node instanceof JSONObject object) {
+            for (String key : object.keySet()) {
+                if (key.equals("tablets")) {
+                    JSONObject tablets = object.getJSONObject(key);
+                    for (String tabletId : tablets.keySet()) {
+                        tablets.put(tabletId, new JSONArray());
+                    }
+                } else {
+                    clearTabletFiles(object.get(key));
+                }
+            }
+        } else if (node instanceof JSONArray array) {
+            array.forEach(BackupJobIncrementalTest::clearTabletFiles);
+        }
     }
 
     private List<TableRefPersist> tableRefs(String tableName) {

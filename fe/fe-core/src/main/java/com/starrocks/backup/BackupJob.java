@@ -817,6 +817,8 @@ public class BackupJob extends AbstractJob {
             // 3. save job info file
             jobInfo = BackupJobInfo.fromCatalog(createTime, label, dbName, dbId, backupMeta.getTables().values(),
                     snapshotInfos);
+            jobInfo.baseSnapshot = isIncremental() ? incrementalBase.getLabel() : null;
+            jobInfo.setManifests(tabletManifests);
             LOG.debug("job info: {}. {}", jobInfo, this);
             File jobInfoFile = new File(jobDir, Repository.PREFIX_JOB_INFO + createTimeStr);
             if (!jobInfoFile.createNewFile()) {
@@ -840,6 +842,7 @@ public class BackupJob extends AbstractJob {
         releaseSnapshots();
 
         snapshotInfos.clear();
+        tabletManifests.clear();
 
         // log
         globalStateMgr.getEditLog().logBackupJob(this);
