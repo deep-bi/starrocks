@@ -42,6 +42,7 @@ import com.starrocks.common.util.concurrent.lock.LockManager;
 import com.starrocks.metric.MetricRepo;
 import com.starrocks.persist.EditLog;
 import com.starrocks.persist.TableRefPersist;
+import com.starrocks.persist.gson.GsonUtils;
 import com.starrocks.server.GlobalStateMgr;
 import com.starrocks.server.LocalMetastore;
 import com.starrocks.server.NodeMgr;
@@ -90,7 +91,8 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
 import java.util.function.Function;
 
-// Change detection (test-design.md section 3) and the snapshot content it decides (TC-020..034).
+// Change detection (test-design.md section 3), the snapshot content it decides (TC-020..045), and the job's
+// restart, cancel and timeout (TC-081, TC-087, TC-089).
 // Each test backs up one table, because CatalogMocker reuses tablet ids across tables.
 public class BackupJobIncrementalTest {
     private static final long REPO_ID = 20000;
@@ -119,6 +121,8 @@ public class BackupJobIncrementalTest {
 
     private Database db;
     private final AtomicLong nextId = new AtomicLong(90000);
+    // remote paths of the files the FE itself uploads: __meta and __info
+    private final List<String> uploadedByFe = Lists.newArrayList();
     private final Repository repo = new Repository(REPO_ID, "repo", false, "my_repo",
             new BlobStorage("broker", Maps.newHashMap()));
     private boolean originEnableMetricCalculator;
@@ -232,6 +236,7 @@ public class BackupJobIncrementalTest {
         new MockUp<Repository>() {
             @Mock
             Status upload(String localFilePath, String remoteFilePath) {
+                uploadedByFe.add(remoteFilePath);
                 return Status.OK;
             }
 
@@ -605,6 +610,74 @@ public class BackupJobIncrementalTest {
         Assertions.assertEquals(tablets(TBL2, P1, P2), Sets.newHashSet(tabletOrder(stock)));
     }
 
+    // TC-081: the job is logged after the snapshots (UPLOAD_SNAPSHOT) and after the uploads (SAVE_META). A restarted
+    // FE resumes from either with only what was logged, and must still write the same manifests.
+    @Test
+    public void jobResumedFromTheEditLogKeepsDecisionsReuseListsAndManifests() throws Exception {
+        IncrementalBase base = baseOf(TBL2, null, copy -> { }, info -> { });
+        IncrementalBase sameBase = baseOf(TBL2, null, copy -> { }, info -> { });
+        PhysicalPartition p1 = physicalPartition(TBL2, P1);
+        p1.setVisibleVersion(p1.getVisibleVersion() + 1, p1.getVisibleVersionTime() + 1);
+        BackupJob uninterrupted = runBackup(incrementalJob(TBL2, base), DEFAULT_LOCAL_FILES, DEFAULT_REPORTED_FILES);
+
+        AgentTaskQueue.clearAllTasks();
+        BackupJob job = incrementalJob(TBL2, sameBase);
+        snapshotTablets(job);
+        finishSnapshots(job, DEFAULT_LOCAL_FILES);
+        job = resumeFromEditLog(job);
+        List<UploadTask> uploads = sendUploads(job);
+        Assertions.assertEquals(tablets(TBL2, P1), uploadedTablets(uploads));
+        for (long tabletId : tablets(TBL2, P1)) {
+            Assertions.assertEquals(List.of(dataFile(tabletId, MD5_A), headerFile(tabletId, MD5_B)),
+                    reuseList(uploads, tabletId));
+        }
+        finishUploads(job, uploads, DEFAULT_REPORTED_FILES);
+        job.run();
+        Assertions.assertEquals(BackupJobState.SAVE_META, job.getState());
+        job = resumeFromEditLog(job);
+        job.run();
+
+        Assertions.assertTrue(job.getStatus().ok(), job.getStatus().toString());
+        Assertions.assertEquals(BackupJobState.UPLOAD_INFO, job.getState());
+        Assertions.assertEquals(writtenManifests(uninterrupted), writtenManifests(job));
+    }
+
+    // TC-087
+    @Test
+    public void cancelInAnyStateWritesNoInfo() throws Exception {
+        for (BackupJobState cancelIn : List.of(BackupJobState.PENDING, BackupJobState.SNAPSHOTING,
+                BackupJobState.UPLOAD_SNAPSHOT, BackupJobState.UPLOADING, BackupJobState.SAVE_META,
+                BackupJobState.UPLOAD_INFO)) {
+            AgentTaskQueue.clearAllTasks();
+            BackupJob job = incrementalJob(TBL2, baseOf(TBL2, null, copy -> { }, info -> { }));
+            PhysicalPartition p1 = physicalPartition(TBL2, P1);
+            p1.setVisibleVersion(p1.getVisibleVersion() + 1, p1.getVisibleVersionTime() + 1);
+            runUntil(job, cancelIn);
+
+            Assertions.assertEquals(Status.OK, job.cancel(), cancelIn.name());
+            job.run();
+
+            Assertions.assertEquals(BackupJobState.CANCELLED, job.getState(), cancelIn.name());
+            Assertions.assertEquals(List.of(), uploadedByFe, cancelIn.name());
+        }
+    }
+
+    // TC-089
+    @Test
+    public void timeoutWhileUploadingCancelsTheJob() throws Exception {
+        BackupJob job = incrementalJob(TBL2, baseOf(TBL2, null, copy -> { }, info -> { }));
+        PhysicalPartition p1 = physicalPartition(TBL2, P1);
+        p1.setVisibleVersion(p1.getVisibleVersion() + 1, p1.getVisibleVersionTime() + 1);
+        runUntil(job, BackupJobState.UPLOADING);
+
+        Deencapsulation.setField(job, "timeoutMs", 0L);
+        job.run();
+
+        Assertions.assertEquals(BackupJobState.CANCELLED, job.getState());
+        Assertions.assertEquals(Status.ErrCode.TIMEOUT, job.getStatus().getErrCode());
+        Assertions.assertEquals(List.of(), uploadedByFe);
+    }
+
     // ---- helpers ----
 
     private static final Function<Long, List<String>> DEFAULT_LOCAL_FILES = id -> List.of(id + "_0.dat", id + ".hdr");
@@ -673,16 +746,11 @@ public class BackupJobIncrementalTest {
                     : incrementalJob(labels.get(i), TBL2, baseFromWrittenFiles(previous));
             previous = runBackup(job, local, reported);
         }
-        Map<Long, List<ManifestEntry>> manifests = Maps.newHashMap();
-        forEachTablet(BackupJobInfo.fromFile(previous.getLocalJobInfoFilePath()),
-                tablet -> manifests.put(tablet.id, tablet.files));
-        return manifests;
+        return writtenManifests(previous);
     }
 
     private void assertCompleteManifests(BackupJob job, Set<Long> expectedTablets) throws IOException {
-        Map<Long, List<ManifestEntry>> written = Maps.newHashMap();
-        forEachTablet(BackupJobInfo.fromFile(job.getLocalJobInfoFilePath()),
-                tablet -> written.put(tablet.id, tablet.files));
+        Map<Long, List<ManifestEntry>> written = writtenManifests(job);
         Assertions.assertEquals(expectedTablets, written.keySet());
         for (Map.Entry<Long, List<ManifestEntry>> entry : written.entrySet()) {
             Assertions.assertEquals(2, entry.getValue().size(), "tablet " + entry.getKey());
@@ -860,6 +928,12 @@ public class BackupJobIncrementalTest {
 
     // Finishes every snapshot task with the given local file names, then runs the job until it sends upload tasks.
     private List<UploadTask> uploadTasks(BackupJob job, Function<Long, List<String>> localFiles) {
+        finishSnapshots(job, localFiles);
+        return sendUploads(job);
+    }
+
+    // Finishes every snapshot task with the given local file names, then runs the job into UPLOAD_SNAPSHOT.
+    private void finishSnapshots(BackupJob job, Function<Long, List<String>> localFiles) {
         TBackend backend = new TBackend("", 0, 1);
         for (Map.Entry<Long, Long> entry : Maps.newHashMap(job.unfinishedTaskIds).entrySet()) {
             long tabletId = entry.getKey();
@@ -873,8 +947,13 @@ public class BackupJobIncrementalTest {
         }
         job.run();
         Assertions.assertEquals(BackupJobState.UPLOAD_SNAPSHOT, job.getState());
+    }
+
+    // Runs UPLOAD_SNAPSHOT and returns the upload tasks it sends.
+    private List<UploadTask> sendUploads(BackupJob job) {
         job.run();
-        Assertions.assertEquals(Status.OK, job.getStatus());
+        // not Status.OK itself: a job read back from the edit log has its own OK instance
+        Assertions.assertTrue(job.getStatus().ok(), job.getStatus().toString());
         Assertions.assertEquals(BackupJobState.UPLOADING, job.getState());
 
         List<UploadTask> tasks = Lists.newArrayList();
@@ -896,6 +975,55 @@ public class BackupJobIncrementalTest {
             request.setTablet_files(tabletFiles);
             Assertions.assertTrue(job.finishSnapshotUploadTask(task, request));
         }
+    }
+
+    private void runUntil(BackupJob job, BackupJobState target) {
+        if (target == BackupJobState.PENDING) {
+            return;
+        }
+        snapshotTablets(job);
+        if (target == BackupJobState.SNAPSHOTING) {
+            return;
+        }
+        finishSnapshots(job, DEFAULT_LOCAL_FILES);
+        if (target == BackupJobState.UPLOAD_SNAPSHOT) {
+            return;
+        }
+        List<UploadTask> uploads = sendUploads(job);
+        if (target == BackupJobState.UPLOADING) {
+            return;
+        }
+        finishUploads(job, uploads, DEFAULT_REPORTED_FILES);
+        job.run();
+        Assertions.assertEquals(BackupJobState.SAVE_META, job.getState());
+        if (target == BackupJobState.SAVE_META) {
+            return;
+        }
+        job.run();
+        Assertions.assertEquals(BackupJobState.UPLOAD_INFO, job.getState());
+    }
+
+    // What a restarted FE gets back: the job as it was last written to the edit log.
+    private BackupJob resumeFromEditLog(BackupJob job) {
+        String json = GsonUtils.GSON.toJson(job, AbstractJob.class);
+        BackupJob resumed = (BackupJob) GsonUtils.GSON.fromJson(json, AbstractJob.class);
+        resumed.setGlobalStateMgr(globalStateMgr);
+        return resumed;
+    }
+
+    private static Set<Long> uploadedTablets(List<UploadTask> tasks) {
+        Set<Long> ids = Sets.newHashSet();
+        for (UploadTask task : tasks) {
+            task.getSrcToDestPath().keySet().forEach(src -> ids.add(tabletIdOfSource(src)));
+        }
+        return ids;
+    }
+
+    private static Map<Long, List<ManifestEntry>> writtenManifests(BackupJob job) throws IOException {
+        Map<Long, List<ManifestEntry>> manifests = Maps.newHashMap();
+        forEachTablet(BackupJobInfo.fromFile(job.getLocalJobInfoFilePath()),
+                tablet -> manifests.put(tablet.id, tablet.files));
+        return manifests;
     }
 
     // Read from the request the BE receives.
