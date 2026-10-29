@@ -148,6 +148,16 @@ Status SnapshotLoader::upload(const std::map<std::string, std::string>& src_to_d
             VLOG(2) << "get remote file: " << tmp.first << ", checksum: " << tmp.second.md5;
         }
 
+        // Incremental backup: files (<name>.<md5>) that the base snapshot's holders already have. They are still
+        // reported in tablet_files, so the FE lists them in the tablet's manifest with their holder.
+        std::set<std::string> reusable_files;
+        if (upload.__isset.reusable_files) {
+            auto reusable = upload.reusable_files.find(dest_path);
+            if (reusable != upload.reusable_files.end()) {
+                reusable_files.insert(reusable->second.begin(), reusable->second.end());
+            }
+        }
+
         // 2.2 list local files
         std::vector<std::string> local_files;
         std::vector<std::string> local_files_with_checksum;
@@ -161,6 +171,10 @@ Status SnapshotLoader::upload(const std::map<std::string, std::string>& src_to_d
             ASSIGN_OR_RETURN(auto md5sum, fs::md5sum(src_path + "/" + local_file));
             VLOG(2) << "get file checksum: " << local_file << ": " << md5sum;
             local_files_with_checksum.push_back(local_file + "." + md5sum);
+            if (reusable_files.count(local_files_with_checksum.back()) > 0) {
+                VLOG(2) << "file is held by the base snapshot, no need to upload: " << local_file;
+                continue;
+            }
 
             // check if this local file need upload
             bool need_upload = false;
