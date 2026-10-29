@@ -1696,9 +1696,11 @@ public class RestoreJob extends AbstractJob {
         LOG.debug("backend {} has {} batch, total {} tasks, {}",
                 beId, batchNum, totalNum, this);
 
+        Map<Long, List<ManifestEntry>> manifests = jobInfo.isIncremental() ? jobInfo.getManifests() : Map.of();
         int index = 0;
         for (int batch = 0; batch < batchNum; batch++) {
             Map<String, String> srcToDest = Maps.newHashMap();
+            Map<String, List<String>> sourceFiles = Maps.newHashMap();
             int currentBatchTaskNum = (batch == batchNum - 1) ? totalNum - index : taskNumPerBatch;
             for (int j = 0; j < currentBatchTaskNum; j++) {
                 SnapshotInfo info = beSnapshotInfos.get(index++);
@@ -1765,6 +1767,15 @@ public class RestoreJob extends AbstractJob {
                 // download to previously existing snapshot dir
                 String dest = snapshotInfo.getTabletPath();
                 srcToDest.put(src, dest);
+                // An incremental's own __ss_content path (src) stays empty: its files are under __ss_content_inc and
+                // in its holders, so a BE without the feature finds nothing there and fails before commit.
+                List<ManifestEntry> manifest = manifests.getOrDefault(repoIds.getTabletId(), List.of());
+                if (!manifest.isEmpty()) {
+                    sourceFiles.put(dest, manifest.stream()
+                            .map(entry -> repo.getRepoPath(entry.getHolder(), repoTabletPath,
+                                    entry.isHolderIncremental()) + "/" + entry.getFile())
+                            .collect(Collectors.toList()));
+                }
                 LOG.debug("catalog id: {}, repo id: {}, repoTabletPath: {}, src: {}, dest: {}",
                         catalogIds, repoIds, repoTabletPath, src, dest);
             }
@@ -1777,6 +1788,7 @@ public class RestoreJob extends AbstractJob {
                 task = new DownloadTask(null, beId, signature, jobId, dbId,
                         srcToDest, null, repo.getStorage().getProperties(), hdfsProperties);
             }
+            task.setSourceFiles(sourceFiles);
             batchTask.addTask(task);
             unfinishedSignatureToId.put(signature, beId);
         }

@@ -282,9 +282,13 @@ public class Repository implements Writable, GsonPostProcessable {
     }
 
     public String getRepoPath(String label, String childPath) {
+        return getRepoPath(label, childPath, false);
+    }
+
+    public String getRepoPath(String label, String childPath, boolean incremental) {
         return Joiner.on(PATH_DELIMITER).join(location, joinPrefix(prefixRepo, name),
                 joinPrefix(PREFIX_SNAPSHOT_DIR, label),
-                DIR_SNAPSHOT_CONTENT,
+                incremental ? DIR_SNAPSHOT_CONTENT_INC : DIR_SNAPSHOT_CONTENT,
                 childPath);
     }
 

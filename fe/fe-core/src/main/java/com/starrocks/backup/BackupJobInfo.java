@@ -564,6 +564,25 @@ public class BackupJobInfo implements Writable {
         return baseSnapshot != null;
     }
 
+    // tablet id -> manifest, for every tablet of the snapshot
+    public Map<Long, List<ManifestEntry>> getManifests() {
+        Map<Long, List<ManifestEntry>> manifests = Maps.newHashMap();
+        for (BackupTableInfo tableInfo : tables.values()) {
+            for (BackupPartitionInfo partitionInfo : tableInfo.partitions.values()) {
+                List<BackupIndexInfo> indexes = Lists.newArrayList(partitionInfo.indexes.values());
+                for (BackupPhysicalPartitionInfo physicalInfo : partitionInfo.subPartitions.values()) {
+                    indexes.addAll(physicalInfo.indexes.values());
+                }
+                for (BackupIndexInfo indexInfo : indexes) {
+                    for (BackupTabletInfo tabletInfo : indexInfo.tablets) {
+                        manifests.put(tabletInfo.id, tabletInfo.files);
+                    }
+                }
+            }
+        }
+        return manifests;
+    }
+
     public void setManifests(Map<Long, List<ManifestEntry>> tabletManifests) {
         for (BackupTableInfo tableInfo : tables.values()) {
             for (BackupPartitionInfo partitionInfo : tableInfo.partitions.values()) {
