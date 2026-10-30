@@ -494,7 +494,7 @@ public class BackupJob extends AbstractJob {
         try {
             // check all backup tables again
             checkBackupTables(db);
-            if (status != Status.OK) {
+            if (!status.ok()) {
                 return;
             }
 
@@ -528,7 +528,7 @@ public class BackupJob extends AbstractJob {
                             int schemaHash = olapTbl.getSchemaHashByIndexMetaId(index.getMetaId());
                             for (Tablet tablet : index.getTablets()) {
                                 prepareSnapshotTask(physicalPartition, olapTbl, tablet, index, visibleVersion, schemaHash);
-                                if (status != Status.OK) {
+                                if (!status.ok()) {
                                     return;
                                 }
                             }
