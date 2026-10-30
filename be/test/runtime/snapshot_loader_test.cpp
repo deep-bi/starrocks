@@ -375,6 +375,25 @@ TEST_F(SnapshotLoaderIncrementalTest, download_keeps_matching_local_files_and_re
     EXPECT_EQ("full rows", read_file(local + "/10001_0.dat"));
 }
 
+// TC-110: a stale or partial earlier download under a manifest file's name.
+TEST_F(SnapshotLoaderIncrementalTest, download_replaces_a_local_file_with_a_manifest_name_and_another_md5) {
+    int64_t tablet_id = new_tablet_id();
+    std::string local = restore_target(tablet_id);
+    write_file(local + "/10001_0.dat", "partial");
+    std::string full = snapshot_dir("__ss_full/__ss_content", 10001);
+    std::string own = snapshot_dir("__ss_inc/__ss_content_inc", 10001);
+    TDownloadReq request = download_request();
+    request.__set_source_files(
+            {{local, {remote_file(full, "10001_0.dat", "full rows"), remote_file(own, "10001.hdr", "header")}}});
+
+    std::vector<int64_t> tablet_ids;
+    Status st = _loader.download({{snapshot_dir("__ss_inc/__ss_content", 10001), local}}, request, &tablet_ids);
+
+    ASSERT_TRUE(st.ok()) << st;
+    EXPECT_EQ((std::set<std::string>{"10001_0.dat", header_name(tablet_id)}), list(local));
+    EXPECT_EQ("full rows", read_file(local + "/10001_0.dat"));
+}
+
 // TC-107: a file deleted from its holder directory, and a holder whose whole directory is gone. Every holder is
 // checked before anything is downloaded.
 TEST_F(SnapshotLoaderIncrementalTest, download_fails_naming_a_manifest_file_missing_from_its_holder) {
