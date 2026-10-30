@@ -875,7 +875,7 @@ public class BackupJob extends AbstractJob {
                 path.sorted(Comparator.reverseOrder()).map(Path::toFile).forEach(File::delete);
             }
         } catch (Exception e) {
-            LOG.warn("failed to clean the backup job dir: " + jobDir);
+            LOG.warn("failed to clean the backup job dir: {}", jobDir, e);
         }
     }
 
