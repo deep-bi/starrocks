@@ -47,6 +47,7 @@ import com.starrocks.catalog.Replica;
 import com.starrocks.catalog.TableName;
 import com.starrocks.catalog.View;
 import com.starrocks.common.Config;
+import com.starrocks.common.DdlException;
 import com.starrocks.common.FeConstants;
 import com.starrocks.common.jmockit.Deencapsulation;
 import com.starrocks.common.util.UnitTestUtil;
@@ -54,11 +55,18 @@ import com.starrocks.common.util.concurrent.lock.LockManager;
 import com.starrocks.metric.MetricRepo;
 import com.starrocks.persist.EditLog;
 import com.starrocks.persist.TableRefPersist;
+import com.starrocks.persist.gson.GsonUtils;
+import com.starrocks.qe.ConnectContext;
 import com.starrocks.server.GlobalStateMgr;
 import com.starrocks.server.LocalMetastore;
 import com.starrocks.server.NodeMgr;
+import com.starrocks.sql.ast.BackupStmt;
 import com.starrocks.sql.ast.KeysType;
+import com.starrocks.sql.ast.LabelName;
+import com.starrocks.sql.ast.QualifiedName;
 import com.starrocks.sql.ast.ReplicaStatus;
+import com.starrocks.sql.ast.TableRef;
+import com.starrocks.sql.parser.NodePosition;
 import com.starrocks.system.Backend;
 import com.starrocks.system.SystemInfoService;
 import com.starrocks.task.AgentBatchTask;
@@ -81,6 +89,7 @@ import mockit.Mocked;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -91,6 +100,7 @@ import java.lang.reflect.Method;
 import java.nio.file.FileVisitOption;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
@@ -149,6 +159,11 @@ public class BackupJobTest {
 
         @Override
         public Repository getRepo(long repoId) {
+            return repo;
+        }
+
+        @Override
+        public Repository getRepo(String repoName) {
             return repo;
         }
     }
@@ -506,6 +521,199 @@ public class BackupJobTest {
             // test get backup info
             jobView.getInfo();
         } catch (Exception ignore) {
+        }
+    }
+
+    private BackupJob runToUploadInfo(BackupJob jobToRun) {
+        AgentTaskQueue.clearAllTasks();
+        jobToRun.run();
+        AgentTask snapshotTask = AgentTaskQueue.getTask(backendId, TTaskType.MAKE_SNAPSHOT, tabletId);
+        TFinishTaskRequest request = new TFinishTaskRequest(new TBackend("", 0, 1), TTaskType.MAKE_SNAPSHOT,
+                snapshotTask.getSignature(), new TStatus(TStatusCode.OK));
+        request.setSnapshot_files(Lists.newArrayList("1.dat", "1.idx", "1.hdr"));
+        request.setSnapshot_path("/path/to/snapshot");
+        Assertions.assertTrue(jobToRun.finishTabletSnapshotTask((SnapshotTask) snapshotTask, request));
+        jobToRun.run();
+        AgentTaskQueue.clearAllTasks();
+        jobToRun.run();
+        UploadTask upTask = (UploadTask) AgentTaskQueue.getTask(backendId, TTaskType.UPLOAD, id.get() - 1);
+        Map<Long, List<String>> tabletFileMap = Maps.newHashMap();
+        tabletFileMap.put(tabletId, Lists.newArrayList("1.dat.4f158689243a3d6030352fec3cfd3798",
+                "1.idx.4f158689243a3d6030352fec3cfd3798", "1.hdr.4f158689243a3d6030352fec3cfd3798"));
+        request = new TFinishTaskRequest(new TBackend("", 0, 1), TTaskType.UPLOAD,
+                upTask.getSignature(), new TStatus(TStatusCode.OK));
+        request.setTablet_files(tabletFileMap);
+        Assertions.assertTrue(jobToRun.finishSnapshotUploadTask(upTask, request));
+        jobToRun.run();
+        jobToRun.run();
+        Assertions.assertEquals(BackupJobState.UPLOAD_INFO, jobToRun.getState());
+        return jobToRun;
+    }
+
+    // What a new leader holds: the job as last logged, with no memory of the old leader's local files.
+    private BackupJob resumeFromEditLog(BackupJob logged) {
+        String json = GsonUtils.GSON.toJson(logged, AbstractJob.class);
+        BackupJob resumed = (BackupJob) GsonUtils.GSON.fromJson(json, AbstractJob.class);
+        resumed.setGlobalStateMgr(globalStateMgr);
+        return resumed;
+    }
+
+    private void deleteLocalJobDir(BackupJob logged) throws IOException {
+        Path jobDir = new File(logged.getLocalMetaInfoFilePath()).getParentFile().toPath();
+        try (var files = Files.walk(jobDir)) {
+            files.sorted(Comparator.reverseOrder()).map(Path::toFile).forEach(File::delete);
+        }
+        Assertions.assertFalse(Files.exists(jobDir));
+    }
+
+    private void runBounded(BackupJob jobToRun, int times) {
+        for (int i = 0; i < times && !jobToRun.isDone(); i++) {
+            jobToRun.run();
+        }
+    }
+
+    private List<String> mockUpload(List<Status> results) {
+        List<String> uploaded = new ArrayList<>();
+        new MockUp<Repository>() {
+            @Mock
+            Status upload(String localFilePath, String remoteFilePath) {
+                uploaded.add(localFilePath);
+                return results.get(Math.min(uploaded.size() - 1, results.size() - 1));
+            }
+        };
+        return uploaded;
+    }
+
+    // TC-120
+    @Test
+    public void testUploadInfoCancelsWhenLocalFilesAreGoneAfterLeaderChange() throws IOException {
+        runToUploadInfo(job);
+        BackupJob resumed = resumeFromEditLog(job);
+        deleteLocalJobDir(job);
+        List<String> uploaded = mockUpload(List.of(Status.OK));
+
+        runBounded(resumed, 5);
+
+        Assertions.assertEquals(BackupJobState.CANCELLED, resumed.getState());
+        String msg = resumed.getStatus().getErrMsg();
+        Assertions.assertTrue(msg.contains("'label'"), msg);
+        Assertions.assertTrue(msg.contains("leader change"), msg);
+        Assertions.assertTrue(msg.contains("new label"), msg);
+        Assertions.assertTrue(msg.contains("__ss_label/"), msg);
+        Assertions.assertTrue(uploaded.isEmpty());
+    }
+
+    // TC-121
+    @Test
+    public void testUploadInfoFinishesWhenLocalFilesStillExistAfterRestart() {
+        runToUploadInfo(job);
+        String metaPath = job.getLocalMetaInfoFilePath();
+        String infoPath = job.getLocalJobInfoFilePath();
+        BackupJob resumed = resumeFromEditLog(job);
+        List<String> uploaded = mockUpload(List.of(Status.OK));
+
+        runBounded(resumed, 5);
+
+        Assertions.assertEquals(BackupJobState.FINISHED, resumed.getState());
+        Assertions.assertEquals(List.of(metaPath, infoPath), uploaded);
+    }
+
+    // TC-122
+    @Test
+    public void testUploadInfoKeepsRetryingOnRepositoryError() {
+        runToUploadInfo(job);
+        Status repoError = new Status(Status.ErrCode.BAD_CONNECTION, "repository unreachable");
+        List<String> uploaded = mockUpload(List.of(repoError, repoError, Status.OK));
+
+        job.run();
+        job.run();
+
+        Assertions.assertEquals(BackupJobState.UPLOAD_INFO, job.getState());
+        Assertions.assertEquals(repoError, job.getStatus());
+
+        runBounded(job, 5);
+
+        Assertions.assertEquals(BackupJobState.FINISHED, job.getState());
+        Assertions.assertEquals(4, uploaded.size());
+    }
+
+    // TC-123
+    @Test
+    public void testUploadInfoKeepsRetryingWhenLocalFileIsUnreadable() {
+        runToUploadInfo(job);
+        File metaFile = new File(job.getLocalMetaInfoFilePath());
+        Assertions.assertTrue(metaFile.setReadable(false));
+        try {
+            Assumptions.assumeFalse(metaFile.canRead(), "running as a user that ignores file permissions");
+            List<String> uploaded = mockUpload(List.of(Status.OK));
+
+            job.run();
+            job.run();
+
+            Assertions.assertEquals(BackupJobState.UPLOAD_INFO, job.getState());
+            Assertions.assertFalse(job.getStatus().ok());
+            Assertions.assertTrue(uploaded.isEmpty());
+
+            Assertions.assertTrue(metaFile.setReadable(true));
+            runBounded(job, 5);
+
+            Assertions.assertEquals(BackupJobState.FINISHED, job.getState());
+        } finally {
+            metaFile.setReadable(true);
+        }
+    }
+
+    // TC-127
+    @Test
+    public void testCancelledUploadInfoFreesTheDatabaseButNotTheLabel(@Mocked ConnectContext context)
+            throws IOException {
+        runToUploadInfo(job);
+        BackupJob resumed = resumeFromEditLog(job);
+        deleteLocalJobDir(job);
+        runBounded(resumed, 5);
+        Assertions.assertEquals(BackupJobState.CANCELLED, resumed.getState());
+        backupHandler.replayAddJob(resumed);
+        Deencapsulation.setField(backupHandler, "repoMgr", repoMgr);
+
+        new Expectations() {
+            {
+                GlobalStateMgr.getCurrentState();
+                minTimes = 0;
+                result = globalStateMgr;
+            }
+        };
+        new Expectations(localMetastore) {
+            {
+                localMetastore.getDb(UnitTestUtil.DB_NAME);
+                minTimes = 0;
+                result = db;
+
+                localMetastore.getTable(anyString, UnitTestUtil.TABLE_NAME);
+                minTimes = 0;
+                result = db.getTable(tblId);
+            }
+        };
+        new MockUp<Repository>() {
+            @Mock
+            Status listSnapshots(List<String> snapshotNames) {
+                snapshotNames.add("label");
+                return Status.OK;
+            }
+        };
+        List<TableRef> tblRefs = Lists.newArrayList(new TableRef(
+                QualifiedName.of(List.of(UnitTestUtil.DB_NAME, UnitTestUtil.TABLE_NAME)), null, null));
+
+        DdlException sameLabel = Assertions.assertThrows(DdlException.class, () -> backupHandler.process(
+                context, new BackupStmt(new LabelName(UnitTestUtil.DB_NAME, "label"), "repo",
+                        tblRefs, Lists.newArrayList(), null, null, false, "", null, NodePosition.ZERO)));
+        Assertions.assertTrue(sameLabel.getMessage().contains("already exist in repository"), sameLabel.getMessage());
+
+        try {
+            backupHandler.process(context, new BackupStmt(new LabelName(UnitTestUtil.DB_NAME, "label2"),
+                    "repo", tblRefs, Lists.newArrayList(), null, null, false, "", null, NodePosition.ZERO));
+        } catch (DdlException e) {
+            Assertions.assertFalse(e.getMessage().contains("Can only run one backup or restore job"), e.getMessage());
+            throw new AssertionError(e);
         }
     }
 

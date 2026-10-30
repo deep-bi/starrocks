@@ -126,6 +126,8 @@ public class BackupJob extends AbstractJob {
     @SerializedName(value = "state")
     protected BackupJobState state;
 
+    private boolean localFileMissing = false;
+
     @SerializedName(value = "snapshotFinishedTime")
     private long snapshotFinishedTime = -1;
     @SerializedName(value = "snapshotUploadFinishedTime")
@@ -382,7 +384,8 @@ public class BackupJob extends AbstractJob {
         // we don't want to cancel the job if we already in state UPLOAD_INFO,
         // which is the final step of backup job. just retry it.
         // if it encounters some unrecoverable errors, just retry it until timeout.
-        if (!status.ok() && state != BackupJobState.UPLOAD_INFO) {
+        // The one exception is a local file that no longer exists: retrying cannot bring it back.
+        if (!status.ok() && (state != BackupJobState.UPLOAD_INFO || localFileMissing)) {
             cancelInternal();
         }
     }
@@ -805,6 +808,14 @@ public class BackupJob extends AbstractJob {
     }
 
     private boolean uploadFile(String localFilePath, String remoteFilePath) {
+        if (!new File(localFilePath).exists()) {
+            localFileMissing = true;
+            status = new Status(ErrCode.COMMON_ERROR, "local files of backup '" + label + "' are gone ("
+                    + localFilePath + "), probably after a leader change. Rerun the backup with a new label, "
+                    + "or remove __ss_" + label + "/ from the repository to reuse this label");
+            return false;
+        }
+
         if (!validateLocalFile(localFilePath)) {
             return false;
         }
