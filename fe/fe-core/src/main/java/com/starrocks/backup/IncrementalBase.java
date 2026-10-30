@@ -16,11 +16,6 @@ package com.starrocks.backup;
 
 import com.google.common.collect.Maps;
 import com.google.gson.annotations.SerializedName;
-import com.starrocks.backup.BackupJobInfo.BackupIndexInfo;
-import com.starrocks.backup.BackupJobInfo.BackupPartitionInfo;
-import com.starrocks.backup.BackupJobInfo.BackupPhysicalPartitionInfo;
-import com.starrocks.backup.BackupJobInfo.BackupTableInfo;
-import com.starrocks.backup.BackupJobInfo.BackupTabletInfo;
 import com.starrocks.catalog.MaterializedIndexMeta;
 import com.starrocks.catalog.OlapTable;
 import com.starrocks.catalog.Partition;
@@ -32,7 +27,7 @@ import java.util.Map;
 import java.util.Objects;
 
 // What an incremental backup keeps of its base snapshot: read once at submit, from the base's __info and
-// __meta, and compared with the catalog when the snapshot tasks are created (ADR 0003, ADR 0005).
+// __meta, and compared with the catalog when the snapshot tasks are created.
 public class IncrementalBase {
     @SerializedName(value = "label")
     private String label;
@@ -46,7 +41,6 @@ public class IncrementalBase {
     // physical partition id -> visible version and time
     @SerializedName(value = "partitionVersions")
     private Map<Long, PartitionVersion> partitionVersions = Maps.newHashMap();
-    // tablet id -> the base's tablet manifest
     @SerializedName(value = "manifests")
     private Map<Long, List<ManifestEntry>> manifests = Maps.newHashMap();
 
@@ -67,17 +61,7 @@ public class IncrementalBase {
                 }
             }
         }
-        for (BackupTableInfo tableInfo : info.tables.values()) {
-            for (BackupPartitionInfo partitionInfo : tableInfo.partitions.values()) {
-                for (BackupPhysicalPartitionInfo physicalInfo : partitionInfo.subPartitions.values()) {
-                    for (BackupIndexInfo indexInfo : physicalInfo.indexes.values()) {
-                        for (BackupTabletInfo tabletInfo : indexInfo.tablets) {
-                            base.manifests.put(tabletInfo.id, tabletInfo.files);
-                        }
-                    }
-                }
-            }
-        }
+        base.manifests.putAll(info.getManifests());
         return base;
     }
 
@@ -86,7 +70,7 @@ public class IncrementalBase {
     }
 
     // A base from another cluster (or from before a DR restore) has other ids, and a legacy base has no
-    // manifests: nothing of either can be reused (REQ-CD-07, REQ-CP-03).
+    // manifests: nothing of either can be reused.
     public boolean isReusableBy(long currentDbId) {
         return dbId == currentDbId && formatVersion != BackupJobInfo.SNAPSHOT_FORMAT_VERSION_LEGACY;
     }
@@ -142,7 +126,7 @@ public class IncrementalBase {
     }
 
     // The version time is part of the identity: an in-place restore can bring a partition back to a version
-    // number it had before, with other data, but always with a new time (ADR 0003).
+    // number it had before, with other data, but always with a new time.
     private static class PartitionVersion {
         @SerializedName(value = "version")
         private long version;

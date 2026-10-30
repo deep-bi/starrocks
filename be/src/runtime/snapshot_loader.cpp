@@ -944,7 +944,6 @@ Status SnapshotLoader::_get_manifest_files(BrokerServiceConnection* client, cons
                                            const TDownloadReq& download, const std::vector<std::string>& manifest,
                                            std::map<std::string, FileStat>* files,
                                            std::map<std::string, std::string>* dirs) {
-    // holder directory -> the manifest's files (<name>.<md5>) in it
     std::map<std::string, std::vector<std::string>> files_by_dir;
     for (const auto& path : manifest) {
         size_t pos = path.find_last_of('/');

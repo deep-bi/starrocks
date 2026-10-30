@@ -96,9 +96,6 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
 import java.util.function.Function;
 
-// Change detection (test-design.md section 3), the snapshot content it decides (TC-020..045), and the job's
-// restart, cancel and timeout (TC-081, TC-087, TC-089), what SHOW SNAPSHOT and SHOW BACKUP show of it
-// (TC-090, TC-092, TC-094), and the check that its holders still exist (TC-093).
 // Each test backs up one table, because CatalogMocker reuses tablet ids across tables.
 public class BackupJobIncrementalTest {
     private static final long REPO_ID = 20000;
@@ -825,8 +822,6 @@ public class BackupJobIncrementalTest {
         Assertions.assertEquals(BackupJobState.UPLOAD_INFO, job.getState());
     }
 
-    // ---- helpers ----
-
     private static final Function<Long, List<String>> DEFAULT_LOCAL_FILES = id -> List.of(id + "_0.dat", id + ".hdr");
     private static final Function<Long, List<String>> DEFAULT_REPORTED_FILES =
             id -> List.of(dataFile(id, MD5_A), headerFile(id, MD5_C));
@@ -1194,7 +1189,6 @@ public class BackupJobIncrementalTest {
         return manifests;
     }
 
-    // Read from the request the BE receives.
     private static List<String> reuseList(List<UploadTask> tasks, long tabletId) {
         for (UploadTask task : tasks) {
             for (Map.Entry<String, String> entry : task.getSrcToDestPath().entrySet()) {

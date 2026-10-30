@@ -392,7 +392,6 @@ public class Repository implements Writable, GsonPostProcessable {
         return getSnapshotInfoFile(label, newestTimestamp.get(0), infos);
     }
 
-    // Lists the snapshot's __info files without reading them.
     public Status checkSnapshotInfoExists(String label) {
         return getNewestInfoTimestamp(label, Lists.newArrayList());
     }

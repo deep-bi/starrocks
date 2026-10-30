@@ -163,10 +163,8 @@ public class BackupJob extends AbstractJob {
     @SerializedName(value = "backupCatalogs")
     private List<Catalog> backupCatalogs = Lists.newArrayList();
 
-    // null for a full backup
     @SerializedName(value = "incrementalBase")
     private IncrementalBase incrementalBase;
-    // tablet id -> every file of the tablet in this snapshot, with its holder
     @SerializedName(value = "tabletManifests")
     private Map<Long, List<ManifestEntry>> tabletManifests = Maps.newConcurrentMap();
 
@@ -600,7 +598,7 @@ public class BackupJob extends AbstractJob {
                         long visibleVersion = physicalPartition.getVisibleVersion();
                         List<MaterializedIndex> indexes = physicalPartition.getLatestMaterializedIndices(IndexExtState.VISIBLE);
                         if (keepBaseManifestsIfUnchanged(olapTbl, physicalPartition, indexes)) {
-                            LOG.info("partition {} is unchanged since base snapshot {}, version: {}",
+                            LOG.debug("partition {} is unchanged since base snapshot {}, version: {}",
                                     physicalPartition.getId(), incrementalBase.getLabel(), visibleVersion);
                             continue;
                         }

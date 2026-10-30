@@ -534,7 +534,7 @@ public class BackupHandler extends FrontendDaemon implements Writable, MemoryTra
         LOG.info("finished to submit backup job: {}", backupJob);
     }
 
-    // Reads the base once, at submit, so a bad base is rejected before a job exists (REQ-BV-04..07).
+    // Reads the base once, at submit, so a bad base is rejected before a job exists.
     private IncrementalBase readBaseSnapshot(Repository repository, List<String> existSnapshotNames,
                                              String baseSnapshot, String dbName) throws DdlException {
         if (!existSnapshotNames.contains(baseSnapshot)) {

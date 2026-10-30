@@ -118,7 +118,7 @@ TEST_F(SnapshotLoaderTest, NormalCase) {
     ASSERT_EQ(10005, tablet_id);
 }
 
-// Incremental backup, BE side (test-design.md TC-100..). Local directories stand in for the repository:
+// Incremental backup, BE side. Local directories stand in for the repository:
 // without a broker, a path with no scheme gets the POSIX filesystem.
 class SnapshotLoaderIncrementalTest : public testing::Test {
 protected:

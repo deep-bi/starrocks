@@ -102,7 +102,6 @@ public class BackupJobInfo implements Writable {
 
     @SerializedName(value = "snapshotFormatVersion")
     public int snapshotFormatVersion = SNAPSHOT_FORMAT_VERSION_LEGACY;
-    // null for a full snapshot
     @SerializedName(value = "baseSnapshot")
     public String baseSnapshot;
 
@@ -564,7 +563,6 @@ public class BackupJobInfo implements Writable {
         return baseSnapshot != null;
     }
 
-    // tablet id -> manifest, for every tablet of the snapshot
     public Map<Long, List<ManifestEntry>> getManifests() {
         Map<Long, List<ManifestEntry>> manifests = Maps.newHashMap();
         for (BackupTableInfo tableInfo : tables.values()) {
@@ -597,7 +595,7 @@ public class BackupJobInfo implements Writable {
         }
     }
 
-    // A stock FE reads only the tablet ids, the keys of "tablets", and ignores these arrays (REQ-SC-09).
+    // A stock FE reads only the tablet ids, the keys of "tablets", and ignores these arrays.
     private static JSONArray manifestToJson(List<ManifestEntry> manifest) {
         JSONArray files = new JSONArray();
         for (ManifestEntry entry : manifest) {

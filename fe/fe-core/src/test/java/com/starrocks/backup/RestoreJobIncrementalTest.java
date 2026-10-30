@@ -198,7 +198,7 @@ public class RestoreJobIncrementalTest {
     }
 
     // TC-075: a manifest file missing from its holder won't appear by retrying, so the BE's NOT_FOUND cancels an
-    // incremental restore. Every other failure is retried as before (REQ-RS-04, REQ-CP-01).
+    // incremental restore. Every other failure is retried as before.
     @Test
     public void missingManifestFileCancelsAnIncrementalRestore() {
         RestoreJob job = downloadingJob("full", tabletId -> List.of(
