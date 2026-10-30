@@ -99,6 +99,8 @@ import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.TreeSet;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -777,7 +779,31 @@ public class BackupJob extends AbstractJob {
         LOG.debug("waiting {} tablets to upload snapshot. {}", unfinishedTaskIds.size(), this);
     }
 
+    // A holder deleted while this backup ran would leave its manifests pointing at files that are gone. Checked
+    // here and not in UPLOAD_INFO, whose errors are retried until the job times out instead of cancelling it.
+    private void checkHoldersExist() {
+        Set<String> holders = tabletManifests.values().stream()
+                .flatMap(List::stream)
+                .map(ManifestEntry::getHolder)
+                .filter(holder -> !holder.equals(label))
+                .collect(Collectors.toCollection(TreeSet::new));
+        for (String holder : holders) {
+            Status st = repo.checkSnapshotInfoExists(holder);
+            if (!st.ok()) {
+                status = new Status(ErrCode.NOT_FOUND, "holder snapshot " + holder + " of incremental backup "
+                        + label + " is missing from repository " + repo.getName() + ": " + st.getErrMsg());
+                return;
+            }
+        }
+    }
+
     private void saveMetaInfo() {
+        if (isIncremental()) {
+            checkHoldersExist();
+            if (!status.ok()) {
+                return;
+            }
+        }
         String createTimeStr = TimeUtils.longToTimeString(createTime,
                 DateTimeFormatter.ofPattern(TIMESTAMP_FORMAT).withZone(TimeUtils.getSystemTimeZone().toZoneId()));
         if (testPrimaryKey) {

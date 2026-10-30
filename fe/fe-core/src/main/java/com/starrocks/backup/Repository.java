@@ -52,6 +52,7 @@ import com.starrocks.system.Backend;
 import org.apache.commons.codec.digest.DigestUtils;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.File;
@@ -62,6 +63,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.time.format.DateTimeFormatter;
+import java.util.Collections;
 import java.util.List;
 
 /*
@@ -382,27 +384,68 @@ public class Repository implements Writable, GsonPostProcessable {
     // For a snapshot named without its timestamp, as a base snapshot is. A label normally has a single
     // __info file; if there are several, the newest wins, since timestamps sort as text.
     public Status getSnapshotInfoFile(String label, List<BackupJobInfo> infos) {
+        List<String> newestTimestamp = Lists.newArrayList();
+        Status st = getNewestInfoTimestamp(label, newestTimestamp);
+        if (!st.ok()) {
+            return st;
+        }
+        return getSnapshotInfoFile(label, newestTimestamp.get(0), infos);
+    }
+
+    // Lists the snapshot's __info files without reading them.
+    public Status checkSnapshotInfoExists(String label) {
+        return getNewestInfoTimestamp(label, Lists.newArrayList());
+    }
+
+    private Status getNewestInfoTimestamp(String label, List<String> newestTimestamp) {
         List<RemoteFile> results = Lists.newArrayList();
         Status st = storage.list(assembleJobInfoFilePath(label, -1) + "*", results);
         if (!st.ok()) {
             return st;
         }
 
-        String newestTimestamp = null;
+        String newest = null;
         for (RemoteFile file : results) {
             Pair<String, String> pureFileName = decodeFileNameWithChecksum(file.getName());
             if (pureFileName == null) {
                 continue;
             }
             String timestamp = disjoinPrefix(PREFIX_JOB_INFO, pureFileName.first);
-            if (newestTimestamp == null || timestamp.compareTo(newestTimestamp) > 0) {
-                newestTimestamp = timestamp;
+            if (newest == null || timestamp.compareTo(newest) > 0) {
+                newest = timestamp;
             }
         }
-        if (newestTimestamp == null) {
+        if (newest == null) {
             return new Status(ErrCode.NOT_FOUND, "no __info file for snapshot " + label);
         }
-        return getSnapshotInfoFile(label, newestTimestamp, infos);
+        newestTimestamp.add(newest);
+        return Status.OK;
+    }
+
+    // The snapshots whose manifests name this one as the holder of a file, sorted. Reads every snapshot's
+    // __info in the repository, so only the detailed SHOW SNAPSHOT asks for it. A snapshot without a readable
+    // __info (still running, or broken) can't be a dependent and is skipped.
+    private List<String> getDependents(String label) {
+        List<String> snapshotNames = Lists.newArrayList();
+        Status st = listSnapshots(snapshotNames);
+        if (!st.ok()) {
+            throw new SemanticException("Failed to list snapshot in repo: " + name + ", err: " + st.getErrMsg());
+        }
+        List<String> dependents = Lists.newArrayList();
+        for (String snapshotName : snapshotNames) {
+            List<BackupJobInfo> infos = Lists.newArrayList();
+            if (snapshotName.equals(label) || !getSnapshotInfoFile(snapshotName, infos).ok()) {
+                continue;
+            }
+            boolean pointsHere = infos.get(0).getManifests().values().stream()
+                    .flatMap(List::stream)
+                    .anyMatch(entry -> entry.getHolder().equals(label));
+            if (pointsHere) {
+                dependents.add(snapshotName);
+            }
+        }
+        Collections.sort(dependents);
+        return dependents;
     }
 
     public Status getSnapshotMetaFile(String label, List<BackupMeta> backupMetas, int metaVersion,
@@ -695,7 +738,9 @@ public class Repository implements Writable, GsonPostProcessable {
                         info.add(snapshotName);
                         info.add(timestamp);
                         info.add(jobInfo.dbName);
-                        info.add(jobInfo.getBrief());
+                        JSONObject details = jobInfo.toJson(false);
+                        details.put("dependents", new JSONArray(getDependents(snapshotName)));
+                        info.add(details.toString(1));
                         info.add("OK");
                     } catch (IOException e) {
                         info.add(snapshotName);

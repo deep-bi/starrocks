@@ -97,8 +97,8 @@ import java.util.function.Consumer;
 import java.util.function.Function;
 
 // Change detection (test-design.md section 3), the snapshot content it decides (TC-020..045), and the job's
-// restart, cancel and timeout (TC-081, TC-087, TC-089), and what SHOW SNAPSHOT and SHOW BACKUP show of it
-// (TC-090, TC-092).
+// restart, cancel and timeout (TC-081, TC-087, TC-089), what SHOW SNAPSHOT and SHOW BACKUP show of it
+// (TC-090, TC-092, TC-094), and the check that its holders still exist (TC-093).
 // Each test backs up one table, because CatalogMocker reuses tablet ids across tables.
 public class BackupJobIncrementalTest {
     private static final long REPO_ID = 20000;
@@ -129,6 +129,10 @@ public class BackupJobIncrementalTest {
     private final AtomicLong nextId = new AtomicLong(90000);
     // remote paths of the files the FE itself uploads: __meta and __info
     private final List<String> uploadedByFe = Lists.newArrayList();
+    // the repository lists an __info file for every snapshot except these
+    private final Set<String> deletedSnapshots = Sets.newHashSet();
+    // the snapshots the repository lists as directories, with the local file served as each one's __info
+    private final Map<String, String> repoInfoFiles = Maps.newTreeMap();
     private final Repository repo = new Repository(REPO_ID, "repo", false, "my_repo",
             new BlobStorage("broker", Maps.newHashMap()));
     private boolean originEnableMetricCalculator;
@@ -249,6 +253,32 @@ public class BackupJobIncrementalTest {
             @Mock
             Status getBrokerAddress(Long beId, GlobalStateMgr globalStateMgr, List<FsBroker> brokerAddrs) {
                 brokerAddrs.add(new FsBroker());
+                return Status.OK;
+            }
+
+            @Mock
+            Status download(String remoteFilePath, String localFilePath) throws IOException {
+                String label = remoteFilePath.replaceAll(".*/__ss_(.+?)/__info_.*", "$1");
+                if (!repoInfoFiles.containsKey(label)) {
+                    return new Status(Status.ErrCode.NOT_FOUND, "no such file: " + remoteFilePath);
+                }
+                Files.copy(Path.of(repoInfoFiles.get(label)), Path.of(localFilePath),
+                        StandardCopyOption.REPLACE_EXISTING);
+                return Status.OK;
+            }
+        };
+
+        new MockUp<BlobStorage>() {
+            @Mock
+            Status list(String remotePath, List<RemoteFile> result) {
+                if (remotePath.endsWith("/" + Repository.PREFIX_SNAPSHOT_DIR + "*")) {
+                    repoInfoFiles.keySet().forEach(label ->
+                            result.add(new RemoteFile(Repository.PREFIX_SNAPSHOT_DIR + label, false, 0)));
+                } else if (deletedSnapshots.stream()
+                        .noneMatch(label -> remotePath.contains("/__ss_" + label + "/"))) {
+                    result.add(new RemoteFile(Repository.PREFIX_JOB_INFO + "2026-10-29-00-00-00-000." + MD5_A,
+                            true, 100));
+                }
                 return Status.OK;
             }
         };
@@ -692,12 +722,52 @@ public class BackupJobIncrementalTest {
         BackupJob incremental = runBackup(incrementalJob(TBL2, baseOf(TBL2, null, copy -> { }, info -> { })),
                 DEFAULT_LOCAL_FILES, DEFAULT_REPORTED_FILES);
 
-        JSONObject fullDetails = showSnapshotDetails(full);
+        repoInfoFiles.put(full.getLabel(), full.getLocalJobInfoFilePath());
+        repoInfoFiles.put(incremental.getLabel(), incremental.getLocalJobInfoFilePath());
+
+        JSONObject fullDetails = showSnapshotDetails(full.getLabel());
         Assertions.assertEquals("full", fullDetails.getString("type"));
         Assertions.assertFalse(fullDetails.has("base_snapshot"));
-        JSONObject incrementalDetails = showSnapshotDetails(incremental);
+        JSONObject incrementalDetails = showSnapshotDetails(incremental.getLabel());
         Assertions.assertEquals("incremental", incrementalDetails.getString("type"));
         Assertions.assertEquals(BASE, incrementalDetails.getString("base_snapshot"));
+    }
+
+    // TC-094: each snapshot's manifests name the holders listed for it; dependents are the snapshots naming X.
+    @Test
+    public void detailedShowSnapshotListsTheSnapshotsHoldingPointersIntoIt() throws Exception {
+        Map<String, List<String>> holdersBySnapshot = Map.of(
+                FULL, List.of(FULL),
+                "inc1", List.of(FULL, "inc1"),
+                "inc1b", List.of(FULL),
+                "inc2", List.of("inc1", "inc2"));
+        for (Map.Entry<String, List<String>> snapshot : holdersBySnapshot.entrySet()) {
+            repoInfoFiles.put(snapshot.getKey(), writeInfo(snapshot.getKey(), snapshot.getValue()));
+        }
+
+        Assertions.assertEquals(List.of("inc1", "inc1b"), dependents(FULL));
+        Assertions.assertEquals(List.of("inc2"), dependents("inc1"));
+        Assertions.assertEquals(List.of(), dependents("inc2"));
+    }
+
+    private List<Object> dependents(String label) {
+        return showSnapshotDetails(label).getJSONArray("dependents").toList();
+    }
+
+    // Writes an __info for test_tbl2 whose every tablet has one data file per holder.
+    private String writeInfo(String label, List<String> holders) throws IOException {
+        BackupJobInfo info = BackupJobInfo.fromCatalog(System.currentTimeMillis(), label, CatalogMocker.TEST_DB_NAME,
+                CatalogMocker.TEST_DB_ID, List.of(copyOf(TBL2, null)), Maps.newHashMap());
+        info.snapshotFormatVersion = BackupJobInfo.SNAPSHOT_FORMAT_VERSION;
+        forEachTablet(info, tablet -> {
+            for (int i = 0; i < holders.size(); i++) {
+                tablet.files.add(new ManifestEntry(tablet.id + "_" + i + ".dat." + MD5_A, holders.get(i),
+                        !holders.get(i).equals(FULL)));
+            }
+        });
+        File file = File.createTempFile("__info_" + label, null, new File(BackupHandler.BACKUP_ROOT_DIR.toString()));
+        info.writeToFile(file);
+        return file.getAbsolutePath();
     }
 
     // TC-092
@@ -721,6 +791,36 @@ public class BackupJobIncrementalTest {
         BackupJob full = fullJob("full_label", TBL2);
         runUntil(full, BackupJobState.UPLOADING);
         assertShownTypeAndBase(full, "full", FeConstants.NULL_STRING);
+    }
+
+    // TC-093: the base's data files are held by FULL and its headers by BASE; FULL was deleted while the backup ran.
+    @Test
+    public void missingHolderCancelsTheBackupBeforeItsInfoIsUploaded() throws Exception {
+        BackupJob job = incrementalJob(TBL2, baseOf(TBL2, null, copy -> { }, info -> { }));
+        PhysicalPartition p1 = physicalPartition(TBL2, P1);
+        p1.setVisibleVersion(p1.getVisibleVersion() + 1, p1.getVisibleVersionTime() + 1);
+        deletedSnapshots.add(FULL);
+        runUntil(job, BackupJobState.SAVE_META);
+
+        job.run();
+
+        Assertions.assertEquals(BackupJobState.CANCELLED, job.getState());
+        Assertions.assertTrue(job.getStatus().getErrMsg().contains(FULL), job.getStatus().toString());
+        Assertions.assertEquals(List.of(), uploadedByFe);
+    }
+
+    // TC-093
+    @Test
+    public void backupWhoseHoldersAllExistGoesOnToUploadItsInfo() throws Exception {
+        BackupJob job = incrementalJob(TBL2, baseOf(TBL2, null, copy -> { }, info -> { }));
+        PhysicalPartition p1 = physicalPartition(TBL2, P1);
+        p1.setVisibleVersion(p1.getVisibleVersion() + 1, p1.getVisibleVersionTime() + 1);
+        runUntil(job, BackupJobState.SAVE_META);
+
+        job.run();
+
+        Assertions.assertTrue(job.getStatus().ok(), job.getStatus().toString());
+        Assertions.assertEquals(BackupJobState.UPLOAD_INFO, job.getState());
     }
 
     // ---- helpers ----
@@ -1078,18 +1178,9 @@ public class BackupJobIncrementalTest {
         Assertions.assertEquals(base, row.get(names.indexOf("BaseSnapshot")), row.toString());
     }
 
-    // The Details column of SHOW SNAPSHOT ... WHERE SNAPSHOT = ... AND TIMESTAMP = ..., with the repository serving
-    // the job's own __info.
-    private JSONObject showSnapshotDetails(BackupJob job) {
-        new MockUp<Repository>() {
-            @Mock
-            Status download(String remoteFilePath, String localFilePath) throws IOException {
-                Files.copy(Path.of(job.getLocalJobInfoFilePath()), Path.of(localFilePath),
-                        StandardCopyOption.REPLACE_EXISTING);
-                return Status.OK;
-            }
-        };
-        List<String> row = repo.getSnapshotInfos(job.getLabel(), "2026-10-29-00-00-00-000", null).get(0);
+    // The Details column of SHOW SNAPSHOT ... WHERE SNAPSHOT = ... AND TIMESTAMP = ..., for a snapshot in repoInfoFiles.
+    private JSONObject showSnapshotDetails(String label) {
+        List<String> row = repo.getSnapshotInfos(label, "2026-10-29-00-00-00-000", null).get(0);
         Assertions.assertEquals("OK", row.get(ShowSnapshotStmt.SNAPSHOT_DETAIL.indexOf("Status")), row.toString());
         return new JSONObject(row.get(ShowSnapshotStmt.SNAPSHOT_DETAIL.indexOf("Details")));
     }
