@@ -93,6 +93,12 @@ public class AcceptListener implements ChannelListener<AcceptingChannel<StreamCo
                         if (result.state() != NegotiateState.OK) {
                             throw new AfterConnectedException(result.state().getMsg());
                         }
+                        result = MysqlProto.authenticate(context, result.authPacket());
+                        if (result.state() != NegotiateState.OK) {
+                            throw new AfterConnectedException(result.state().getMsg());
+                        }
+
+                        // register only once authenticated, so the role connection limit sees the session's roles
                         Pair<Boolean, String> registerResult = connectScheduler.registerConnection(context);
                         if (registerResult.first) {
                             connection.setCloseListener(streamConnection -> connectScheduler.unregisterConnection(context));
@@ -100,11 +106,6 @@ public class AcceptListener implements ChannelListener<AcceptingChannel<StreamCo
                             context.getState().setError(registerResult.second);
                             MysqlProto.sendResponsePacket(context);
                             throw new AfterConnectedException(registerResult.second);
-                        }
-
-                        result = MysqlProto.authenticate(context, result.authPacket());
-                        if (result.state() != NegotiateState.OK) {
-                            throw new AfterConnectedException(result.state().getMsg());
                         }
 
                         MysqlProto.sendResponsePacket(context);
