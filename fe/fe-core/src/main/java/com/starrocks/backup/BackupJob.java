@@ -783,7 +783,7 @@ public class BackupJob extends AbstractJob {
         return true;
     }
 
-    private void clearLocalFilesContent() {
+    private void clearRegenerationContent() {
         backupMeta = null;
         jobInfo = null;
     }
@@ -849,7 +849,7 @@ public class BackupJob extends AbstractJob {
 
         finishedTime = System.currentTimeMillis();
         state = BackupJobState.FINISHED;
-        clearLocalFilesContent();
+        clearRegenerationContent();
 
         // log
         globalStateMgr.getEditLog().logBackupJob(this);
@@ -926,7 +926,7 @@ public class BackupJob extends AbstractJob {
         releaseSnapshots();
 
         if (state == BackupJobState.UPLOAD_INFO) {
-            clearLocalFilesContent();
+            clearRegenerationContent();
         }
 
         BackupJobState curState = state;
@@ -954,7 +954,7 @@ public class BackupJob extends AbstractJob {
                 }
             }
         } catch (Exception e) {
-            LOG.warn("failed to clean the backup job dir: " + localJobDirPath.toString());
+            LOG.warn("failed to clean the backup job dir: {}", localJobDirPath, e);
         }
     }
 
