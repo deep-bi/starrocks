@@ -126,6 +126,8 @@ public class BackupJob extends AbstractJob {
     @SerializedName(value = "state")
     protected BackupJobState state;
 
+    private boolean localFileMissing = false;
+
     @SerializedName(value = "snapshotFinishedTime")
     private long snapshotFinishedTime = -1;
     @SerializedName(value = "snapshotUploadFinishedTime")
@@ -140,6 +142,7 @@ public class BackupJob extends AbstractJob {
     @SerializedName(value = "backupMeta")
     private BackupMeta backupMeta;
     // job info file content
+    @SerializedName(value = "jobInfo")
     private BackupJobInfo jobInfo;
 
     // save the local dir of this backup job
@@ -382,7 +385,8 @@ public class BackupJob extends AbstractJob {
         // we don't want to cancel the job if we already in state UPLOAD_INFO,
         // which is the final step of backup job. just retry it.
         // if it encounters some unrecoverable errors, just retry it until timeout.
-        if (!status.ok() && state != BackupJobState.UPLOAD_INFO) {
+        // The one exception is a local file that no longer exists: retrying cannot bring it back.
+        if (!status.ok() && (state != BackupJobState.UPLOAD_INFO || localFileMissing)) {
             cancelInternal();
         }
     }
@@ -694,6 +698,39 @@ public class BackupJob extends AbstractJob {
     }
 
     private void saveMetaInfo() {
+        BackupJobInfo newJobInfo;
+        try {
+            newJobInfo = BackupJobInfo.fromCatalog(createTime, label, dbName, dbId, backupMeta.getTables().values(),
+                    snapshotInfos);
+        } catch (Exception e) {
+            status = new Status(ErrCode.COMMON_ERROR, "failed to save meta info and job info file: " + e.getMessage());
+            return;
+        }
+        LOG.debug("job info: {}. {}", newJobInfo, this);
+
+        if (!writeLocalFiles(newJobInfo)) {
+            return;
+        }
+
+        state = BackupJobState.UPLOAD_INFO;
+
+        // backupMeta and jobInfo stay in the UPLOAD_INFO log entry: the local files exist only on this node, and a
+        // new leader regenerates them from the entry. jobInfo is frozen here because it holds the auto-increment id,
+        // the one value read from the live catalog.
+        jobInfo = newJobInfo;
+
+        // release all snapshots before clearing the snapshotInfos.
+        releaseSnapshots();
+
+        snapshotInfos.clear();
+
+        // log
+        globalStateMgr.getEditLog().logBackupJob(this);
+        LOG.info("finished to save meta the backup job info file to local.[{}], [{}] {}",
+                localMetaInfoFilePath, localJobInfoFilePath, this);
+    }
+
+    private boolean writeLocalFiles(BackupJobInfo jobInfoToWrite) {
         String createTimeStr = TimeUtils.longToTimeString(createTime,
                 DateTimeFormatter.ofPattern(TIMESTAMP_FORMAT).withZone(TimeUtils.getSystemTimeZone().toZoneId()));
         if (testPrimaryKey) {
@@ -718,7 +755,7 @@ public class BackupJob extends AbstractJob {
             }
             if (!jobDir.mkdirs()) {
                 status = new Status(ErrCode.COMMON_ERROR, "Failed to create tmp dir: " + localJobDirPath);
-                return;
+                return false;
             }
 
             // 2. save meta info file
@@ -726,42 +763,29 @@ public class BackupJob extends AbstractJob {
             if (!metaInfoFile.createNewFile()) {
                 status = new Status(ErrCode.COMMON_ERROR,
                         "Failed to create meta info file: " + metaInfoFile.toString());
-                return;
+                return false;
             }
             backupMeta.writeToFile(metaInfoFile);
             localMetaInfoFilePath = metaInfoFile.getAbsolutePath();
 
             // 3. save job info file
-            jobInfo = BackupJobInfo.fromCatalog(createTime, label, dbName, dbId, backupMeta.getTables().values(),
-                    snapshotInfos);
-            LOG.debug("job info: {}. {}", jobInfo, this);
             File jobInfoFile = new File(jobDir, Repository.PREFIX_JOB_INFO + createTimeStr);
             if (!jobInfoFile.createNewFile()) {
                 status = new Status(ErrCode.COMMON_ERROR, "Failed to create job info file: " + jobInfoFile.toString());
-                return;
+                return false;
             }
-            jobInfo.writeToFile(jobInfoFile);
+            jobInfoToWrite.writeToFile(jobInfoFile);
             localJobInfoFilePath = jobInfoFile.getAbsolutePath();
         } catch (Exception e) {
             status = new Status(ErrCode.COMMON_ERROR, "failed to save meta info and job info file: " + e.getMessage());
-            return;
+            return false;
         }
+        return true;
+    }
 
-        state = BackupJobState.UPLOAD_INFO;
-
-        // meta info and job info has been saved to local file, this can be cleaned to reduce log size
+    private void clearRegenerationContent() {
         backupMeta = null;
         jobInfo = null;
-
-        // release all snapshots before clearing the snapshotInfos.
-        releaseSnapshots();
-
-        snapshotInfos.clear();
-
-        // log
-        globalStateMgr.getEditLog().logBackupJob(this);
-        LOG.info("finished to save meta the backup job info file to local.[{}], [{}] {}",
-                localMetaInfoFilePath, localJobInfoFilePath, this);
     }
 
     protected void releaseSnapshots() {
@@ -781,7 +805,38 @@ public class BackupJob extends AbstractJob {
         LOG.info("send {} release snapshot tasks, job: {}", snapshotInfos.size(), this);
     }
 
+    private String findMissingLocalFile() {
+        if (!new File(localMetaInfoFilePath).exists()) {
+            return localMetaInfoFilePath;
+        }
+        return new File(localJobInfoFilePath).exists() ? null : localJobInfoFilePath;
+    }
+
+    // The new paths are not logged: a later leader finds them missing too, and regenerates again.
+    private boolean regenerateLocalFiles(String missingFilePath) {
+        if (backupMeta == null || jobInfo == null) {
+            localFileMissing = true;
+            status = new Status(ErrCode.COMMON_ERROR, "local files of backup '" + label + "' are gone ("
+                    + missingFilePath + "), probably after a leader change. Rerun the backup with a new label, "
+                    + "or remove __ss_" + label + "/ from the repository to reuse this label");
+            return false;
+        }
+
+        LOG.info("local file {} is missing, regenerating the local files. {}", missingFilePath, this);
+        if (!writeLocalFiles(jobInfo)) {
+            // This runs on every retry until the timeout, each time with a new directory.
+            deleteLocalJobDir();
+            return false;
+        }
+        return true;
+    }
+
     private void uploadMetaAndJobInfoFile() {
+        String missingFilePath = findMissingLocalFile();
+        if (missingFilePath != null && !regenerateLocalFiles(missingFilePath)) {
+            return;
+        }
+
         String remoteMetaInfoFile = repo.assembleMetaInfoFilePath(label);
         if (!uploadFile(localMetaInfoFilePath, remoteMetaInfoFile)) {
             return;
@@ -794,6 +849,7 @@ public class BackupJob extends AbstractJob {
 
         finishedTime = System.currentTimeMillis();
         state = BackupJobState.FINISHED;
+        clearRegenerationContent();
 
         // log
         globalStateMgr.getEditLog().logBackupJob(this);
@@ -865,23 +921,13 @@ public class BackupJob extends AbstractJob {
                 break;
         }
 
-        // clean the backup job dir
-        if (localJobDirPath != null) {
-            try {
-                File jobDir = new File(localJobDirPath.toString());
-                if (jobDir.exists()) {
-                    try (Stream<Path> path = Files.walk(localJobDirPath,
-                            FileVisitOption.FOLLOW_LINKS)) {
-                        path.sorted(Comparator.reverseOrder()).map(Path::toFile)
-                                .forEach(File::delete);
-                    }
-                }
-            } catch (Exception e) {
-                LOG.warn("failed to clean the backup job dir: " + localJobDirPath.toString());
-            }
-        }
+        deleteLocalJobDir();
 
         releaseSnapshots();
+
+        if (state == BackupJobState.UPLOAD_INFO) {
+            clearRegenerationContent();
+        }
 
         BackupJobState curState = state;
         finishedTime = System.currentTimeMillis();
@@ -892,6 +938,24 @@ public class BackupJob extends AbstractJob {
         WarehouseIdleChecker.updateJobLastFinishTime(WarehouseManager.DEFAULT_WAREHOUSE_ID,
                 "BackupJob: jobId[" + jobId + "]" + " label[" + label + "]");
         LOG.info("finished to cancel backup job. current state: {}. {}", curState.name(), this);
+    }
+
+    private void deleteLocalJobDir() {
+        if (localJobDirPath == null) {
+            return;
+        }
+        try {
+            File jobDir = new File(localJobDirPath.toString());
+            if (jobDir.exists()) {
+                try (Stream<Path> path = Files.walk(localJobDirPath,
+                        FileVisitOption.FOLLOW_LINKS)) {
+                    path.sorted(Comparator.reverseOrder()).map(Path::toFile)
+                            .forEach(File::delete);
+                }
+            }
+        } catch (Exception e) {
+            LOG.warn("failed to clean the backup job dir: {}", localJobDirPath, e);
+        }
     }
 
     public List<String> getInfo() {
