@@ -79,6 +79,10 @@ import java.util.stream.Collectors;
 public class BackupJobInfo implements Writable {
     private static final Logger LOG = LogManager.getLogger(BackupJobInfo.class);
 
+    // Snapshots made by FEs without incremental backup have no format version.
+    public static final int SNAPSHOT_FORMAT_VERSION_LEGACY = 0;
+    public static final int SNAPSHOT_FORMAT_VERSION = 1;
+
     @SerializedName(value = "name")
     public String name;
     @SerializedName(value = "dbName")
@@ -95,6 +99,11 @@ public class BackupJobInfo implements Writable {
     public int metaVersion;
     @SerializedName(value = "starrocksMetaVersion")
     public int starrocksMetaVersion;
+
+    @SerializedName(value = "snapshotFormatVersion")
+    public int snapshotFormatVersion = SNAPSHOT_FORMAT_VERSION_LEGACY;
+    @SerializedName(value = "baseSnapshot")
+    public String baseSnapshot;
 
     // This map is used to save the table alias mapping info when processing a restore job.
     // origin -> alias
@@ -238,6 +247,8 @@ public class BackupJobInfo implements Writable {
     public static class BackupTabletInfo {
         @SerializedName(value = "id")
         public long id;
+        @SerializedName(value = "files")
+        public List<ManifestEntry> files = Lists.newArrayList();
     }
 
     // eg: __db_10001/__tbl_10002/__part_10003/__idx_10002/__10004
@@ -424,6 +435,8 @@ public class BackupJobInfo implements Writable {
             // starrocks_meta_version does not exist
             jobInfo.starrocksMetaVersion = FeConstants.STARROCKS_META_VERSION;
         }
+        jobInfo.snapshotFormatVersion = root.optInt("snapshot_format_version", SNAPSHOT_FORMAT_VERSION_LEGACY);
+        jobInfo.baseSnapshot = root.optString("base_snapshot", null);
 
         JSONObject backupObjs = root.getJSONObject("backup_objects");
         String[] tblNames = JSONObject.getNames(backupObjs);
@@ -482,6 +495,7 @@ public class BackupJobInfo implements Writable {
                         for (String tabletId : orderedTabletIds) {
                             BackupTabletInfo tabletInfo = new BackupTabletInfo();
                             tabletInfo.id = Long.valueOf(tabletId);
+                            tabletInfo.files = manifestFromJson(tablets.optJSONArray(tabletId));
                             indexInfo.tablets.add(tabletInfo);
                         }
                         partInfo.indexes.put(indexInfo.name, indexInfo);
@@ -518,6 +532,7 @@ public class BackupJobInfo implements Writable {
                                 for (String tabletId : orderedTabletIds) {
                                     BackupTabletInfo tabletInfo = new BackupTabletInfo();
                                     tabletInfo.id = Long.valueOf(tabletId);
+                                    tabletInfo.files = manifestFromJson(tablets.optJSONArray(tabletId));
                                     indexInfo.tablets.add(tabletInfo);
                                 }
                                 subPartInfo.indexes.put(indexInfo.name, indexInfo);
@@ -542,6 +557,68 @@ public class BackupJobInfo implements Writable {
         } else {
             jobInfo.success = false;
         }
+    }
+
+    public boolean isIncremental() {
+        return baseSnapshot != null;
+    }
+
+    public Map<Long, List<ManifestEntry>> getManifests() {
+        Map<Long, List<ManifestEntry>> manifests = Maps.newHashMap();
+        for (BackupTableInfo tableInfo : tables.values()) {
+            for (BackupPartitionInfo partitionInfo : tableInfo.partitions.values()) {
+                List<BackupIndexInfo> indexes = Lists.newArrayList(partitionInfo.indexes.values());
+                for (BackupPhysicalPartitionInfo physicalInfo : partitionInfo.subPartitions.values()) {
+                    indexes.addAll(physicalInfo.indexes.values());
+                }
+                for (BackupIndexInfo indexInfo : indexes) {
+                    for (BackupTabletInfo tabletInfo : indexInfo.tablets) {
+                        manifests.put(tabletInfo.id, tabletInfo.files);
+                    }
+                }
+            }
+        }
+        return manifests;
+    }
+
+    public void setManifests(Map<Long, List<ManifestEntry>> tabletManifests) {
+        for (BackupTableInfo tableInfo : tables.values()) {
+            for (BackupPartitionInfo partitionInfo : tableInfo.partitions.values()) {
+                for (BackupPhysicalPartitionInfo physicalInfo : partitionInfo.subPartitions.values()) {
+                    for (BackupIndexInfo indexInfo : physicalInfo.indexes.values()) {
+                        for (BackupTabletInfo tabletInfo : indexInfo.tablets) {
+                            tabletInfo.files = tabletManifests.getOrDefault(tabletInfo.id, Lists.newArrayList());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // A stock FE reads only the tablet ids, the keys of "tablets", and ignores these arrays.
+    private static JSONArray manifestToJson(List<ManifestEntry> manifest) {
+        JSONArray files = new JSONArray();
+        for (ManifestEntry entry : manifest) {
+            JSONObject file = new JSONObject();
+            file.put("file", entry.getFile());
+            file.put("holder", entry.getHolder());
+            file.put("holder_incremental", entry.isHolderIncremental());
+            files.put(file);
+        }
+        return files;
+    }
+
+    private static List<ManifestEntry> manifestFromJson(JSONArray files) {
+        List<ManifestEntry> manifest = Lists.newArrayList();
+        if (files == null) {
+            return manifest;
+        }
+        for (int i = 0; i < files.length(); i++) {
+            JSONObject file = files.getJSONObject(i);
+            manifest.add(new ManifestEntry(file.getString("file"), file.getString("holder"),
+                    file.getBoolean("holder_incremental")));
+        }
+        return manifest;
     }
 
     private static String[] sortTabletIds(String[] tabletIds, JSONArray tabletsOrder) {
@@ -585,6 +662,11 @@ public class BackupJobInfo implements Writable {
         root.put("backup_objects", backupObj);
         root.put("meta_version", FeConstants.META_VERSION);
         root.put("starrocks_meta_version", FeConstants.STARROCKS_META_VERSION);
+        root.put("snapshot_format_version", SNAPSHOT_FORMAT_VERSION);
+        root.put("type", isIncremental() ? "incremental" : "full");
+        if (isIncremental()) {
+            root.put("base_snapshot", baseSnapshot);
+        }
 
         for (BackupTableInfo tblInfo : tables.values()) {
             JSONObject tbl = new JSONObject();
@@ -612,8 +694,7 @@ public class BackupJobInfo implements Writable {
                         JSONArray tabletsOrder = new JSONArray();
                         idx.put("tablets_order", tabletsOrder);
                         for (BackupTabletInfo tabletInfo : idxInfo.tablets) {
-                            JSONArray files = new JSONArray();
-                            tablets.put(String.valueOf(tabletInfo.id), files);
+                            tablets.put(String.valueOf(tabletInfo.id), manifestToJson(tabletInfo.files));
                             // to save the order of tablets
                             tabletsOrder.put(String.valueOf(tabletInfo.id));
                         }
@@ -636,8 +717,7 @@ public class BackupJobInfo implements Writable {
                             JSONArray tabletsOrder = new JSONArray();
                             idx.put("tablets_order", tabletsOrder);
                             for (BackupTabletInfo tabletInfo : idxInfo.tablets) {
-                                JSONArray files = new JSONArray();
-                                tablets.put(String.valueOf(tabletInfo.id), files);
+                                tablets.put(String.valueOf(tabletInfo.id), manifestToJson(tabletInfo.files));
                                 // to save the order of tablets
                                 tabletsOrder.put(String.valueOf(tabletInfo.id));
                             }

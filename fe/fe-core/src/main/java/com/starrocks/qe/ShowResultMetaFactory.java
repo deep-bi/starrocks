@@ -1132,6 +1132,8 @@ public class ShowResultMetaFactory implements AstVisitorExtendInterface<ShowResu
                 .addColumn(new Column("TaskErrMsg", TypeFactory.createVarcharType(30)))
                 .addColumn(new Column("Status", TypeFactory.createVarcharType(30)))
                 .addColumn(new Column("Timeout", TypeFactory.createVarcharType(30)))
+                .addColumn(new Column("Type", TypeFactory.createVarcharType(30)))
+                .addColumn(new Column("BaseSnapshot", TypeFactory.createVarcharType(30)))
                 .build();
     }
 
