@@ -13,8 +13,9 @@
 
     <properties>
         <java-extensions.home>${basedir}/../</java-extensions.home>
-        <!-- deepbi1 shades Netty 4.1.138.Final and protobuf-java 3.25.5 (upstream 1.17.1: 4.1.110 / 3.21.12) -->
-        <kudu.version>1.17.1-deepbi1</kudu.version>
+        <!-- deepbi2 shades Netty 4.1.138.Final, protobuf-java 3.25.5 and Guava 33.7.2-jre
+             (upstream 1.17.1: 4.1.110 / 3.21.12 / 32.1.1-jre) -->
+        <kudu.version>1.17.1-deepbi2</kudu.version>
     </properties>
 
     <repositories>

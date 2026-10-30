@@ -70,7 +70,7 @@ subprojects {
         set("jprotobuf-starrocks.version", "1.0.0")
         set("junit.version", "5.8.2")
         set("kafka-clients.version", "3.9.1")
-        set("kudu.version", "1.17.1-deepbi1")
+        set("kudu.version", "1.17.1-deepbi2")
         set("log4j.version", "2.25.5")
         set("luben.zstd.jni.version", "1.5.7-15")
         set("nimbusds.version", "9.37.2")
