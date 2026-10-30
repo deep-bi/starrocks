@@ -159,14 +159,16 @@ public class BackupJobIncrementalTest {
 
     @BeforeAll
     public static void start() {
-        Config.tmp_dir = "./";
+        // Not BackupJobTest's root: it deletes that one, and surefire may run both classes at once.
+        Config.tmp_dir = "./backup_job_incremental_test";
         new File(BackupHandler.BACKUP_ROOT_DIR.toString()).mkdirs();
     }
 
     @AfterAll
     public static void end() throws IOException {
-        if (BackupHandler.BACKUP_ROOT_DIR.toFile().exists()) {
-            try (var paths = Files.walk(BackupHandler.BACKUP_ROOT_DIR, FileVisitOption.FOLLOW_LINKS)) {
+        Path tmpDir = Path.of(Config.tmp_dir);
+        if (tmpDir.toFile().exists()) {
+            try (var paths = Files.walk(tmpDir, FileVisitOption.FOLLOW_LINKS)) {
                 paths.sorted(Comparator.reverseOrder()).map(Path::toFile).forEach(File::delete);
             }
         }
