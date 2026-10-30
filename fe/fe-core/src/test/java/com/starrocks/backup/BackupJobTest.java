@@ -869,6 +869,11 @@ public class BackupJobTest {
         return replayed;
     }
 
+    private BackupJob replayedPendingJob() {
+        AgentTaskQueue.clearAllTasks();
+        return replayFromEditLog(job);
+    }
+
     private SnapshotTask onlySnapshotTask() {
         AgentTask task = AgentTaskQueue.getTask(backendId, TTaskType.MAKE_SNAPSHOT, tabletId);
         Assertions.assertTrue(task instanceof SnapshotTask);
@@ -878,8 +883,7 @@ public class BackupJobTest {
     // TC-111
     @Test
     public void testReplayedPendingJobLeavesPending() {
-        AgentTaskQueue.clearAllTasks();
-        BackupJob replayed = replayFromEditLog(job);
+        BackupJob replayed = replayedPendingJob();
         Assertions.assertEquals(BackupJobState.PENDING, replayed.getState());
 
         replayed.run();
@@ -893,8 +897,7 @@ public class BackupJobTest {
     // TC-112
     @Test
     public void testReplayedPendingJobReachesUploadSnapshot() {
-        AgentTaskQueue.clearAllTasks();
-        BackupJob replayed = replayFromEditLog(job);
+        BackupJob replayed = replayedPendingJob();
         replayed.run();
         Assertions.assertEquals(BackupJobState.SNAPSHOTING, replayed.getState());
 
@@ -916,8 +919,7 @@ public class BackupJobTest {
     // TC-114
     @Test
     public void testReplayedPendingJobCancelledWhenTableDropped() {
-        AgentTaskQueue.clearAllTasks();
-        BackupJob replayed = replayFromEditLog(job);
+        BackupJob replayed = replayedPendingJob();
         new Expectations(localMetastore) {
             {
                 localMetastore.getTable("testDb", "testTable");
@@ -936,8 +938,7 @@ public class BackupJobTest {
     // TC-115
     @Test
     public void testReplayedPendingJobSendsSnapshotTasksOnce() {
-        AgentTaskQueue.clearAllTasks();
-        BackupJob replayed = replayFromEditLog(job);
+        BackupJob replayed = replayedPendingJob();
         long counterBefore = MetricRepo.COUNTER_UNFINISHED_BACKUP_JOB.getValue();
 
         replayed.run();
