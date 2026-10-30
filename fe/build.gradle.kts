@@ -43,7 +43,7 @@ subprojects {
         set("antlr.version", "4.9.3")
         set("arrow.version", "18.0.0")
         set("async-profiler.version", "4.0")
-        set("avro.version", "1.12.0")
+        set("avro.version", "1.12.1")
         set("aws-v2-sdk.version", "2.42.1")
         set("azure.version", "1.2.34")
         set("bouncycastle.version", "1.86")
@@ -187,6 +187,7 @@ subprojects {
             implementation("org.apache.arrow:flight-sql:${project.ext["arrow.version"]}")
             implementation("org.apache.arrow:flight-sql-jdbc-driver:${project.ext["arrow.version"]}")
             implementation("org.apache.avro:avro:${project.ext["avro.version"]}")
+            implementation("org.apache.avro:avro-mapred:1.11.5")
             implementation("org.apache.commons:commons-dbcp2:2.9.0")
             // 3.18.0 fixes CVE-2025-48924
             implementation("org.apache.commons:commons-lang3:3.18.0")
