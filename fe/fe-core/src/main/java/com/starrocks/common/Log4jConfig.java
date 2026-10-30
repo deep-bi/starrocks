@@ -238,6 +238,8 @@ public class Log4jConfig extends XmlConfiguration {
     private static boolean compressSysLog;
     private static boolean compressAuditLog;
     private static String[] warnModules;
+    // set when the logging setup comes from -Dlog4j.configurationFile instead of the builtin template
+    private static String customConfigFile;
     private static String[] builtinWarnModules = {
             "org.apache.kafka",
             "org.apache.hudi",
@@ -367,6 +369,27 @@ public class Log4jConfig extends XmlConfiguration {
 
         String xmlConfTemplate = generateActiveLog4jXmlConfig();
 
+        installJulBridge();
+
+        if (!FeConstants.runningUnitTest && !FeConstants.isReplayFromQueryDump) {
+            System.out.println("=====");
+            System.out.println(xmlConfTemplate);
+            System.out.println("=====");
+        }
+
+        // new SimpleLog4jConfiguration with xmlConfTemplate
+        ByteArrayInputStream bis = new ByteArrayInputStream(xmlConfTemplate.getBytes(StandardCharsets.UTF_8));
+        ConfigurationSource source = new ConfigurationSource(bis);
+        Log4jConfig config = new Log4jConfig(source);
+
+        // LoggerContext.start(new Configuration)
+        LoggerContext context = (LoggerContext) LogManager.getContext(LogManager.class.getClassLoader(), false);
+        context.start(config);
+    }
+
+    // Route java.util.logging through slf4j, so libraries logging via JUL end up in the log4j appenders
+    // instead of JUL's default console handler, and map sys_log_level onto the JUL root logger.
+    private static void installJulBridge() {
         SLF4JBridgeHandler.removeHandlersForRootLogger();
         SLF4JBridgeHandler.install();
 
@@ -388,21 +411,6 @@ public class Log4jConfig extends XmlConfiguration {
             }
         }
         Logger.getLogger("").setLevel(targetJulLevel);
-
-        if (!FeConstants.runningUnitTest && !FeConstants.isReplayFromQueryDump) {
-            System.out.println("=====");
-            System.out.println(xmlConfTemplate);
-            System.out.println("=====");
-        }
-
-        // new SimpleLog4jConfiguration with xmlConfTemplate
-        ByteArrayInputStream bis = new ByteArrayInputStream(xmlConfTemplate.getBytes(StandardCharsets.UTF_8));
-        ConfigurationSource source = new ConfigurationSource(bis);
-        Log4jConfig config = new Log4jConfig(source);
-
-        // LoggerContext.start(new Configuration)
-        LoggerContext context = (LoggerContext) LogManager.getContext(LogManager.class.getClassLoader(), false);
-        context.start(config);
     }
 
     private static String generateXmlConfTemplate() {
@@ -466,21 +474,6 @@ public class Log4jConfig extends XmlConfiguration {
     }
 
     public static synchronized void initLogging() throws IOException {
-        String customConfig = System.getProperty("log4j.configurationFile");
-
-        if (StringUtils.isNotBlank(customConfig)) {
-            try {
-                URI uri = URI.create(customConfig);
-                LoggerContext context = (LoggerContext) LogManager.getContext(false);
-                context.setConfigLocation(uri);
-                context.start();
-                return;
-            } catch (Exception e) {
-                System.err.println("[ERROR] Failed to initialize custom Log4j config: " + customConfig);
-                e.printStackTrace(System.err);
-            }
-        }
-
         sysLogLevel = Config.sys_log_level;
         verboseModules = Config.sys_log_verbose_modules;
         auditModules = Config.audit_log_modules;
@@ -490,11 +483,39 @@ public class Log4jConfig extends XmlConfiguration {
         compressSysLog = Config.sys_log_enable_compress;
         compressAuditLog = Config.audit_log_enable_compress;
         warnModules = Config.sys_log_warn_modules;
+
+        customConfigFile = null;
+        String customConfig = System.getProperty("log4j.configurationFile");
+        if (StringUtils.isNotBlank(customConfig)) {
+            try {
+                URI uri = URI.create(customConfig);
+                LoggerContext context = (LoggerContext) LogManager.getContext(false);
+                context.setConfigLocation(uri);
+                context.start();
+                installJulBridge();
+                customConfigFile = customConfig;
+                return;
+            } catch (Exception e) {
+                System.err.println("[ERROR] Failed to initialize custom Log4j config: " + customConfig);
+                e.printStackTrace(System.err);
+            }
+        }
+
         reconfig();
+    }
+
+    @VisibleForTesting
+    static String getCustomConfigFile() {
+        return customConfigFile;
     }
 
     public static synchronized Tuple3<String, String[], String[]> updateLogging(
             String level, String[] verboseNames, String[] auditNames) throws IOException {
+        if (customConfigFile != null) {
+            // The external log4j.configurationFile owns the logging setup; regenerating the builtin
+            // configuration here would silently replace it, so runtime changes are not applied.
+            return new Tuple3<>(sysLogLevel, verboseModules, auditModules);
+        }
         boolean toReconfig = false;
         if (level != null) {
             sysLogLevel = level;
