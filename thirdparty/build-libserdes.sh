@@ -171,7 +171,9 @@ build_avro_c() {
     cd $TP_SOURCE_DIR/$AVRO_SOURCE/lang/c
     mkdir -p build
     cd build
-    $CMAKE_CMD .. -DCMAKE_INSTALL_PREFIX=${TP_INSTALL_DIR} -DCMAKE_INSTALL_LIBDIR=lib64 -DCMAKE_BUILD_TYPE=Release
+    $CMAKE_CMD .. -DCMAKE_INSTALL_PREFIX=${TP_INSTALL_DIR} -DCMAKE_INSTALL_LIBDIR=lib64 -DCMAKE_BUILD_TYPE=Release \
+        -DJANSSON_INCLUDE_DIRS=${TP_INSTALL_DIR}/include \
+        -DJANSSON_LIBRARIES=${TP_INSTALL_DIR}/lib/libjansson.a
     ${BUILD_SYSTEM} -j$PARALLEL
     ${BUILD_SYSTEM} install
     rm ${TP_INSTALL_DIR}/lib64/libavro.so*
