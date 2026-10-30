@@ -75,7 +75,7 @@ subprojects {
         set("luben.zstd.jni.version", "1.5.7-15")
         set("nimbusds.version", "9.37.2")
         set("odps.version", "0.48.7-public")
-        set("paimon.version", "1.4.2-deepbi2")
+        set("paimon.version", "1.4.2-deepbi3")
         set("parquet.version", "1.18.1")
         set("ranger.version", "2.9.0")
         set("zookeeper.version", "3.9.5")
