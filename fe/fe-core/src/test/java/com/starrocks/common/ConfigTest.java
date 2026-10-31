@@ -76,6 +76,20 @@ public class ConfigTest {
     }
 
     @Test
+    public void testSslCipherConfigsReadOldDeepbiNames(@TempDir Path dir) throws Exception {
+        Path propFile = dir.resolve("fe_old_cipher_names.conf");
+        Files.writeString(propFile, "sslCipherWhitelist = TLS_AES_.*\nsslCipherBlacklist = .*_CBC_.*\n");
+        try {
+            config.init(propFile.toFile().getAbsolutePath());
+            Assertions.assertEquals("TLS_AES_.*", Config.ssl_cipher_whitelist);
+            Assertions.assertEquals(".*_CBC_.*", Config.ssl_cipher_blacklist);
+        } finally {
+            Config.ssl_cipher_whitelist = "";
+            Config.ssl_cipher_blacklist = "";
+        }
+    }
+
+    @Test
     public void testMultiAlias() throws Exception {
         ConfigForTest configForTest = new ConfigForTest();
         URL resource = getClass().getClassLoader().getResource("conf/config_test3.properties");

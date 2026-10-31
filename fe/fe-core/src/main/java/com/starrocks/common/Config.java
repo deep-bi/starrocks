@@ -833,15 +833,17 @@ public class Config extends ConfigBase {
     /**
      *  Property to whitelist ssl cipher suites, comma separated list, with regex support.
      *  If both whitelist and blacklist are set, blacklist takes precedence.
+     *  The alias keeps fe.conf files from the 3.5 deepbi releases working.
      */
-    @ConfField
+    @ConfField(aliases = {"sslCipherWhitelist"})
     public static String ssl_cipher_whitelist = "";
 
     /**
      *  Property to blacklist ssl cipher suites, comma separated list, with regex support.
      *  If both whitelist and blacklist are set, blacklist takes precedence.
+     *  The alias keeps fe.conf files from the 3.5 deepbi releases working.
      */
-    @ConfField
+    @ConfField(aliases = {"sslCipherBlacklist"})
     public static String ssl_cipher_blacklist = "";
 
     /**
