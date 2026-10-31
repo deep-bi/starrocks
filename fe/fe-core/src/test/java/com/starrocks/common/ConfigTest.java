@@ -21,8 +21,11 @@ import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 import java.net.URL;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.List;
 
@@ -60,6 +63,20 @@ public class ConfigTest {
         Assertions.assertEquals(3, Config.tablet_sched_slot_num_per_path);
         Assertions.assertEquals("tablet_sched_slot_num_per_path", configs.get(0).get(0));
         Assertions.assertTrue(configs.get(0).get(1).contains("schedule_slot_num_per_path"));
+    }
+
+    @Test
+    public void testSslCipherConfigsReadOldDeepbiNames(@TempDir Path dir) throws Exception {
+        Path propFile = dir.resolve("fe_old_cipher_names.conf");
+        Files.writeString(propFile, "sslCipherWhitelist = TLS_AES_.*\nsslCipherBlacklist = .*_CBC_.*\n");
+        try {
+            config.init(propFile.toFile().getAbsolutePath());
+            Assertions.assertEquals("TLS_AES_.*", Config.ssl_cipher_whitelist);
+            Assertions.assertEquals(".*_CBC_.*", Config.ssl_cipher_blacklist);
+        } finally {
+            Config.ssl_cipher_whitelist = "";
+            Config.ssl_cipher_blacklist = "";
+        }
     }
 
     @Test
