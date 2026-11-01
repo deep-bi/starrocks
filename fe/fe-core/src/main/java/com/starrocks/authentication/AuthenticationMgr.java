@@ -667,8 +667,12 @@ public class AuthenticationMgr {
             // update map
             nameToGroupProviderMap.put(name, newGroupProvider);
             if (!isReplay) {
+                // Journal the merged properties, not just the delta: the record then holds the provider's full
+                // state, so replay is correct whether it merges onto the existing provider (here, which still
+                // accepts delta records written by the 3.5 deepbi releases) or replaces it (upstream 4.1+,
+                // which uses the same op code).
                 EditLog editLog = GlobalStateMgr.getCurrentState().getEditLog();
-                editLog.logEdit(OperationType.OP_ALTER_GROUP_PROVIDER, new GroupProviderLog(name, alterProps));
+                editLog.logEdit(OperationType.OP_ALTER_GROUP_PROVIDER, new GroupProviderLog(name, newProps));
                 LOG.info("finished to alter group provider '{}' with updated properties {}",
                         name, new PrintableMap<>(alterProps, "=", true, false, true));
             }
