@@ -15,7 +15,10 @@
 package com.starrocks.authentication;
 
 import com.starrocks.common.DdlException;
+import com.starrocks.common.io.Writable;
 import com.starrocks.persist.EditLog;
+import com.starrocks.persist.GroupProviderLog;
+import com.starrocks.persist.OperationType;
 import com.starrocks.qe.ConnectContext;
 import com.starrocks.server.GlobalStateMgr;
 import com.starrocks.sql.ast.UserIdentity;
@@ -28,14 +31,18 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 
 import java.util.HashMap;
 import java.util.Map;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyShort;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doNothing;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.verify;
 
 /**
  * Unit tests for Group Provider statements with IF NOT EXISTS and IF EXISTS functionality
@@ -43,13 +50,14 @@ import static org.mockito.Mockito.spy;
 public class GroupProviderStatementTest {
     private ConnectContext ctx;
     private AuthenticationMgr authenticationMgr;
+    private EditLog editLog;
     private static final String TEST_PROVIDER_NAME = "test_provider";
     private static final String NON_EXISTENT_PROVIDER_NAME = "non_existent_provider";
 
     @BeforeEach
     public void setUp() throws Exception {
         // Mock EditLog
-        EditLog editLog = spy(new EditLog(null));
+        editLog = spy(new EditLog(null));
         doNothing().when(editLog).logEdit(anyShort(), any());
         GlobalStateMgr.getCurrentState().setEditLog(editLog);
 
@@ -159,6 +167,51 @@ public class GroupProviderStatementTest {
         Assertions.assertEquals("unix", provider.getType(), "Type should remain unchanged");
         Assertions.assertEquals("600", provider.getProperties().get("ldap_cache_refresh_interval"),
                 "Updated property should be applied");
+    }
+
+    @Test
+    public void testAlterGroupProviderJournalsMergedProperties() throws Exception {
+        Map<String, String> properties = createUnixGroupProviderProperties();
+        properties.put("ldap_cache_refresh_interval", "300");
+        authenticationMgr.createGroupProviderStatement(
+                new CreateGroupProviderStmt(TEST_PROVIDER_NAME, properties, false, NodePosition.ZERO), ctx);
+
+        Map<String, String> alterProps = new HashMap<>();
+        alterProps.put("ldap_cache_refresh_interval", "600");
+        authenticationMgr.alterGroupProvider(TEST_PROVIDER_NAME, alterProps, false);
+
+        // the record carries the full post-ALTER state, not just the changed key
+        Map<String, String> expected = new HashMap<>();
+        expected.put("type", "unix");
+        expected.put("ldap_cache_refresh_interval", "600");
+        ArgumentCaptor<Writable> record = ArgumentCaptor.forClass(Writable.class);
+        verify(editLog).logEdit(eq(OperationType.OP_ALTER_GROUP_PROVIDER), record.capture());
+        GroupProviderLog log = (GroupProviderLog) record.getValue();
+        Assertions.assertEquals(TEST_PROVIDER_NAME, log.getName());
+        Assertions.assertEquals(expected, log.getPropertyMap());
+    }
+
+    @Test
+    public void testReplayAlterGroupProviderAcceptsFullAndDeltaRecords() throws Exception {
+        Map<String, String> properties = createUnixGroupProviderProperties();
+        properties.put("ldap_cache_refresh_interval", "300");
+        properties.put("ldap_search_page_size", "100");
+        authenticationMgr.createGroupProviderStatement(
+                new CreateGroupProviderStmt(TEST_PROVIDER_NAME, properties, false, NodePosition.ZERO), ctx);
+
+        // a full record, as this version writes it
+        Map<String, String> full = new HashMap<>(properties);
+        full.put("ldap_cache_refresh_interval", "600");
+        authenticationMgr.replayAlterGroupProvider(TEST_PROVIDER_NAME, full);
+        Assertions.assertEquals(full, authenticationMgr.getGroupProvider(TEST_PROVIDER_NAME).getProperties());
+
+        // a delta record, as the 3.5 deepbi releases wrote it: only the changed key, the rest is kept
+        authenticationMgr.replayAlterGroupProvider(TEST_PROVIDER_NAME, Map.of("ldap_search_page_size", "500"));
+        Map<String, String> replayed = authenticationMgr.getGroupProvider(TEST_PROVIDER_NAME).getProperties();
+        Assertions.assertEquals("unix", replayed.get("type"));
+        Assertions.assertEquals("600", replayed.get("ldap_cache_refresh_interval"));
+        Assertions.assertEquals("500", replayed.get("ldap_search_page_size"));
+        verify(editLog, never()).logEdit(eq(OperationType.OP_ALTER_GROUP_PROVIDER), any());
     }
 
     /**

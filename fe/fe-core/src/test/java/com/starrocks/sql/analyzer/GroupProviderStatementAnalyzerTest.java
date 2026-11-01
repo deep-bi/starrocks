@@ -191,6 +191,54 @@ public class GroupProviderStatementAnalyzerTest {
     }
 
     /**
+     * An LDAP provider that filters groups with ldap_group_filter. The directory is unreachable; init() only
+     * schedules a background refresh, so nothing here waits on it.
+     */
+    private void createLdapGroupProviderWithFilter() throws Exception {
+        Map<String, String> properties = new HashMap<>();
+        properties.put("type", "ldap");
+        properties.put("ldap_conn_url", "ldap://127.0.0.1:1");
+        properties.put("ldap_bind_root_dn", "cn=admin,dc=example,dc=com");
+        properties.put("ldap_bind_root_pwd", "secret");
+        properties.put("ldap_bind_base_dn", "dc=example,dc=com");
+        properties.put("ldap_group_filter", "(objectClass=groupOfNames)");
+        authenticationMgr.createGroupProviderStatement(
+                new CreateGroupProviderStmt(TEST_PROVIDER_NAME, properties, false, NodePosition.ZERO), ctx);
+    }
+
+    @Test
+    public void testAnalyzeAlterGroupProviderAcceptsValidLdapChange() throws Exception {
+        createLdapGroupProviderWithFilter();
+
+        Map<String, String> alterProps = new HashMap<>();
+        alterProps.put("ldap_group_filter", "(&(objectClass=groupOfNames)(cn=sr_*))");
+        alterProps.put("ldap_conn_timeout", "5000");
+
+        GroupProviderStatementAnalyzer.analyze(
+                new AlterGroupProviderStmt(TEST_PROVIDER_NAME, alterProps, NodePosition.ZERO), ctx);
+    }
+
+    @Test
+    public void testAnalyzeAlterGroupProviderValidatesMergedProperties() throws Exception {
+        createLdapGroupProviderWithFilter();
+
+        // the provider already has ldap_group_filter, so adding ldap_group_dn leaves it with both
+        Map<String, String> bothGroupSources = new HashMap<>();
+        bothGroupSources.put("ldap_group_dn", "cn=sr_admins,ou=groups,dc=example,dc=com");
+        SemanticException e1 = Assertions.assertThrows(SemanticException.class, () ->
+                GroupProviderStatementAnalyzer.analyze(
+                        new AlterGroupProviderStmt(TEST_PROVIDER_NAME, bothGroupSources, NodePosition.ZERO), ctx));
+        Assertions.assertTrue(e1.getMessage().contains("ldap_group_dn and ldap_group_filter"), e1.getMessage());
+
+        Map<String, String> badTimeout = new HashMap<>();
+        badTimeout.put("ldap_conn_timeout", "1");
+        SemanticException e2 = Assertions.assertThrows(SemanticException.class, () ->
+                GroupProviderStatementAnalyzer.analyze(
+                        new AlterGroupProviderStmt(TEST_PROVIDER_NAME, badTimeout, NodePosition.ZERO), ctx));
+        Assertions.assertTrue(e2.getMessage().contains("ldap_conn_timeout"), e2.getMessage());
+    }
+
+    /**
      * Test case: Analyze Drop Group Provider with IF EXISTS when provider does not exist
      * Test point: Should pass analysis without error
      */

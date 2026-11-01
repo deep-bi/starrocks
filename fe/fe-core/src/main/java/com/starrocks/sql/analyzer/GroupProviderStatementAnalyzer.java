@@ -28,6 +28,7 @@ import com.starrocks.sql.ast.group.DropGroupProviderStmt;
 import com.starrocks.sql.ast.group.ShowCreateGroupProviderStmt;
 import com.starrocks.sql.ast.group.ShowGroupProvidersStmt;
 
+import java.util.HashMap;
 import java.util.Map;
 
 public class GroupProviderStatementAnalyzer {
@@ -63,13 +64,22 @@ public class GroupProviderStatementAnalyzer {
         @Override
         public Void visitAlterGroupProviderStatement(AlterGroupProviderStmt statement, ConnectContext context) {
             AuthenticationMgr authenticationMgr = GlobalStateMgr.getCurrentState().getAuthenticationMgr();
-            if (authenticationMgr.getGroupProvider(statement.getName()) == null) {
+            GroupProvider current = authenticationMgr.getGroupProvider(statement.getName());
+            if (current == null) {
                 throw new SemanticException("Group Provider '" + statement.getName() + "' not found");
             }
 
             if (statement.getProperties().containsKey(GroupProvider.GROUP_PROVIDER_PROPERTY_TYPE_KEY)) {
                 throw new SemanticException("'type' property cannot be changed");
             }
+
+            // Validate the properties the provider will have after the change, as CREATE does, so ALTER cannot
+            // produce a provider that CREATE would reject (e.g. both ldap_group_dn and ldap_group_filter).
+            Map<String, String> merged = new HashMap<>(current.getProperties());
+            merged.putAll(statement.getProperties());
+            GroupProvider altered = GroupProviderFactory.createGroupProvider(statement.getName(), merged);
+            Preconditions.checkNotNull(altered);
+            altered.checkProperty();
 
             return null;
         }
