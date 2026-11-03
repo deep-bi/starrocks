@@ -492,7 +492,7 @@ echo "Finished patching $AVRO_SOURCE-c"
 
 # patch serdes
 cd $TP_SOURCE_DIR/$SERDES_SOURCE
-if [ ! -f $PATCHED_MARK ] && [ $SERDES_SOURCE = "libserdes-7.3.1-with-mTLS" ]; then
+if [ ! -f $PATCHED_MARK ] && [ $SERDES_SOURCE = "libserdes-7.3.1-deepbi1" ]; then
     patch -p0 < $TP_PATCH_DIR/libserdes-7.3.1.patch
     touch $PATCHED_MARK
 fi
