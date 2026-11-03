@@ -109,8 +109,6 @@ dependencies {
     implementation("com.opencsv:opencsv")
     implementation("com.oracle.database.jdbc:ojdbc10")
     implementation("com.oracle.database.nls:orai18n")
-    implementation("com.qcloud.cos:hadoop-cos")
-    implementation("com.qcloud:chdfs_hadoop_plugin_network")
     implementation("com.squareup.okhttp3:okhttp")
     implementation("com.squareup.okio:okio")
     implementation("com.starrocks:spark-dpp")

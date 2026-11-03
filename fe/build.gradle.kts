@@ -46,7 +46,6 @@ subprojects {
         set("avro.version", "1.12.0")
         set("aws-v2-sdk.version", "2.42.1")
         set("azure.version", "1.2.34")
-        set("bouncycastle.version", "1.86")
         set("byteman.version", "4.0.24")
         set("commons-beanutils.version", "1.11.0")
         set("delta-kernel.version", "4.0.0rc1")
@@ -102,6 +101,12 @@ subprojects {
         // Enforce the same JUnit 5 versions as Maven (via `junit.version`) across all FE subprojects.
         testImplementation(enforcedPlatform("org.junit:junit-bom:${project.ext["junit.version"]}"))
 
+        // Mirror the Maven parent's provided dependencies for compilation and tests.
+        listOf("bc-fips", "bcutil-fips", "bctls-fips", "bcpkix-fips").forEach { provider ->
+            compileOnly("org.bouncycastle:$provider")
+            testImplementation("org.bouncycastle:$provider")
+        }
+
         constraints {
             // dependency sync start
             implementation("com.aliyun.datalake:metastore-client-hive3:${project.ext["dlf-metastore-client.version"]}")
@@ -135,17 +140,12 @@ subprojects {
             implementation("com.opencsv:opencsv:5.7.1")
             implementation("com.oracle.database.jdbc:ojdbc10:19.18.0.0")
             implementation("com.oracle.database.nls:orai18n:19.18.0.0")
-            implementation("com.qcloud.cos:hadoop-cos:3.3.0-8.3.2")
-            implementation("com.qcloud:chdfs_hadoop_plugin_network:3.2")
             implementation("com.squareup.okhttp3:okhttp:4.10.0")
             // keep on the same train as okhttp (tencentcloud-sdk declares 3.12.x)
             implementation("com.squareup.okhttp3:logging-interceptor:4.10.0")
             implementation("com.squareup.okio:okio:3.4.0")
             // okhttp 4.10.0 drags in okio-jvm 3.0.0 (CVE-2023-3635); keep it aligned with okio
             implementation("com.squareup.okio:okio-jvm:3.4.0")
-            // tencentcloud-sdk below 3.1.1471 drags in EOL okhttp 2.7.5 (via hadoop-cos)
-            implementation("com.tencentcloudapi:tencentcloud-sdk-java-common:3.1.1471")
-            implementation("com.tencentcloudapi:tencentcloud-sdk-java-kms:3.1.1471")
             implementation("com.starrocks:fe-testing:${project.version}")
             implementation("com.starrocks:hive-udf:${project.version}")
             implementation("com.starrocks:jprotobuf-starrocks:${project.ext["jprotobuf-starrocks.version"]}")
@@ -238,9 +238,10 @@ subprojects {
             implementation("org.apache.spark:spark-sql_2.12:${project.ext["spark.version"]}")
             implementation("org.apache.thrift:libthrift:${project.ext["thrift.version"]}")
             implementation("org.apache.velocity:velocity-engine-core:2.4.1")
-            implementation("org.bouncycastle:bcpkix-jdk18on:${project.ext["bouncycastle.version"]}")
-            implementation("org.bouncycastle:bcprov-jdk18on:${project.ext["bouncycastle.version"]}")
-            implementation("org.bouncycastle:bcutil-jdk18on:${project.ext["bouncycastle.version"]}")
+            implementation("org.bouncycastle:bc-fips") { version { strictly("2.1.1") } }
+            implementation("org.bouncycastle:bcutil-fips") { version { strictly("2.1.8") } }
+            implementation("org.bouncycastle:bctls-fips") { version { strictly("2.1.25") } }
+            implementation("org.bouncycastle:bcpkix-fips") { version { strictly("2.1.13") } }
             // xz used to reach fe/lib only via the excluded avro-ipc; keep it for the
             // jars that still reference it (commons-compress, clickhouse-jdbc, ...)
             implementation("org.tukaani:xz:1.9")
@@ -282,8 +283,16 @@ subprojects {
     // Mirror the Maven-side CVE exclusions/enforcer bans (see fe/pom.xml):
     // these artifacts must never appear on any FE classpath.
     configurations.all {
-        // superseded by bcprov-jdk18on; 1.70 carries multiple open CVEs
-        exclude(group = "org.bouncycastle", module = "bcprov-jdk15on")
+        // Ordinary BC classes conflict with the FIPS providers, including inside Tencent bundles.
+        listOf("bcprov", "bcpkix", "bcutil", "bctls", "bcpg", "bcmail").forEach { artifact ->
+            listOf("jdk15on", "jdk15to18", "jdk18on").forEach { variant ->
+                exclude(group = "org.bouncycastle", module = "$artifact-$variant")
+            }
+        }
+        exclude(group = "org.wildfly.openssl")
+        exclude(group = "com.qcloud.cos")
+        exclude(group = "com.qcloud")
+        exclude(group = "com.tencentcloudapi")
         // EOL okhttp 2.x line (okhttp3 lives under com.squareup.okhttp3)
         exclude(group = "com.squareup.okhttp")
         // JSP engine, unused by FE; tomcat 9.0.93 carries CVE-2025-55754/CVE-2025-52434

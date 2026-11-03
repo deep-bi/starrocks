@@ -576,6 +576,10 @@ if [ ${FE_MODULES}x != ""x ]; then
     if [ ${CLEAN} -eq 1 ]; then
         ${MVN_CMD} $addon_mvn_opts clean
     fi
+    if [ ${BUILD_FE} -eq 1 ]; then
+        # copy-dependencies does not remove artifacts dropped from the dependency graph.
+        rm -rf "${STARROCKS_HOME}/fe/fe-server/target/lib"
+    fi
     # clean phase is explicited by `--clean` option, don't bother doing clean again.
     ${MVN_CMD} $addon_mvn_opts package -am -pl ${FE_MODULES} -DskipTests -Dmaven.clean.skip=true -T ${PARALLEL}
     cd ${STARROCKS_HOME}/java-extensions
@@ -592,6 +596,11 @@ mkdir -p ${STARROCKS_OUTPUT}
 # Copy Frontend and Backend
 if [ ${BUILD_FE} -eq 1 -o ${BUILD_SPARK_DPP} -eq 1 ]; then
     if [ ${BUILD_FE} -eq 1 ]; then
+        python3 "${STARROCKS_HOME}/security/check-java-fips.py" \
+            --providers "${STARROCKS_HOME}/fe/fe-server/target/lib" \
+            "${STARROCKS_HOME}/fe/fe-server/target/lib" \
+            "${STARROCKS_HOME}/fe/fe-server/target/starrocks-fe.jar" \
+            "${STARROCKS_HOME}/java-extensions/hadoop-ext/target/starrocks-hadoop-ext.jar"
         install -d ${STARROCKS_OUTPUT}/fe/bin ${STARROCKS_OUTPUT}/fe/conf/ \
                    ${STARROCKS_OUTPUT}/fe/webroot/ ${STARROCKS_OUTPUT}/fe/lib/ \
                    ${STARROCKS_OUTPUT}/fe/spark-dpp/ ${STARROCKS_OUTPUT}/fe/hive-udf \
