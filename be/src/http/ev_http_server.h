@@ -56,9 +56,13 @@ public:
     // get real port
     int get_real_port() { return _real_port; }
 
+    // whether the server serves HTTPS (be_http_ssl_enable)
+    bool ssl_enabled() const { return _ssl_ctx != nullptr; }
+
 private:
     Status _bind();
     HttpHandler* _find_handler(HttpRequest* req);
+    Status _init_ssl_ctx();
 
 private:
     // input param
@@ -86,10 +90,6 @@ private:
     // SSL context and configuration
     SSL_CTX* _ssl_ctx = nullptr;
     EC_KEY* _ecdh = nullptr;
-
-    // SSL initialization methods
-    void _InitSSL();
-    int _ServerSetCerts();
 };
 
 } // namespace starrocks

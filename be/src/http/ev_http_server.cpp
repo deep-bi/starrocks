@@ -40,6 +40,7 @@
 #include <event2/http.h>
 #include <event2/http_struct.h>
 #include <event2/keyvalq_struct.h>
+#include <openssl/pem.h>
 
 #include <memory>
 #include <sstream>
@@ -54,6 +55,7 @@
 #include "service/backend_options.h"
 #include "service/brpc.h"
 #include "util/debug_util.h"
+#include "util/defer_op.h"
 #include "util/errno.h"
 #include "util/thread.h"
 
@@ -85,6 +87,15 @@ static int on_header(struct evhttp_request* ev_req, void* param) {
 
 // param is pointer of EvHttpServer
 static int on_connection(struct evhttp_request* req, void* param) {
+    auto* server = (EvHttpServer*)param;
+    // libevent creates a plain connection when the bufferevent callback returns nullptr,
+    // so an HTTPS server refuses any request that did not arrive over TLS.
+    if (server->ssl_enabled()) {
+        struct bufferevent* bev = evhttp_connection_get_bufferevent(evhttp_request_get_connection(req));
+        if (bufferevent_openssl_get_ssl(bev) == nullptr) {
+            return -1;
+        }
+    }
     evhttp_request_set_header_cb(req, on_header);
     // only used on_complete_cb's argument
     evhttp_request_set_on_complete_cb(req, nullptr, param);
@@ -116,57 +127,136 @@ EvHttpServer::~EvHttpServer() {
     }
 }
 
-void EvHttpServer::_InitSSL() {
+// Same rule brpc applies to ssl_certificate_path and ssl_private_key_path: a value that
+// starts with "-----BEGIN" is PEM content, anything else is a file path.
+static bool is_pem_content(const std::string& value) {
+    size_t pos = value.find_first_not_of(" \t\r\n");
+    return pos != std::string::npos && value.compare(pos, 10, "-----BEGIN") == 0;
+}
+
+// For log and error messages: the key setting may hold the private key itself.
+static std::string describe_pem_source(const std::string& value) {
+    return is_pem_content(value) ? "inline PEM" : value;
+}
+
+static std::string openssl_error() {
+    unsigned long err = ERR_get_error();
+    ERR_clear_error();
+    if (err == 0) {
+        return "unknown error";
+    }
+    char buf[256];
+    ERR_error_string_n(err, buf, sizeof(buf));
+    return buf;
+}
+
+// Loads the server certificate and the intermediate certificates that follow it.
+static bool use_certificate_chain(SSL_CTX* ctx, const std::string& value) {
+    if (!is_pem_content(value)) {
+        return SSL_CTX_use_certificate_chain_file(ctx, value.c_str()) == 1;
+    }
+    BIO* bio = BIO_new_mem_buf(value.data(), static_cast<int>(value.size()));
+    if (bio == nullptr) {
+        return false;
+    }
+    DeferOp free_bio([bio] { BIO_free(bio); });
+
+    X509* cert = PEM_read_bio_X509_AUX(bio, nullptr, nullptr, nullptr);
+    if (cert == nullptr) {
+        return false;
+    }
+    int ret = SSL_CTX_use_certificate(ctx, cert);
+    X509_free(cert);
+    if (ret != 1 || SSL_CTX_clear_chain_certs(ctx) != 1) {
+        return false;
+    }
+    X509* ca = nullptr;
+    while ((ca = PEM_read_bio_X509(bio, nullptr, nullptr, nullptr)) != nullptr) {
+        if (SSL_CTX_add0_chain_cert(ctx, ca) != 1) {
+            X509_free(ca);
+            return false;
+        }
+    }
+    // Reading past the last certificate fails with PEM_R_NO_START_LINE; any other error is a bad certificate.
+    unsigned long err = ERR_peek_last_error();
+    if (ERR_GET_LIB(err) == ERR_LIB_PEM && ERR_GET_REASON(err) == PEM_R_NO_START_LINE) {
+        ERR_clear_error();
+        return true;
+    }
+    return false;
+}
+
+static bool use_private_key(SSL_CTX* ctx, const std::string& value) {
+    if (!is_pem_content(value)) {
+        return SSL_CTX_use_PrivateKey_file(ctx, value.c_str(), SSL_FILETYPE_PEM) == 1;
+    }
+    BIO* bio = BIO_new_mem_buf(value.data(), static_cast<int>(value.size()));
+    if (bio == nullptr) {
+        return false;
+    }
+    EVP_PKEY* key = PEM_read_bio_PrivateKey(bio, nullptr, nullptr, nullptr);
+    BIO_free(bio);
+    if (key == nullptr) {
+        return false;
+    }
+    int ret = SSL_CTX_use_PrivateKey(ctx, key);
+    EVP_PKEY_free(key);
+    return ret == 1;
+}
+
+Status EvHttpServer::_init_ssl_ctx() {
+    const std::string& cert = config::ssl_certificate_path;
+    const std::string& key = config::ssl_private_key_path;
+    if (cert.empty() || key.empty()) {
+        return Status::InvalidArgument(
+                "be_http_ssl_enable=true requires ssl_certificate_path and ssl_private_key_path");
+    }
+
     SSL_library_init();
     SSL_load_error_strings();
     OpenSSL_add_all_algorithms();
 
-    _ssl_ctx = SSL_CTX_new(SSLv23_server_method());
-    SSL_CTX_set_options(_ssl_ctx, SSL_OP_SINGLE_DH_USE | SSL_OP_SINGLE_ECDH_USE | SSL_OP_NO_SSLv2);
+    _ssl_ctx = SSL_CTX_new(TLS_server_method());
+    if (_ssl_ctx == nullptr) {
+        return Status::InternalError("Failed to create SSL context: " + openssl_error());
+    }
+    SSL_CTX_set_options(_ssl_ctx, SSL_OP_SINGLE_DH_USE | SSL_OP_SINGLE_ECDH_USE);
+    if (SSL_CTX_set_min_proto_version(_ssl_ctx, TLS1_2_VERSION) != 1) {
+        return Status::InternalError("Failed to set the minimum TLS version: " + openssl_error());
+    }
 
     _ecdh = EC_KEY_new_by_curve_name(NID_X9_62_prime256v1);
     if (_ecdh == nullptr) {
         LOG(WARNING) << "EC_KEY_new_by_curve_name failed";
-        return;
-    }
-    if (SSL_CTX_set_tmp_ecdh(_ssl_ctx, _ecdh) != 1) {
+    } else if (SSL_CTX_set_tmp_ecdh(_ssl_ctx, _ecdh) != 1) {
         LOG(WARNING) << "SSL_CTX_set_tmp_ecdh failed";
-        return;
-    }
-}
-
-int EvHttpServer::_ServerSetCerts() {
-    if (config::ssl_certificate_path.empty() || config::ssl_private_key_path.empty()) {
-        LOG(ERROR) << "SSL certificate or private key path not configured";
-        return -1;
     }
 
-    if (SSL_CTX_use_certificate_file(_ssl_ctx, config::ssl_certificate_path.c_str(), SSL_FILETYPE_PEM) != 1) {
-        LOG(ERROR) << "Failed to load SSL certificate from: " << config::ssl_certificate_path
-                   << ", error: " << ERR_reason_error_string(ERR_get_error());
-        return -1;
+    if (!use_certificate_chain(_ssl_ctx, cert)) {
+        return Status::InternalError("Failed to load SSL certificate from " + describe_pem_source(cert) + ": " +
+                                     openssl_error());
     }
-
-    if (SSL_CTX_use_PrivateKey_file(_ssl_ctx, config::ssl_private_key_path.c_str(), SSL_FILETYPE_PEM) != 1) {
-        LOG(ERROR) << "Failed to load SSL private key from: " << config::ssl_private_key_path
-                   << ", error: " << ERR_reason_error_string(ERR_get_error());
-        return -1;
+    if (!use_private_key(_ssl_ctx, key)) {
+        return Status::InternalError("Failed to load SSL private key from " + describe_pem_source(key) + ": " +
+                                     openssl_error());
     }
-
     if (SSL_CTX_check_private_key(_ssl_ctx) != 1) {
-        LOG(ERROR) << "SSL private key does not match certificate";
-        return -1;
+        return Status::InternalError("SSL private key does not match certificate: " + openssl_error());
     }
 
-    LOG(INFO) << "SSL certificate and private key loaded successfully";
-    return 0;
+    LOG(INFO) << "be_http_port " << _port << " serves HTTPS (TLS 1.2 or later) with the certificate from "
+              << describe_pem_source(cert);
+    return Status::OK();
 }
 
-static struct bufferevent* bevcb(struct event_base *base, void *arg) {
-    struct bufferevent* r;
-    SSL_CTX *ctx = (SSL_CTX *)arg;
-    r = bufferevent_openssl_socket_new(base, -1, SSL_new(ctx), BUFFEREVENT_SSL_ACCEPTING, BEV_OPT_CLOSE_ON_FREE);
-    return r;
+static struct bufferevent* new_ssl_bufferevent(struct event_base* base, void* arg) {
+    SSL* ssl = SSL_new((SSL_CTX*)arg);
+    if (ssl == nullptr) {
+        // on_connection refuses the plain connection libevent creates instead
+        LOG(WARNING) << "SSL_new failed: " << openssl_error();
+        return nullptr;
+    }
+    return bufferevent_openssl_socket_new(base, -1, ssl, BUFFEREVENT_SSL_ACCEPTING, BEV_OPT_CLOSE_ON_FREE);
 }
 
 Status EvHttpServer::start() {
@@ -178,16 +268,8 @@ Status EvHttpServer::start() {
                      << " serves plain HTTP. Set be_http_ssl_enable=true to serve HTTPS on it.";
     }
 
-    // Initialize SSL if HTTPS is enabled
     if (config::be_http_ssl_enable) {
-        _InitSSL();
-        if (_ssl_ctx == nullptr) {
-            return Status::InternalError("Failed to initialize SSL context");
-        }
-        int ret = _ServerSetCerts();
-        if (ret < 0) {
-            return Status::InternalError("Failed to load SSL certificates");
-        }
+        RETURN_IF_ERROR(_init_ssl_ctx());
     }
 
     // bind to
@@ -214,9 +296,8 @@ Status EvHttpServer::start() {
             _https.push_back(http);
             pthread_rwlock_unlock(&_rw_lock);
 
-            // Enable SSL if configured
-            if (config::be_http_ssl_enable && _ssl_ctx != nullptr) {
-                evhttp_set_bevcb(http, bevcb, _ssl_ctx);
+            if (ssl_enabled()) {
+                evhttp_set_bevcb(http, new_ssl_bufferevent, _ssl_ctx);
             }
             auto res = evhttp_accept_socket(http, _server_fd);
             if (res < 0) {
