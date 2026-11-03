@@ -164,16 +164,16 @@ provider/TLS qualification this restriction closes the identified MD5 path only.
 ### MariaDB JDBC authentication
 
 FE uses MariaDB 3.3.2 for MariaDB and MySQL metadata catalogs. FE and embedded scans using
-that driver apply `MariaDbJdbcPolicy` before pool creation. The , negotiated-plugin list
-is `mysql_native_password,caching_sha2_password`; Ed25519's independent curve implementation,
+that driver apply `MariaDbJdbcPolicy` before pool creation. The permitted plugin list
+is `mysql_native_password,caching_sha2_password`. Ed25519's independent curve implementation,
 GSSAPI and PAM plugins are rejected. A configured native-password-only list is preserved.
-The actual driver parses the URL before and after policy insertion, including duplicate keys;
-drivers without `restrictedAuth` support and incompatible policies fail before opening a pool.
+The driver parses the URL before and after policy insertion, including duplicate keys.
+Drivers without `restrictedAuth` support and incompatible policies fail before opening a pool.
 
 MariaDB always computes native-password in the initial handshake, before consulting its
 plugin restriction. A policy excluding native-password therefore cannot be enforced by this
 driver and is rejected. Its special initial `mysql_clear_password` response over TLS performs
-no local cryptography and retains the driver's behavior; clear-password authentication switches
+no local cryptography and retains the driver's behavior. Clear-password authentication switches
 are excluded. This is not a new TLS requirement or qualification of remote database authentication.
 
 The restricted JDK provider removes competing SHA implementations. The driver's initial
@@ -214,8 +214,10 @@ FE `HttpUtils`, cost prediction and profile downloads use the shared HTTP authen
 policy. The default AWS SDK v2 transport uses `FipsAwsHttpService`, selected by the required
 `software.amazon.awssdk.http.service.impl` JVM property. This covers independently constructed
 S3, STS and Glue clients, including Iceberg and SDK credential clients. Hadoop S3A explicitly
-installs the same registry. Paimon's private AWS v1 factory applies its policy inside the
-plugin classloader.
+installs the same registry. Paimon's FIPS build supplies an Apache `HttpClients` factory that
+restricts HTTP challenge authentication for both bundled AWS SDK versions. Its plugin-local
+`FipsAwsHttpService` applies that restriction to default SDK v2 transports, including credential
+clients. These sources live in the Paimon repository and ship in its S3 artifact.
 
 These clients permit Basic authentication for HTTP targets and proxies. Digest, NTLM,
 Negotiate and Kerberos challenges receive no authentication response. Proxy credentials from

@@ -23,10 +23,12 @@ import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.net.InetSocketAddress;
+import java.net.URI;
 import java.security.MessageDigest;
 import java.security.Security;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Queue;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
@@ -120,27 +122,65 @@ public final class HttpAuthenticationPolicyTest {
             Object transport = configuration.option(SdkClientOption.SYNC_HTTP_CLIENT);
             return new Client(field(field(transport, "httpClient"), "delegate"), service, host, port, true);
         }
-        if (!component.equals("paimon")) {
+        if (!component.startsWith("paimon")) {
             throw new IllegalArgumentException("Unknown component: " + component);
         }
         ClassLoader loader = new PluginLoader("paimon-plugin-s3").submoduleClassLoader();
+        if (component.equals("paimon-default")) {
+            // Credential clients use the configured SDK HTTP service without Hadoop's builder.
+            if (loader.loadClass("com.starrocks.connector.share.security.FipsAwsHttpService")
+                    .getClassLoader() != loader) {
+                throw new AssertionError("Paimon's HTTP service must implement its isolated SDK interface");
+            }
+            System.setProperty("http.proxyHost", host);
+            System.setProperty("http.proxyPort", Integer.toString(port));
+            System.setProperty("http.proxyUser", "synthetic-user");
+            System.setProperty("http.proxyPassword", "synthetic-password");
+            try {
+                Object builder = loader.loadClass("software.amazon.awssdk.core.internal.http.loader.DefaultSdkHttpClientBuilder")
+                        .getConstructor().newInstance();
+                Class<?> attributes = loader.loadClass("software.amazon.awssdk.utils.AttributeMap");
+                Object sdk = call(builder, "buildWithDefaults", new Class<?>[] {attributes},
+                        attributes.getMethod("empty").invoke(null));
+                return new Client(field(field(sdk, "httpClient"), "delegate"), sdk, host, port);
+            } finally {
+                for (String name : List.of("http.proxyHost", "http.proxyPort", "http.proxyUser", "http.proxyPassword")) {
+                    System.clearProperty(name);
+                }
+            }
+        }
+        if (component.equals("paimon-v1")) {
+            // The plugin still bundles AWS v1, although Hadoop now uses AWS v2.
+            Class<?> configType = loader.loadClass("com.amazonaws.ClientConfiguration");
+            Object config = configType.getConstructor().newInstance();
+            configType.getMethod("setProxyHost", String.class).invoke(config, host);
+            configType.getMethod("setProxyPort", int.class).invoke(config, port);
+            configType.getMethod("setProxyUsername", String.class).invoke(config, "synthetic-user");
+            configType.getMethod("setProxyPassword", String.class).invoke(config, "synthetic-password");
+            Class<?> settingsType = loader.loadClass("com.amazonaws.http.settings.HttpClientSettings");
+            Object settings = settingsType.getMethod("adapt", configType).invoke(null, config);
+            Class<?> factoryType = loader.loadClass("com.amazonaws.http.apache.client.impl.ApacheHttpClientFactory");
+            Object sdk = factoryType.getMethod("create", settingsType)
+                    .invoke(factoryType.getConstructor().newInstance(), settings);
+            return new Client(field(sdk, "delegate"), sdk, host, port);
+        }
         Class<?> confType = loader.loadClass("org.apache.hadoop.conf.Configuration");
         Object conf = confType.getConstructor(boolean.class).newInstance(false);
         for (var entry : Map.of("fs.s3a.proxy.host", host, "fs.s3a.proxy.port", Integer.toString(port),
                 "fs.s3a.proxy.username", "synthetic-user", "fs.s3a.proxy.password", "synthetic-password").entrySet()) {
             confType.getMethod("set", String.class, String.class).invoke(conf, entry.getKey(), entry.getValue());
         }
-        Object config = loader.loadClass("org.apache.hadoop.fs.s3a.S3AUtils")
-                .getMethod("createAwsConf", confType, String.class).invoke(null, conf, "bucket");
-        Class<?> settingsType = loader.loadClass("com.amazonaws.http.settings.HttpClientSettings");
-        Object settings = settingsType.getMethod("adapt", loader.loadClass("com.amazonaws.ClientConfiguration"))
-                .invoke(null, config);
-        Class<?> factoryType = loader.loadClass("com.amazonaws.http.apache.client.impl.ApacheHttpClientFactory");
-        if (factoryType.getClassLoader() != loader) {
-            throw new AssertionError("Paimon must use its private AWS factory");
+        Class<?> configType = loader.loadClass("org.apache.hadoop.fs.s3a.impl.AWSClientConfig");
+        if (configType.getClassLoader() != loader) {
+            throw new AssertionError("Paimon must use its private Hadoop/AWS factory");
         }
-        Object sdk = factoryType.getMethod("create", settingsType).invoke(factoryType.getConstructor().newInstance(), settings);
-        return new Client(field(sdk, "delegate"), sdk, host, port);
+        Object builder = configType.getMethod("createHttpClientBuilder", confType).invoke(null, conf);
+        Object proxy = configType.getMethod("createProxyConfiguration", confType, String.class)
+                .invoke(null, conf, "bucket");
+        Class<?> builderType = loader.loadClass("software.amazon.awssdk.http.apache.ApacheHttpClient$Builder");
+        builderType.getMethod("proxyConfiguration", proxy.getClass()).invoke(builder, proxy);
+        Object sdk = builderType.getMethod("build").invoke(builder);
+        return new Client(field(field(sdk, "httpClient"), "delegate"), sdk, host, port);
     }
 
     private static final class Client implements AutoCloseable {
@@ -243,6 +283,28 @@ public final class HttpAuthenticationPolicyTest {
                 }
                 return response.httpResponse().statusCode();
             }
+            if (sdk instanceof AutoCloseable) {
+                // Call Paimon's SDK through its classloader. The transport API sets up
+                // the request metrics that its connection manager requires.
+                Class<?> requestType = loader.loadClass("software.amazon.awssdk.http.SdkHttpFullRequest");
+                Object requestBuilder = requestType.getMethod("builder").invoke(null);
+                Class<?> methodType = loader.loadClass("software.amazon.awssdk.http.SdkHttpMethod");
+                call(requestBuilder, "method", new Class<?>[] {methodType}, methodType.getField("GET").get(null));
+                call(requestBuilder, "uri", new Class<?>[] {URI.class}, URI.create("http://s3.example.invalid/"));
+                Class<?> executionType = loader.loadClass("software.amazon.awssdk.http.HttpExecuteRequest");
+                Object executionBuilder = executionType.getMethod("builder").invoke(null);
+                call(executionBuilder, "request",
+                        new Class<?>[] {loader.loadClass("software.amazon.awssdk.http.SdkHttpRequest")},
+                        call(requestBuilder, "build", new Class<?>[0]));
+                Object execution = call(sdk, "prepareRequest", new Class<?>[] {executionType},
+                        call(executionBuilder, "build", new Class<?>[0]));
+                Object response = call(execution, "call", new Class<?>[0]);
+                Optional<?> body = (Optional<?>) call(response, "responseBody", new Class<?>[0]);
+                if (body.isPresent()) {
+                    ((AutoCloseable) body.get()).close();
+                }
+                return (Integer) call(call(response, "httpResponse", new Class<?>[0]), "statusCode", new Class<?>[0]);
+            }
             String uri = proxy ? "http://s3.example.invalid/" : "http://"
                     + (userInfo ? "synthetic-user:synthetic-password@" : "") + host + ":" + port + "/";
             Object request = type("client.methods.HttpGet").getConstructor(String.class).newInstance(uri);
@@ -264,7 +326,7 @@ public final class HttpAuthenticationPolicyTest {
         }
 
         public void close() throws Exception {
-            if (awsV2) {
+            if (sdk instanceof AutoCloseable) {
                 ((AutoCloseable) sdk).close();
                 return;
             }
@@ -282,7 +344,7 @@ public final class HttpAuthenticationPolicyTest {
         AtomicReference<String> challenge = new AtomicReference<>();
         AtomicReference<String> authorization = new AtomicReference<>();
         AtomicInteger requests = new AtomicInteger();
-        boolean proxy = component.equals("paimon") || component.equals("iceberg") || component.startsWith("aws-");
+        boolean proxy = component.startsWith("paimon") || component.equals("iceberg") || component.startsWith("aws-");
         HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         server.createContext("/", exchange -> {
             requests.incrementAndGet();

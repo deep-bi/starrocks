@@ -79,19 +79,24 @@ checker rejects ordinary or duplicate providers.
 WildFly OpenSSL is also excluded and banned in both reactors and by package inspection.
 Hadoop ABFS/S3A use BCJSSE, explicit OpenSSL mode fails. Legacy Azure Data Lake Gen1 remains
 unsupported because its SDK initializes the excluded native binding unconditionally.
-The unsigned `paimon-s3:1.3.1` artifact embeds another WildFly copy. FE-server and Paimon-reader
-package hooks remove that binding's classes, provider-service entry and native libraries.
-They also replace the isolated AWS SDK 1.12.319 HTTP factory with its upstream implementation
-plus a Basic-only authentication registry. The replacement source is under `security/paimon-s3`
-and is compiled against the pinned plugin's own classes. This prevents Digest and NTLM from
-using SUN MD5 for authentication without changing AWS signing, proxy credentials or connection
-management. The output is `paimon-s3-1.3.1-starrocks-jsse.jar`.
+FE and the reader use Paimon `1.4.2-fips-deepbi1`, built from `deep/1.4.2-deepbi3` in
+[`deep-bi/paimon`](https://github.com/deep-bi/paimon). The FIPS branch is
+`deep/1.4.2-fips-deepbi1`. Its Hadoop and S3 builds exclude ordinary BC and WildFly before
+packaging, so StarRocks copies the published artifacts directly.
 
-The upstream Maven artifact is unchanged. Apart from the replaced factory and removed binding,
-all Paimon entries retain their original bytes. Paimon's S3 plugin, options and serialized FileIO
-classes remain available. Its isolated Hadoop TLS factory uses BCJSSE. Both package hooks use
-`security/filter-paimon-native-tls.xml`, which checks the upstream hash before compiling or
-replacing the output. This transformation never touches the signed BC JARs.
+Paimon's S3 module owns the Apache `HttpClients` source override used by both bundled AWS
+SDK versions. It restricts custom, default and system-property clients to Basic HTTP challenge
+authentication. This prevents Digest and NTLM from using SUN MD5 for authentication. AWS
+signing, proxy credentials and connection management are unchanged.
+The module also supplies `com.starrocks.connector.share.security.FipsAwsHttpService` for the
+plugin's isolated SDK v2 interface. StarRocks retains its shared implementation for the host
+SDK. The two classloaders require separate implementations of that interface.
+
+Paimon's S3 options and FileIO implementation remain available. Its isolated Hadoop TLS
+factory uses the host's BCJSSE provider. The signed BC JARs remain separate and unchanged.
+The FIPS Paimon artifacts must be published to the DeepBI Maven repository before a clean
+CI build can resolve them. For local development, install `paimon-bundle`, `paimon-s3` and
+`paimon-oss` from the FIPS branch using the build command in its S3 module README.
 Direct Maven builds do not require a native FIPS build.
 
 To record dependency trees without requiring installed sibling modules, append
@@ -212,7 +217,7 @@ The runtime handoff records the tested consumers and the remaining signing/diges
 | MariaDB JDBC authentication | The bundled driver is `3.3.2`, also used for FE MySQL metadata. Both pools restrict negotiated plugins to `mysql_native_password,caching_sha2_password` using driver-parsed `restrictedAuth`, Ed25519/GSSAPI/PAM switches are unsupported. The initial native-password response and supported plugins use default SHA digests, whose only configured implementation is BCFIPS. External MySQL Connector/J remains separately unqualified |
 | Oracle JDBC authentication | The bundled `ojdbc10:19.18.0.0` driver uses Thin-driver 12a authentication and JCE cryptography in both pools. The policy resolves URL properties before enforcing `allowedLogonVersion=12a` and `useJCEAPI=true`. A 12C password verifier is required. The runtime test checks PBKDF2 session-key derivation with MD5 blocked |
 | Hadoop authentication and crypto | The shared SASL provider exposes only PLAIN/EXTERNAL from SunSASL JdkSASL remains configured separately. DIGEST-MD5, CRAM-MD5 and NTLM are unavailable. Delegation-token/HDFS transfer paths requiring them are unsupported. AES-CTR uses the BCFIPS codec and RNG. GSSAPI and unrelated Commons Crypto consumers remain unqualified |
-| HTTP authentication | FE HTTP clients, default AWS SDK v2 transports, Hadoop S3A and Paimon's private AWS v1 client expose only Basic authentication. Their registries reject Digest, NTLM, Negotiate and Kerberos for targets and proxies. The required AWS transport property covers independent S3, STS, Glue and Iceberg clients. AWS request signing is unchanged |
+| HTTP authentication | FE HTTP clients, default AWS SDK v2 transports, Hadoop S3A and Paimon's AWS v1/v2 clients permit only Basic HTTP challenge authentication for targets and proxies. Their registries reject Digest, NTLM, Negotiate and Kerberos. The required AWS transport property selects the restricted transport for S3, STS, Glue and Iceberg clients, including Paimon's default v2 transport. AWS request signing is unchanged |
 | Certificate constraints | The shared certificate policy rejects email/URI-constrained CA chains and trailing-dot DNS names. Other DNS constraints remain supported. Supplied OCSP responses must bind to the certificate and its actual issuer. Invalid responses are removed before retrying the configured revocation policy. BCJSSE cryptography and certificate-path validation still use the unchanged BCFIPS module |
 | Native Java TLS bindings | WildFly is excluded, including the copy inside the packaged Paimon S3 plugin. ABFS/S3A and Paimon's isolated Hadoop TLS factory select BCJSSE explicit OpenSSL mode fails. Azure Data Lake Gen1 is unsupported. Required Netty disable flags cover its unshaded, gRPC, GCS and Kudu copies |
 | JAR signature verification | The four pinned signatures report `jar verified`. The core signer chain is not trusted by the stock JDK truststore. Hash checks establish byte identity with the selected upstream artifacts this is not a claim that jarsigner authenticates the publisher through that truststore |

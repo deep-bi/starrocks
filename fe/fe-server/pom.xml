@@ -98,29 +98,6 @@ under the License.
                     </execution>
                 </executions>
             </plugin>
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-antrun-plugin</artifactId>
-                <version>3.2.0</version>
-                <executions>
-                    <execution>
-                        <id>remove-paimon-native-tls</id>
-                        <phase>package</phase>
-                        <goals>
-                            <goal>run</goal>
-                        </goals>
-                        <configuration>
-                            <skip>${skip.plugin}</skip>
-                            <target>
-                                <ant antfile="${project.basedir}/../../security/filter-paimon-native-tls.xml">
-                                    <property name="paimon.lib.dir" location="${project.build.directory}/lib"/>
-                                    <property name="paimon.version" value="${paimon.version}"/>
-                                </ant>
-                            </target>
-                        </configuration>
-                    </execution>
-                </executions>
-            </plugin>
         </plugins>
     </build>
 </project>

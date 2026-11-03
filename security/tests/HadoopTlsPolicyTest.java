@@ -99,14 +99,15 @@ public final class HadoopTlsPolicyTest {
         if (factory == DelegatingSSLSocketFactory.class || factory.getClassLoader() != PAIMON_LOADER) {
             throw new AssertionError("Paimon TLS did not use its isolated Hadoop factory");
         }
-        Class<?> modes = PAIMON_LOADER.loadClass(
-                "org.apache.hadoop.security.ssl.DelegatingSSLSocketFactory$SSLChannelMode");
-        // The bundled Hadoop version has an independent cached factory. Exercise that
-        // actual isolated copy, not the one already present on the service classpath.
+        // Reset Paimon's cached TLS factory before calling its Hadoop client builder.
         var instance = factory.getDeclaredField("instance");
         instance.setAccessible(true);
         instance.set(null, null);
-        factory.getMethod("initializeDefaultFactory", modes).invoke(null, modes.getField(mode).get(null));
+        Class<?> confType = PAIMON_LOADER.loadClass("org.apache.hadoop.conf.Configuration");
+        Object conf = confType.getConstructor(boolean.class).newInstance(false);
+        confType.getMethod("set", String.class, String.class).invoke(conf, "fs.s3a.ssl.channel.mode", mode);
+        PAIMON_LOADER.loadClass("org.apache.hadoop.fs.s3a.impl.AWSClientConfig")
+                .getMethod("createHttpClientBuilder", confType).invoke(null, conf);
         return factory.getMethod("getDefaultFactory").invoke(null);
     }
 

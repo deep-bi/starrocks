@@ -13,8 +13,15 @@
 
     <properties>
         <java-extensions.home>${basedir}/../</java-extensions.home>
-        <paimon.version>1.3.1</paimon.version>
+        <paimon.version>1.4.2-fips-deepbi1</paimon.version>
     </properties>
+
+    <repositories>
+        <repository>
+            <id>deep-bi-github-artifact</id>
+            <url>https://raw.githubusercontent.com/deep-bi/maven-repo/main</url>
+        </repository>
+    </repositories>
 
     <dependencies>
         <dependency>
@@ -130,28 +137,6 @@
                             <outputDirectory>${project.build.directory}/paimon-reader-lib</outputDirectory>
                             <overWriteIfNewer>true</overWriteIfNewer>
                             <includeScope>runtime</includeScope>
-                        </configuration>
-                    </execution>
-                </executions>
-            </plugin>
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-antrun-plugin</artifactId>
-                <version>3.2.0</version>
-                <executions>
-                    <execution>
-                        <id>remove-paimon-native-tls</id>
-                        <phase>package</phase>
-                        <goals>
-                            <goal>run</goal>
-                        </goals>
-                        <configuration>
-                            <target>
-                                <ant antfile="${project.basedir}/../../security/filter-paimon-native-tls.xml">
-                                    <property name="paimon.lib.dir" location="${project.build.directory}/paimon-reader-lib"/>
-                                    <property name="paimon.version" value="${paimon.version}"/>
-                                </ant>
-                            </target>
                         </configuration>
                     </execution>
                 </executions>

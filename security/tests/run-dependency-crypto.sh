@@ -37,7 +37,7 @@ for mode in healthy readiness-fault active-fault; do
     "$JAVA_HOME/bin/java" "${options[@]}" -cp "$classpath" MariaDbAuthenticationTest "$mode"
     "$JAVA_HOME/bin/java" "${options[@]}" -cp "$classpath" S3ProxyAuthenticationTest "$mode"
     "$JAVA_HOME/bin/java" "${options[@]}" -cp "$classpath" OracleAuthenticationTest "$mode"
-    for component in fe cost paimon aws-s3 aws-sts aws-glue iceberg; do
+    for component in fe cost paimon paimon-v1 paimon-default aws-s3 aws-sts aws-glue iceberg; do
         "$JAVA_HOME/bin/java" "${options[@]}" -cp "$classpath" HttpAuthenticationPolicyTest "$component" "$mode"
     done
 done

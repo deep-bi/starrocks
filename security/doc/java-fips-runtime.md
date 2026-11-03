@@ -70,8 +70,8 @@ A new security-sensitive dependency path needs its own provider and failure evid
 | Explicit application provider selection | `CryptoUtils`, without reflection, readiness state or initialization hooks |
 | Default dependency services | JVM provider configuration plus focused provider and failure tests |
 | Netty/Azure TLS | Required native-TLS disable flags cover Netty and the bundled gRPC, GCS and Kudu copies before initialization. Default JDK TLS uses BCJSSE |
-| Hadoop/Paimon TLS | Maven exclusions and Paimon package filtering remove WildFly OpenSSL, package validation rejects retained copies. Default factories use BCJSSE |
-| HTTP authentication | FE HTTP clients and Hadoop S3A use `HttpAuthenticationPolicy`. The required AWS transport property selects `FipsAwsHttpService` for default SDK v2 clients. Paimon's isolated AWS v1 factory applies the same Basic-only policy |
+| Hadoop/Paimon TLS | Maven exclusions in StarRocks and the Paimon FIPS build keep WildFly OpenSSL out of the packages. Package validation rejects retained copies. Default factories use BCJSSE |
+| HTTP authentication | FE HTTP clients and Hadoop S3A use `HttpAuthenticationPolicy`. The required AWS transport property selects `FipsAwsHttpService` for default SDK v2 clients, including the copy inside Paimon's plugin. Paimon's Apache HTTP factory permits only Basic HTTP challenge authentication for both bundled SDK versions |
 | Hadoop AES-CTR and randomness | `FipsAesCtrCryptoCodec` selects BCFIPS without RNG fallback, `HadoopExt` rejects incompatible filesystem configuration |
 | Hadoop SASL mechanisms | `FipsSaslProvider` in the shared `starrocks-hadoop-ext.jar` exposes only JDK PLAIN/EXTERNAL. JdkSASL remains separately configured |
 | PostgreSQL JDBC authentication | `PostgresJdbcPolicy` rejects MD5 negotiation in FE and embedded scans using the driver's `requireAuth` capability |
@@ -211,8 +211,9 @@ Elasticsearch HTTPS uses BCJSSE trust validation and normal hostname verificatio
 Install the Elasticsearch CA in the configured trust store before connecting.
 
 Hadoop's separate WildFly OpenSSL dependency is excluded and banned by both Maven reactors.
-FE and Paimon-reader packaging also remove the embedded binding from the unsigned Paimon S3
-plugin, retaining its S3 options and FileIO implementation. Package inspection rejects remaining
+FE and Paimon-reader consume Paimon `1.4.2-fips-deepbi1`, which excludes ordinary BC and
+WildFly in its own build. StarRocks copies these artifacts without rewriting them.
+Its S3 options and FileIO implementation remain available. Package inspection rejects remaining
 WildFly provider classes, including nested copies. ABFS, S3A and Paimon's isolated Hadoop
 default TLS factories use BCJSSE, an explicitly requested OpenSSL factory fails. Azure Data Lake
 Gen1 (`adl://`) is unsupported because its SDK requires the excluded binding during class
@@ -314,8 +315,8 @@ bash security/tests/run-embedded-jvm.sh "$JAVA_HOME" /tmp/starrocks-embedded-jvm
 
 `run-dependency-crypto.sh` exercises Netty, ABFS/S3A, Paimon's isolated Hadoop TLS factory,
 Hadoop AES-CTR/randomness, SASL, FE HTTP, default AWS transports, shared/isolated S3A authentication,
-and MariaDB and Oracle authentication,
-including provider absence and module failure cases. It also tests certificate constraints
+Paimon's AWS v1 client and default AWS v2 transport, and MariaDB and Oracle authentication.
+The tests include missing providers and module failures. They also check certificate constraints
 through explicit and default BCJSSE TLS contexts and JCA PKIX services. OCSP checks cover
 valid, revoked, unknown and unrelated responses, plus CRL fallback through PKIX and BCJSSE.
 The HTTP authentication tests open loopback servers and proxies and require local socket access.
@@ -347,10 +348,19 @@ native-harness tests use the packaged security overlay without that test extensi
 
 ## Verification status
 
-The build, focused tests, dependency/JNI harnesses and live FE checks were executed using Eclipse Temurin `21.0.13+9-LTS` on Ubuntu 24.04 x86_64 with the pinned BC
-artifacts. The exact manifest archive passed SHA-256 verification before extraction, its 118
-public CA anchors were converted to certificate-only JKS `jssecacerts`. Maven test reports
+The original build, focused tests, dependency/JNI harnesses and live FE checks used Eclipse
+Temurin `21.0.13+9-LTS` on Ubuntu 24.04 x86_64 with the pinned BC artifacts. The manifest archive
+passed SHA-256 verification before extraction. Its 118 public CA anchors were converted to
+certificate-only JKS `jssecacerts`. Maven test reports
 record the selected runtime and `java.home`.
+
+Paimon `1.4.2-fips-deepbi1` was built locally with JDK 11 and passed 18 HTTP authentication
+cases. FE and Java extensions passed clean Maven builds and package checks with that version
+on Ubuntu OpenJDK `21.0.12.1`. The full dependency crypto harness passed, including Paimon's
+AWS v1, Hadoop AWS v2 and default AWS v2 transports, TLS, and module failures before and after
+client initialization. The 47 focused FE crypto/Paimon tests and 20 Python tests also passed.
+Live FE and embedded JNI checks were not rerun. The Paimon artifacts still need publication
+before a remote build can resolve them.
 
 | Check | Evidence and scope |
 | --- | --- |
@@ -376,8 +386,8 @@ record the selected runtime and `java.home`.
 | Elasticsearch | Five TLS tests passed, including real loopback TLS requests, trusted peers accepted, expired/untrusted/wrong-host peers, downgrade redirects, invalid stores and missing providers rejected |
 | Ranger | 4 tests and Checkstyle passed: absent optional settings, readable credentials, missing aliases, unsupported JCEKS and corrupt stores. Tests construct the actual TLS client without remote requests |
 | Dependency enforcement | Both reactors validated, dependency trees exclude WildFly and Enforcer rejects its reintroduction. Ordinary BC artifacts are also banned |
-| Paimon packaging | Both Maven package hooks compile the restricted AWS factory against the pinned plugin and produce the same factory class. The output replaces one factory class, removes 83 WildFly files and preserves the bytes of the other 18,639 files. Repeated packaging replaces stale output. Changed inputs fail before output modification |
-| Fresh packaging | Both complete Maven reactors passed clean/package and Checkstyle using Thrift 0.24.0 for FE. FE's Paimon package lifecycle ran no fixture JAR substitution was used |
+| Paimon packaging | FE and reader use `1.4.2-fips-deepbi1`. Their bundle, S3 and OSS JARs match the locally installed Paimon artifacts byte for byte. S3 contains the restricted HTTP factory and isolated AWS service, both compiled for Java 8. No ordinary BC classes, WildFly classes/native libraries or provider registrations remain. Paimon's 18 loopback authentication cases passed |
+| Fresh packaging | Both complete StarRocks Maven reactors passed clean/package and Checkstyle using Thrift 0.24.0 for FE. Packaging copies the Paimon FIPS artifacts without a rewrite hook |
 | Package inspection | Fresh FE and Java-extension artifacts passed full package inspection and pinned provider hash checks. The core provider reported `READY` and its expected internal HMAC |
 | Static checks | Shell syntax and diff whitespace checks passed |
 
