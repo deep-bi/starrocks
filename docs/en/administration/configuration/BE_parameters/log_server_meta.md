@@ -195,6 +195,15 @@ This topic introduces the following types of BE configurations:
 - Description: The BE HTTP server port.
 - Introduced in: -
 
+### be_http_ssl_enable
+
+- Default: false
+- Type: Boolean
+- Unit: -
+- Is mutable: No
+- Description: When this item is set to `true`, the BE HTTP server on `be_http_port` serves HTTPS only, with TLS 1.2 or later. It uses the certificate and private key specified by `ssl_certificate_path` and `ssl_private_key_path`. Plain HTTP connections to this port are refused, and the BE fails to start if the certificate or key cannot be loaded. This item is independent of `enable_https`, which applies to `brpc_port` only. Clients of `be_http_port` must use `https`, including Stream Load clients and metrics scrapers. Internal callers that build `http` URLs to this port do not switch to `https`: tablet clone and replication between BEs, the FE's Stream Load redirect, and load error log links.
+- Introduced in: -
+
 ### be_port
 
 - Default: 9060
@@ -511,7 +520,7 @@ This topic introduces the following types of BE configurations:
 - Type: String
 - Unit: -
 - Is mutable: No
-- Description: File system path to the TLS/SSL private key (PEM) that the BE's brpc server uses as the private key for the default certificate. When `enable_https` is set to `true`, the system sets `brpc::ServerOptions::ssl_options().default_cert.private_key` to this path at process start. The file must be accessible by the BE process and must match the certificate provided by `ssl_certificate_path`. If this value is not set or the file is missing or unaccessible, HTTPS will not be configured and the bRPC server may fail to start. Protect this file with restrictive filesystem permissions (for example, 600).
+- Description: File system path to the TLS/SSL private key (PEM) that the BE's brpc server uses as the private key for the default certificate. When `enable_https` is set to `true`, the system sets `brpc::ServerOptions::ssl_options().default_cert.private_key` to this path at process start. The file must be accessible by the BE process and must match the certificate provided by `ssl_certificate_path`. If this value is not set or the file is missing or unaccessible, HTTPS will not be configured and the bRPC server may fail to start. Protect this file with restrictive filesystem permissions (for example, 600). When `be_http_ssl_enable` is `true`, the BE HTTP server on `be_http_port` uses the same key. The value can also be the PEM content itself, for example from an environment variable: `ssl_private_key_path=${BE_TLS_KEY}`.
 - Introduced in: v4.0.0
 
 ### thrift_client_retry_interval_ms
@@ -610,7 +619,7 @@ This topic introduces the following types of BE configurations:
 - Type: String
 - Unit: -
 - Is mutable: No
-- Description: Absolute path to the TLS/SSL certificate file (PEM) that the BE's brpc server will use when enable_https is true. At BE startup this value is copied into `brpc::ServerOptions::ssl_options().default_cert.certificate`; you must also set `ssl_private_key_path` to the matching private key. Provide the server certificate and any intermediate certificates in PEM format (certificate chain) if required by your CA. The file must be readable by the StarRocks BE process and is applied only at startup. If unset or invalid while enable_https is enabled, brpc TLS setup may fail and prevent the server from starting correctly.
+- Description: Absolute path to the TLS/SSL certificate file (PEM) that the BE's brpc server will use when enable_https is true. At BE startup this value is copied into `brpc::ServerOptions::ssl_options().default_cert.certificate`; you must also set `ssl_private_key_path` to the matching private key. Provide the server certificate and any intermediate certificates in PEM format (certificate chain) if required by your CA. The file must be readable by the StarRocks BE process and is applied only at startup. If unset or invalid while enable_https is enabled, brpc TLS setup may fail and prevent the server from starting correctly. When `be_http_ssl_enable` is `true`, the BE HTTP server on `be_http_port` uses the same certificate and sends the intermediate certificates that follow it. The value can also be the PEM content itself, for example from an environment variable: `ssl_certificate_path=${BE_TLS_CERT}`.
 - Introduced in: v4.0.0
 
 ## Metadata and cluster management
