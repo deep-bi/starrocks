@@ -50,9 +50,12 @@ CONF_Int32(brpc_port, "8060");
 CONF_Int32(brpc_num_threads, "-1");
 // https enable flag: adds optional TLS to brpc_port, which still accepts plain connections
 CONF_Bool(enable_https, "false");
-// path of certificate, used by brpc_port (enable_https) and be_http_port (be_http_ssl_enable)
+// path of certificate, used by brpc_port (enable_https) and be_http_port (be_http_ssl_enable).
+// Either a file path or the PEM content itself (e.g. ${ENV_VAR}). For be_http_port, intermediate
+// certificates may follow the server certificate.
 CONF_String(ssl_certificate_path, "");
-// path of private key, used by brpc_port (enable_https) and be_http_port (be_http_ssl_enable)
+// path of private key, used by brpc_port (enable_https) and be_http_port (be_http_ssl_enable).
+// Either a file path or the PEM content itself (e.g. ${ENV_VAR}).
 CONF_String(ssl_private_key_path, "");
 
 // The max number of single connections maintained by the brpc client and each server.
@@ -468,8 +471,8 @@ CONF_Int32(be_http_port, "8040");
 CONF_Alias(be_http_port, webserver_port);
 // Number of http workers in BE
 CONF_Int32(be_http_num_workers, "48");
-// Serve HTTPS instead of HTTP on be_http_port, with the certificate and key from
-// ssl_certificate_path and ssl_private_key_path. Independent of enable_https, which
+// Serve HTTPS (TLS 1.2 or later) instead of HTTP on be_http_port, with the certificate and
+// key from ssl_certificate_path and ssl_private_key_path. Independent of enable_https, which
 // only adds optional TLS to brpc_port.
 CONF_Bool(be_http_ssl_enable, "false");
 // Period to update rate counters and sampling counters in ms.
