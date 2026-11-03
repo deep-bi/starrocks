@@ -12,7 +12,7 @@ The [baseline](fips-baseline.md), [dependencies](java-fips-dependencies.md) and
 FE and embedded Java use the pinned FIPS providers unconditionally, without a Maven profile
 or build mode flag. Use clean builds when updating dependencies: dependency copying can retain
 stale JARs that package validation rejects. Compilation targets Java 17. The release and qualification
-baseline is Temurin HotSpot `21.0.13+9` on Ubuntu 24.04 Linux x86_64.
+baseline is Temurin HotSpot `17.0.21+9` on Ubuntu 24.04 Linux x86_64.
 Startup does not require that exact JDK vendor, patch version or OS identity. The existing launchers
 reject Java below 17 for FE and warn for BE/CN. Other environments still require qualification.
 [`java-fips-pinned-dependencies.json`](../java-fips-pinned-dependencies.json) pins the JDK
@@ -304,11 +304,11 @@ python3 security/check-java-fips.py --providers java-extensions/hadoop-lib/targe
 mvn -B -f fe/pom.xml -pl fe-core -am test \
   -Dtest=JavaTlsTest,LdapTlsTest,JavaCryptoProviderTest,JDBCAuthenticationPolicyTest,AwsCloudConfigurationTest,CloudConfigurationFactoryTest,S3FileSystemTest,MysqlPasswordTest,MysqlSslEngineConfigTest,HttpSslContextBuilderTest,MysqlJsseTlsCiphersTest,SslUtilTest,NormalKeyTest,KeyMgrTest,OpenIdConnectAuthenticationTest,LDAPAuthProviderTest,LDAPMemberOfDirectoryTest,LDAPGroupProviderStaleCacheTest,LDAPGroupProviderCaseInsensitiveTest,HttpUtilsTest,EsRestClientTest,EsRestClientTlsTest,RangerCredentialProviderTest \
   -Dsurefire.failIfNoSpecifiedTests=false \
-  -Dnet.bytebuddy.experimental=true -Dmaven.clean.skip=true \
+  -Dmaven.clean.skip=true \
   -Dstarrocks.thrift="$THRIFT"
-mvn -B -f java-extensions/pom.xml -pl java-utils,hadoop-ext,jdbc-bridge -am test \
-  -Dtest=CloudConfigurationApplierTest,OverwriteAwsDefaultCredentialsProviderTest,AssumedRoleCredentialProviderTest,PostgresJdbcPolicyTest,MariaDbJdbcPolicyTest,OracleJdbcPolicyTest,JDBCScannerTest \
-  -Dsurefire.failIfNoSpecifiedTests=false -Djacoco.skip=true
+mvn -B -f java-extensions/pom.xml -pl java-utils,hadoop-ext,jdbc-bridge,udf-extensions -am test \
+  -Dtest=CloudConfigurationApplierTest,OverwriteAwsDefaultCredentialsProviderTest,AssumedRoleCredentialProviderTest,PostgresJdbcPolicyTest,MariaDbJdbcPolicyTest,OracleJdbcPolicyTest,JDBCScannerTest,UDFHelperDirectBufferTest \
+  -Dsurefire.failIfNoSpecifiedTests=false
 bash security/tests/run-dependency-crypto.sh "$JAVA_HOME" /tmp/starrocks-dependency-crypto
 bash security/tests/run-embedded-jvm.sh "$JAVA_HOME" /tmp/starrocks-embedded-jvm
 ```
@@ -348,56 +348,45 @@ native-harness tests use the packaged security overlay without that test extensi
 
 ## Verification status
 
-The original build, focused tests, dependency/JNI harnesses and live FE checks used Eclipse
-Temurin `21.0.13+9-LTS` on Ubuntu 24.04 x86_64 with the pinned BC artifacts. The manifest archive
-passed SHA-256 verification before extraction. Its 118 public CA anchors were converted to
-certificate-only JKS `jssecacerts`. Maven test reports
-record the selected runtime and `java.home`.
-
-Paimon `1.4.2-fips-deepbi1` was built locally with JDK 11 and passed 18 HTTP authentication
-cases. FE and Java extensions passed clean Maven builds and package checks with that version
-on Ubuntu OpenJDK `21.0.12.1`. The full dependency crypto harness passed, including Paimon's
-AWS v1, Hadoop AWS v2 and default AWS v2 transports, TLS, and module failures before and after
-client initialization. The 47 focused FE crypto/Paimon tests and 20 Python tests also passed.
-Live FE and embedded JNI checks were not rerun. The Paimon artifacts still need publication
-before a remote build can resolve them.
+The builds and runtime tests passed on Temurin `17.0.21+9` on Ubuntu 24.04 x86_64.
+This includes Paimon's TLS and HTTP authentication paths in StarRocks. Paimon was used as
+a prebuilt dependency. Its separate source build and tests were not rerun.
+Full BE/CN services and deployment images still need testing.
 
 | Check | Evidence and scope |
 | --- | --- |
 | Python package/options/launcher tests | 20 passed, including malformed inherited options, JVM option files, environment parsing, required native-TLS flags and nested/stale WildFly bindings |
-| Java-extension build and regression tests | Fresh Maven clean/package and Checkstyle passed, 65 focused tests passed (44 Hadoop extension, including PostgreSQL, MariaDB and Oracle policy tests, and 21 JDBC scanner tests) |
+| Java-extension build and regression tests | Maven clean/package and Checkstyle passed. All 72 focused tests passed: 44 Hadoop extension, 21 JDBC scanner and 7 UDF direct-buffer tests |
 | FE regression tests | 197 focused tests passed through Maven against the fresh source build, covering key handling/reload, all three JDBC policies, TLS, LDAP, Elasticsearch and Ranger credentials |
-| PostgreSQL JDBC authentication | Actual 42.7.12 driver rejects MD5 before a password response, URL overrides and unsupported drivers fail, stricter policies remain. FE and embedded pool guards passed with the production overlay and after injected BCFIPS failure. Initial SCRAM negotiation passed a complete remote SCRAM exchange was not tested |
-| MariaDB JDBC authentication | Actual 3.3.2 initial handshake and native-password/caching-SHA2 fast responses match BCFIPS-computed bytes. Ed25519/GSSAPI/PAM switches and incompatible URL policies are rejected. Missing-provider and readiness/active module faults reject three retries before authentication bytes are emitted. The old unrestricted SUN overlay fails this regression by sending a native-password response after readiness failure. Both pool guards passed |
-| Restricted JDK services | Java/native workers assert the exact six-service SUN registration. Default SHA-1/SHA-256/SHA-384/SHA-512 operations reject missing BCFIPS and repeated readiness/active faults, entropy, certificate collections, policy/JAAS and nonsecurity MD5 compatibility remain available |
-| Java key reload | `JavaCryptoProviderTest` passed, including two fresh JVMs using the production overlay to persist/replay keys, decrypt an existing wrapped key and create a new wrap with an internal IV. Parquet compatibility passed this is not a full FE crash/recovery or native BE rotation test |
+| PostgreSQL JDBC authentication | The 42.7.12 driver rejects MD5 before a password response. URL overrides and unsupported drivers fail. Stricter policies remain. FE and embedded pool guards passed with the production overlay and after injected BCFIPS failure. Initial SCRAM negotiation passed. A complete remote SCRAM exchange was not tested |
+| MariaDB JDBC authentication | The 3.3.2 initial handshake and native-password/caching-SHA2 fast responses match BCFIPS-computed bytes. Ed25519/GSSAPI/PAM switches and incompatible URL policies are rejected. Missing-provider and readiness/active module faults reject three retries before authentication bytes are emitted. Both pool guards passed |
+| Restricted JDK services | Java/native workers assert the exact six-service SUN registration. Default SHA-1/SHA-256/SHA-384/SHA-512 operations reject missing BCFIPS and repeated readiness/active faults. Entropy, certificate collections, policy/JAAS and nonsecurity MD5 compatibility remain available |
+| Java key reload | `JavaCryptoProviderTest` passed, including two fresh JVMs using the production overlay to persist/replay keys, decrypt an existing wrapped key and create a new wrap with an internal IV. Parquet compatibility passed. Full FE crash recovery and native BE rotation were not tested |
 | Hadoop AES-CTR and randomness | Stream round trips and actual BCFIPS cipher/RNG identity passed, incompatible configuration, missing providers and module errors rejected, including cached encryptors/decryptors, randomness and retries |
 | S3A proxy authentication | Actual Hadoop AWS clients rejected Digest/NTLM challenges. A loopback proxy confirmed that Digest received no authentication response and Basic completed authentication. Bucket and JVM proxy credentials retained the restriction. Fresh and cached clients passed readiness/active module-failure checks. Missing authentication-binding dependencies failed without restoring SDK defaults |
 | FE and AWS HTTP authentication | Actual FE shared/cost clients, default AWS S3/STS/Glue transports, Iceberg S3 and the isolated Paimon factory reject Digest, NTLM, Negotiate and Kerberos challenges. Loopback exchanges verify Basic authentication and rejection of MD5 and MD5-sess challenges, including cached clients after a module failure. Failed initialization prevents new clients from falling back |
 | Oracle JDBC authentication | Both pools enforce 12a and JCE settings. Driver-parsed URL downgrade tests pass. The actual 19.18.0.0 authentication helper produces a session key matching BCFIPS PBKDF2-HMAC-SHA512 with MD5 operations blocked. Missing-provider and readiness/active module faults reject three retries without a password response. Remote login and TCPS were not tested |
 | OCSP response binding | Valid responses pass through PKIX validation/building and BCJSSE. Revoked, unknown, wrong-serial and wrong-issuer responses are rejected. CRL fallback accepts a valid certificate and rejects a revoked certificate. Caller response maps remain unchanged. The embedded libhdfs and native-worker harness runs the same checks |
-| Certificate constraints | Sixteen chain cases passed through default/explicit BCJSSE trust managers, TLS 1.2/1.3 handshakes and default PKIX building/validation. Email/URI constraints and trailing-dot DNS names were rejected. Supported chains, mixed trust anchors and caller-supplied checkers behaved as expected. Restoring the original BCJSSE configuration reproduced the email trailing-dot bypass |
-| Dependency TLS | ABFS/S3A, Paimon's actual isolated Hadoop factory, Azure and packaged Netty copies selected BCJSSE and generated ClientHello messages, fresh and cached contexts rejected injected module errors and retries, explicit Hadoop native TLS rejected |
+| Certificate constraints | Sixteen chain cases passed through default/explicit BCJSSE trust managers, TLS 1.2/1.3 handshakes and default PKIX building/validation. Email/URI constraints and trailing-dot DNS names were rejected. Supported chains, mixed trust anchors and caller-supplied checkers behaved as expected |
+| Dependency TLS | ABFS/S3A, Paimon's isolated Hadoop factory, Azure and packaged Netty copies selected BCJSSE and generated ClientHello messages. Fresh and cached contexts rejected injected module errors and retries. Explicit Hadoop native TLS was rejected |
 | Netty native-TLS controls | Removing the unshaded, gRPC or GCS flag re-enabled native TLS and failed the regression check. Kudu native TLS was absent locally, startup validation requires its disable flag |
 | SASL | JDK APIs, Hadoop direct factories and RPC delegation-token negotiation rejected unsupported mechanisms before and after module failure, PLAIN/EXTERNAL behavior passed |
 | Embedded JNI and readers | Harness linked to production libhdfs passed lazy JVM creation, native-worker attachment and certificate-policy checks. All six reader classloaders passed provider/codec checks, loaded the shared S3A policy and constructed a default AWS S3 client with the restricted authentication registry. BE/CN launcher runs passed with this harness as their executable |
 | Live FE listeners | Freshly packaged FE passed HTTP, HTTPS and MySQL TLS requests plus wrong-host and untrusted-peer rejection. A separate fresh FE with TLS disabled passed HTTP and plaintext MySQL. Both tested addresses were loopback (`127.0.0.1` and `127.0.1.1`), so this does not prove nonloopback plaintext rejection |
-| Launcher failures | Missing or modified provider, altered overlay, legacy approved-mode/native-TLS/trust overrides, unrestricted AWS transport selection and conflicting inherited JVM options were rejected before FE startup the original signed provider and configuration were restored |
+| Launcher failures | Missing or modified provider, altered overlay, legacy approved-mode/native-TLS/trust overrides, unrestricted AWS transport selection and conflicting inherited JVM options were rejected before FE startup. The signed provider and configuration were restored after the tests |
 | Elasticsearch | Five TLS tests passed, including real loopback TLS requests, trusted peers accepted, expired/untrusted/wrong-host peers, downgrade redirects, invalid stores and missing providers rejected |
 | Ranger | 4 tests and Checkstyle passed: absent optional settings, readable credentials, missing aliases, unsupported JCEKS and corrupt stores. Tests construct the actual TLS client without remote requests |
 | Dependency enforcement | Both reactors validated, dependency trees exclude WildFly and Enforcer rejects its reintroduction. Ordinary BC artifacts are also banned |
-| Paimon packaging | FE and reader use `1.4.2-fips-deepbi1`. Their bundle, S3 and OSS JARs match the locally installed Paimon artifacts byte for byte. S3 contains the restricted HTTP factory and isolated AWS service, both compiled for Java 8. No ordinary BC classes, WildFly classes/native libraries or provider registrations remain. Paimon's 18 loopback authentication cases passed |
+| Paimon packaging | FE and reader use the prebuilt `1.4.2-fips-deepbi1` bundle, S3 and OSS JARs. S3 contains the restricted HTTP factory and isolated AWS service. No ordinary BC classes, WildFly classes/native libraries or provider registrations remain. The TLS and HTTP authentication integration tests passed on Java 17 |
 | Fresh packaging | Both complete StarRocks Maven reactors passed clean/package and Checkstyle using Thrift 0.24.0 for FE. Packaging copies the Paimon FIPS artifacts without a rewrite hook |
 | Package inspection | Fresh FE and Java-extension artifacts passed full package inspection and pinned provider hash checks. The core provider reported `READY` and its expected internal HMAC |
 | Static checks | Shell syntax and diff whitespace checks passed |
 
-FE requires a Thrift 0.24.0 compiler matching the pinned Java library Thrift 0.20 generates
-incompatible service APIs. The extension tests' JaCoCo 0.8.7 agent cannot instrument JDK 21
-classes, the successful focused rerun used `-Djacoco.skip=true`, with no coverage metric claimed.
-FE Surefire and live listener tests required local socket access outside the execution sandbox.
-The runtime harness keeps reader
-classloaders alive until JVM exit, matching production so Hadoop shutdown hooks can load their
-classes.
+FE requires a Thrift 0.24.0 compiler matching the pinned Java library. Thrift 0.20 generates
+incompatible service APIs. Tests use the standard JaCoCo and Byte Buddy settings.
+FE Surefire and live listener tests need local socket access.
+The runtime harness keeps reader classloaders alive until JVM exit so Hadoop shutdown hooks
+can load their classes.
 
 [guide]: https://downloads.bouncycastle.org/fips-java/docs/BC-FJA-UserGuide-2.1.1.pdf
 

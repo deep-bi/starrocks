@@ -26,7 +26,7 @@ enforce their exact identity using another environment still requires qualificat
 | --- | --- | --- |
 | StarRocks | DeepBI 4.1.6 release target, 4.1 source tree | Record the source commit in release metadata |
 | Runtime OS and architecture | Ubuntu 24.04, `linux/amd64` | Container userspace, host details are TBD. Other architectures need separate testing |
-| Runtime Java | Eclipse Temurin HotSpot JDK `21.0.13+9`, Linux x64 | FE and embedded BE/CN JVMs, keep the existing Java 17 compilation target |
+| Runtime Java | Eclipse Temurin HotSpot JDK `17.0.21+9`, Linux x64 | FE and embedded BE/CN JVMs, matching the Java 17 compilation target |
 | Native TLS/core target, separate task | OpenSSL `3.5.9` | Not integrated build separately from the validated provider and rebuild native consumers |
 | Native cryptographic module target, separate task | OpenSSL FIPS Provider `3.1.2` | Not integrated preserve the module and follow [security policy #4985][openssl-policy] |
 | Java cryptographic module | `org.bouncycastle:bc-fips:2.1.1` | Unchanged provider JAR, approved-only mode, BC native code disabled |
@@ -55,7 +55,7 @@ provenance records.
 | --- | --- | --- |
 | [openssl-3.5.9.tar.gz][openssl-source] | `603f5602e2eef00d77fbd429d34dcd5822bb301757a1bc9cdb24c670f1eb859a` | [Publisher][openssl-sha] |
 | [openssl-3.1.2.tar.gz][provider-source] | `a0ce69b8b97ea6a35b96875235aa453b966ba3cba8af2de23657d8b6767d6539` | [Publisher][provider-sha] |
-| [OpenJDK21U-jdk_x64_linux_hotspot_21.0.13_9.tar.gz][jdk-binary] | `d7f5d5cf865a2902b70ff549b97586a7d3f234e016f041ab447ea740c7d66d1c` | [Publisher][jdk-sha] |
+| [OpenJDK17U-jdk_x64_linux_hotspot_17.0.21_9.tar.gz][jdk-binary] | `8b9b611d917e3dfd8419d3566b5949226f69b052fed7e109c1368add1dfe8711` | [Publisher][jdk-sha] |
 | [bc-fips-2.1.1.jar][bc-core] | `a430d935ad6cec6d045930758457740f5a5f8f9715894e347f6800f7926a7321` | [Maven Central][bc-core-sha] |
 | [bcutil-fips-2.1.8.jar][bc-util] | `f44904f61552c823bcc3686a24052ee3135212d547754eaa2ff6532e210103cb` | [Maven Central][bc-util-sha] |
 | [bctls-fips-2.1.25.jar][bc-tls] | `af604aa5b337725872651067a819ebc03aa298685572b0b2ad5343c786faad0a` | [Maven Central][bc-tls-sha] |
@@ -174,7 +174,7 @@ Keep test results with the source commit, image digests, configuration and deplo
 | Acceptance area | Current evidence | Remaining release work |
 | --- | --- | --- |
 | Reproducible inputs | Fresh FE and Java-extension Maven packages pass dependency enforcement and package/hash checks signed provider verification and BCFIPS readiness pass | Verify the selected JDK archive during image preparation record complete native/Maven/JNI/JDBC inventories, package snapshots, installed toolchain versions and final image digests |
-| Module and environment coverage | Java versions/configuration and module policy references are explicit. Builds, focused tests, JNI/dependency harnesses and live FE checks passed on pinned Temurin `21.0.13+9` after archive verification | Confirm certificate status, deployment host/CPU/runtime/entropy details and operating-environment coverage. Local pinned-JDK execution does not qualify complete BE/CN services or the deployment environment |
+| Module and environment coverage | Java versions/configuration and module policy references are explicit. Builds, focused tests, JNI/dependency harnesses and live FE checks passed on pinned Temurin `17.0.21+9` after archive verification | Confirm certificate status, deployment host/CPU/runtime/entropy details and operating-environment coverage. Local pinned-JDK execution does not qualify complete BE/CN services or the deployment environment |
 | Native initialization | Outside the Java implementation | Preserve/install the selected module according to policy verify `EVP_default_properties_is_fips_enabled(libctx) == 1` and actual operation providers in relevant contexts. Default properties alone are insufficient |
 | Java initialization | Approved-only settings precede provider use tests check BCFIPS/BCJSSE, disabled BC native code, native-worker/readers and launcher overrides using the [provider guide][bc-guide] | Complete BE/CN service execution and deployment-image qualification focused JNI evidence does not cover every Java consumer |
 | Failure behavior | Launcher faults, prohibited operations, invalid peers and injected module-error cases fail on tested explicit/dependency paths | Inventory remaining security consumers and prevent unapproved fallback on every supported path retained SUN services mean provider order alone is insufficient |
@@ -197,8 +197,8 @@ must preserve the validated modules and permitted configuration.
 [openssl-sha]: https://github.com/openssl/openssl/releases/download/openssl-3.5.9/openssl-3.5.9.tar.gz.sha256
 [provider-source]: https://github.com/openssl/openssl/releases/download/openssl-3.1.2/openssl-3.1.2.tar.gz
 [provider-sha]: https://github.com/openssl/openssl/releases/download/openssl-3.1.2/openssl-3.1.2.tar.gz.sha256
-[jdk-binary]: https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.13%2B9/OpenJDK21U-jdk_x64_linux_hotspot_21.0.13_9.tar.gz
-[jdk-sha]: https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.13%2B9/OpenJDK21U-jdk_x64_linux_hotspot_21.0.13_9.tar.gz.sha256.txt
+[jdk-binary]: https://github.com/adoptium/temurin17-binaries/releases/download/jdk-17.0.21%2B9/OpenJDK17U-jdk_x64_linux_hotspot_17.0.21_9.tar.gz
+[jdk-sha]: https://github.com/adoptium/temurin17-binaries/releases/download/jdk-17.0.21%2B9/OpenJDK17U-jdk_x64_linux_hotspot_17.0.21_9.tar.gz.sha256.txt
 [bc-core]: https://repo.maven.apache.org/maven2/org/bouncycastle/bc-fips/2.1.1/bc-fips-2.1.1.jar
 [bc-core-sha]: https://repo.maven.apache.org/maven2/org/bouncycastle/bc-fips/2.1.1/bc-fips-2.1.1.jar.sha256
 [bc-util]: https://repo.maven.apache.org/maven2/org/bouncycastle/bcutil-fips/2.1.8/bcutil-fips-2.1.8.jar

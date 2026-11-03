@@ -1,14 +1,14 @@
 {
   "security_properties_sha256": "d6d44b21b4709152ebc7d2114b4091f3fa94c6cfe2ba5c9b891a2dcc4630f818",
   "jdk": {
-    "version": "21.0.13+9",
+    "version": "17.0.21+9",
     "vendor": "Eclipse Adoptium",
     "platform": "linux-x86_64",
     "os_release": {"ID": "ubuntu", "VERSION_ID": "24.04"},
-    "file": "OpenJDK21U-jdk_x64_linux_hotspot_21.0.13_9.tar.gz",
-    "url": "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.13%2B9/OpenJDK21U-jdk_x64_linux_hotspot_21.0.13_9.tar.gz",
-    "sha256": "d7f5d5cf865a2902b70ff549b97586a7d3f234e016f041ab447ea740c7d66d1c",
-    "archive_root": "jdk-21.0.13+9"
+    "file": "OpenJDK17U-jdk_x64_linux_hotspot_17.0.21_9.tar.gz",
+    "url": "https://github.com/adoptium/temurin17-binaries/releases/download/jdk-17.0.21%2B9/OpenJDK17U-jdk_x64_linux_hotspot_17.0.21_9.tar.gz",
+    "sha256": "8b9b611d917e3dfd8419d3566b5949226f69b052fed7e109c1368add1dfe8711",
+    "archive_root": "jdk-17.0.21+9"
   },
   "jars": {
     "bc-fips-2.1.1.jar": {

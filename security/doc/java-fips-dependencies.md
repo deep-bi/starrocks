@@ -24,13 +24,13 @@ JDK archive and provider JARs used in the distribution.
 
 | Artifact | SHA-256 |
 | --- | --- |
-| `OpenJDK21U-jdk_x64_linux_hotspot_21.0.13_9.tar.gz` | `d7f5d5cf865a2902b70ff549b97586a7d3f234e016f041ab447ea740c7d66d1c` |
+| `OpenJDK17U-jdk_x64_linux_hotspot_17.0.21_9.tar.gz` | `8b9b611d917e3dfd8419d3566b5949226f69b052fed7e109c1368add1dfe8711` |
 | `bc-fips-2.1.1.jar` | `a430d935ad6cec6d045930758457740f5a5f8f9715894e347f6800f7926a7321` |
 | `bcutil-fips-2.1.8.jar` | `f44904f61552c823bcc3686a24052ee3135212d547754eaa2ff6532e210103cb` |
 | `bctls-fips-2.1.25.jar` | `af604aa5b337725872651067a819ebc03aa298685572b0b2ad5343c786faad0a` |
 | `bcpkix-fips-2.1.13.jar` | `cf161ba2f6b4505816f4661663b3e0771184a50ee5b178a0018c817b336f0e5c` |
 
-The release and qualification baseline is Eclipse Temurin HotSpot `21.0.13+9` for Linux x86_64
+The release and qualification baseline is Eclipse Temurin HotSpot `17.0.21+9` for Linux x86_64
 on Ubuntu 24.04. These deployment pins do not impose exact JDK vendor, patch version or OS checks
 at startup. Other environments still require qualification.
 Both Maven reactors compile for Java 17, producing class-file major version 61.
@@ -168,7 +168,7 @@ it into a new directory, then convert its public CA truststore before starting s
 
 ```bash
 set -e
-jdk_archive=/path/to/OpenJDK21U-jdk_x64_linux_hotspot_21.0.13_9.tar.gz
+jdk_archive=/path/to/OpenJDK17U-jdk_x64_linux_hotspot_17.0.21_9.tar.gz
 jdk_destination=/path/to/new-java-home
 python3 security/check-java-fips.py --jdk-archive "$jdk_archive"
 mkdir -- "$jdk_destination"
