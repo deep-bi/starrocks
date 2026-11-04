@@ -18,13 +18,6 @@
         <kudu.version>1.17.1-deepbi2</kudu.version>
     </properties>
 
-    <repositories>
-        <repository>
-            <id>deep-bi-github-artifact</id>
-            <url>https://raw.githubusercontent.com/deep-bi/maven-repo/main</url>
-        </repository>
-    </repositories>
-
     <dependencies>
         <dependency>
             <groupId>com.starrocks</groupId>
