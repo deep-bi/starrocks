@@ -262,6 +262,13 @@ under the License.
             <artifactId>velocity-engine-core</artifactId>
         </dependency>
 
+        <!-- Declared before the jprotobuf jar-with-dependencies below, which bundles commons-io 2.7:
+             on the test classpath the first copy wins, and commons-configuration2 2.15 needs 2.22 -->
+        <dependency>
+            <groupId>commons-io</groupId>
+            <artifactId>commons-io</artifactId>
+        </dependency>
+
         <dependency>
             <groupId>com.starrocks</groupId>
             <artifactId>jprotobuf-starrocks</artifactId>
@@ -278,11 +285,6 @@ under the License.
         <dependency>
             <groupId>com.baidu</groupId>
             <artifactId>jprotobuf-rpc-common</artifactId>
-        </dependency>
-
-        <dependency>
-            <groupId>commons-io</groupId>
-            <artifactId>commons-io</artifactId>
         </dependency>
 
         <!-- https://mvnrepository.com/artifact/com.starrocks/jprotobuf-rpc-core -->

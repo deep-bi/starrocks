@@ -54,8 +54,16 @@ under the License.
         <jackson.version>2.21.7</jackson.version>
         <!-- jackson-annotations doesn't have 2.21.7 version released -->
         <jackson-annotations.version>2.21</jackson-annotations.version>
-        <spark.version>3.5.7</spark.version>
+        <spark.version>3.5.9</spark.version>
         <parquet.version>1.18.1</parquet.version>
+        <!-- Upstream's newest releases bundle a vulnerable Jackson or Guava, so these come from
+             deep-bi forks that only change the bundled version -->
+        <parquet-shaded.version>1.18.1-deepbi1</parquet-shaded.version>
+        <hadoop-shaded-guava.version>1.5.0-deepbi1</hadoop-shaded-guava.version>
+        <iceberg-bundled-guava.version>1.10.0-deepbi1</iceberg-bundled-guava.version>
+        <hadoop-client-runtime.version>3.4.3-deepbi1</hadoop-client-runtime.version>
+        <hbase-shaded-miscellaneous.version>4.1.10-deepbi1</hbase-shaded-miscellaneous.version>
+        <cos_api-bundle.version>5.6.137.2-deepbi1</cos_api-bundle.version>
         <ranger.version>2.9.0</ranger.version>
         <zookeeper.version>3.9.5</zookeeper.version>
         <orc.version>1.9.1</orc.version>
@@ -79,7 +87,7 @@ under the License.
         <aws-v2-sdk.version>2.42.1</aws-v2-sdk.version>
         <avro.version>1.12.1</avro.version>
         <dnsjava.version>3.6.3</dnsjava.version>
-        <nimbusds.version>9.37.2</nimbusds.version>
+        <nimbusds.version>9.37.4</nimbusds.version>
         <protobuf-java.version>3.25.5</protobuf-java.version>
         <paimon.version>1.4.2-deepbi3</paimon.version>
         <delta-kernel.version>4.0.0rc1</delta-kernel.version>
@@ -506,7 +514,15 @@ under the License.
             <dependency>
                 <groupId>commons-io</groupId>
                 <artifactId>commons-io</artifactId>
-                <version>2.16.1</version>
+                <version>2.22.0</version>
+            </dependency>
+
+            <!-- hadoop-common 3.4.3 brings commons-configuration2 2.10.1 (CVE fixed in 2.15.0),
+                 and 2.15.x needs commons-io 2.22.0 -->
+            <dependency>
+                <groupId>org.apache.commons</groupId>
+                <artifactId>commons-configuration2</artifactId>
+                <version>2.15.1</version>
             </dependency>
 
             <!-- https://mvnrepository.com/artifact/com.starrocks/jprotobuf-rpc-core -->
@@ -1001,6 +1017,18 @@ under the License.
                 <version>${parquet.version}</version>
             </dependency>
 
+            <dependency>
+                <groupId>org.apache.parquet</groupId>
+                <artifactId>parquet-jackson</artifactId>
+                <version>${parquet-shaded.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>org.apache.hadoop.thirdparty</groupId>
+                <artifactId>hadoop-shaded-guava</artifactId>
+                <version>${hadoop-shaded-guava.version}</version>
+            </dependency>
+
             <!-- https://mvnrepository.com/artifact/org.apache.orc/orc-core -->
             <dependency>
                 <groupId>org.apache.orc</groupId>
@@ -1073,7 +1101,7 @@ under the License.
             <dependency>
                 <groupId>org.apache.hadoop</groupId>
                 <artifactId>hadoop-client-runtime</artifactId>
-                <version>${hadoop.version}</version>
+                <version>${hadoop-client-runtime.version}</version>
                 <exclusions>
                     <exclusion>
                         <groupId>dnsjava</groupId>
@@ -1139,6 +1167,12 @@ under the License.
                 <groupId>com.qcloud.cos</groupId>
                 <artifactId>hadoop-cos</artifactId>
                 <version>3.3.0-8.3.2</version>
+            </dependency>
+
+            <dependency>
+                <groupId>com.qcloud</groupId>
+                <artifactId>cos_api-bundle</artifactId>
+                <version>${cos_api-bundle.version}</version>
             </dependency>
 
             <!-- hadoop-cos pulls tencentcloud-sdk 3.1.213 whose okhttp 2.7.5 is EOL;
@@ -1232,6 +1266,12 @@ under the License.
             </dependency>
 
             <dependency>
+                <groupId>org.apache.hbase.thirdparty</groupId>
+                <artifactId>hbase-shaded-miscellaneous</artifactId>
+                <version>${hbase-shaded-miscellaneous.version}</version>
+            </dependency>
+
+            <dependency>
                 <groupId>org.apache.hbase</groupId>
                 <artifactId>hbase-server</artifactId>
                 <version>${hbase.version}</version>
@@ -1284,7 +1324,7 @@ under the License.
             <dependency>
                 <groupId>org.mariadb.jdbc</groupId>
                 <artifactId>mariadb-java-client</artifactId>
-                <version>3.3.2</version>
+                <version>3.3.7</version>
             </dependency>
 
             <!-- https://mvnrepository.com/artifact/org.postgresql/postgresql -->
@@ -1560,7 +1600,7 @@ under the License.
             <dependency>
                 <groupId>org.apache.iceberg</groupId>
                 <artifactId>iceberg-bundled-guava</artifactId>
-                <version>${iceberg.version}</version>
+                <version>${iceberg-bundled-guava.version}</version>
             </dependency>
 
             <dependency>
