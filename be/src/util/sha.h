@@ -14,85 +14,63 @@
 
 #pragma once
 
+#include <openssl/evp.h>
 #include <openssl/sha.h>
 
+#include <cstddef>
+#include <memory>
 #include <string>
 
 namespace starrocks {
 
-class SHA224Digest {
+namespace detail {
+
+struct EvpMdCtxDeleter {
+    void operator()(EVP_MD_CTX* ctx) const { EVP_MD_CTX_free(ctx); }
+};
+
+// goes through EVP so that, in FIPS mode, the digest comes from the fips provider
+template <size_t Size>
+class EvpDigest {
+public:
+    void update(const void* data, size_t length);
+    void digest();
+
+    // hex-encoded result, 2 * Size characters
+    std::string hex() const;
+
+    // raw binary result, Size bytes
+    const unsigned char* binary() const { return _hash; }
+    size_t binary_size() const { return Size; }
+
+protected:
+    explicit EvpDigest(const EVP_MD* md);
+
+private:
+    std::unique_ptr<EVP_MD_CTX, EvpMdCtxDeleter> _ctx;
+    unsigned char _hash[Size] = {};
+};
+
+} // namespace detail
+
+class SHA224Digest : public detail::EvpDigest<SHA224_DIGEST_LENGTH> {
 public:
     SHA224Digest();
-
-    void update(const void* data, size_t length);
-    void digest();
-
-    // Get hex-encoded result (56 characters for SHA224)
-    std::string hex() const;
-
-    // Get raw binary result (28 bytes for SHA224)
-    const unsigned char* binary() const { return _hash; }
-    size_t binary_size() const { return SHA224_DIGEST_LENGTH; }
-
-private:
-    SHA256_CTX _sha224_ctx;
-    unsigned char _hash[SHA224_DIGEST_LENGTH];
 };
 
-class SHA256Digest {
+class SHA256Digest : public detail::EvpDigest<SHA256_DIGEST_LENGTH> {
 public:
     SHA256Digest();
-
-    void update(const void* data, size_t length);
-    void digest();
-
-    // Get hex-encoded result (64 characters for SHA256)
-    std::string hex() const;
-
-    // Get raw binary result (32 bytes for SHA256)
-    const unsigned char* binary() const { return _hash; }
-    size_t binary_size() const { return SHA256_DIGEST_LENGTH; }
-
-private:
-    SHA256_CTX _sha256_ctx;
-    unsigned char _hash[SHA256_DIGEST_LENGTH];
 };
 
-class SHA384Digest {
+class SHA384Digest : public detail::EvpDigest<SHA384_DIGEST_LENGTH> {
 public:
     SHA384Digest();
-
-    void update(const void* data, size_t length);
-    void digest();
-
-    // Get hex-encoded result (96 characters for SHA384)
-    std::string hex() const;
-
-    // Get raw binary result (48 bytes for SHA384)
-    const unsigned char* binary() const { return _hash; }
-    size_t binary_size() const { return SHA384_DIGEST_LENGTH; }
-
-private:
-    SHA512_CTX _sha384_ctx;
-    unsigned char _hash[SHA384_DIGEST_LENGTH];
 };
 
-class SHA512Digest {
+class SHA512Digest : public detail::EvpDigest<SHA512_DIGEST_LENGTH> {
 public:
     SHA512Digest();
-
-    void update(const void* data, size_t length);
-    void digest();
-
-    // Get hex-encoded result (128 characters for SHA512)
-    std::string hex() const;
-
-    // Get raw binary result (64 bytes for SHA512)
-    const unsigned char* binary() const { return _hash; }
-    size_t binary_size() const { return SHA512_DIGEST_LENGTH; }
-
-private:
-    SHA512_CTX _sha512_ctx;
-    unsigned char _hash[SHA512_DIGEST_LENGTH];
 };
+
 } // namespace starrocks

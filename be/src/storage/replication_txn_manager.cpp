@@ -848,11 +848,11 @@ Status ReplicationTxnManager::publish_snapshot_for_primary(Tablet* tablet, const
     std::set_intersection(clone_files.begin(), clone_files.end(), local_files.begin(), local_files.end(),
                           std::back_inserter(duplicate_files));
     for (const auto& fname : duplicate_files) {
-        ASSIGN_OR_RETURN(auto md5sum1, fs::md5sum(snapshot_dir + "/" + fname));
-        ASSIGN_OR_RETURN(auto md5sum2, fs::md5sum(tablet_dir + "/" + fname));
-        if (md5sum1 != md5sum2) {
-            LOG(WARNING) << "Duplicated file `" << fname << "` with different md5sum";
-            return Status::InternalError("duplicate file with different md5");
+        ASSIGN_OR_RETURN(auto checksum1, fs::sha256sum(snapshot_dir + "/" + fname));
+        ASSIGN_OR_RETURN(auto checksum2, fs::sha256sum(tablet_dir + "/" + fname));
+        if (checksum1 != checksum2) {
+            LOG(WARNING) << "Duplicated file `" << fname << "` with different checksum";
+            return Status::InternalError("duplicate file with different checksum");
         }
         clone_files.erase(fname);
         local_files.erase(fname);

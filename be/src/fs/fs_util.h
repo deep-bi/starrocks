@@ -24,7 +24,10 @@
 
 namespace starrocks::fs {
 
+// MD5 is only for checksums another system expects as MD5; see util/md5.h
 StatusOr<std::string> md5sum(const std::string& path);
+
+StatusOr<std::string> sha256sum(const std::string& path);
 
 Status list_dirs_files(const std::string& path, std::set<std::string>* dirs, std::set<std::string>* files);
 

@@ -370,6 +370,33 @@ build_openssl() {
     restore_compile_flags
 }
 
+# openssl fips provider
+# Built exactly as section 11.1 of the CMVP #4985 security policy says:
+# ./Configure enable-fips, then make. Any other Configure option or compiler
+# flag voids the validation claim, so nothing from this script leaks in. The
+# BE links 3.5.7 and loads only fips.so from here at runtime; the matching
+# openssl CLI (and the 3.1.2 shared libraries it needs) is kept to run
+# fipsinstall on each host.
+build_openssl_fips() {
+    check_if_source_exist $OPENSSL_FIPS_SOURCE
+    cd $TP_SOURCE_DIR/$OPENSSL_FIPS_SOURCE
+
+    # Configure reads these from the environment
+    unset CFLAGS CXXFLAGS CPPFLAGS LDFLAGS LIBDIR
+
+    ./Configure enable-fips
+    make -j$PARALLEL
+
+    local dest=$TP_INSTALL_DIR/openssl-fips
+    rm -rf $dest
+    mkdir -p $dest/bin $dest/lib/ossl-modules
+    cp providers/fips.so $dest/lib/ossl-modules/
+    cp apps/openssl $dest/bin/
+    cp libcrypto.so.3 libssl.so.3 $dest/lib/
+
+    restore_compile_flags
+}
+
 # thrift
 build_thrift() {
     check_if_source_exist $THRIFT_SOURCE
@@ -1824,6 +1851,9 @@ declare -a all_packages=(
 if [[ "${MACHINE_TYPE}" != "aarch64" ]]; then
     all_packages+=(breakpad libdeflate)
 fi
+
+# every BE package ships the 3.1.2 fips provider, so it is part of the default set
+all_packages+=(openssl_fips)
 
 # Initialize packages array - if none specified, build all
 if [[ "${#packages[@]}" -eq 0 ]]; then

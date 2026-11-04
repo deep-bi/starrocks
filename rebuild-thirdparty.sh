@@ -30,14 +30,17 @@ error() { echo -e "${RED}[ERROR]${NC} $1"; }
 # here; add both and it becomes selectable, with no other list to update.
 # (Plain array + case, not an associative array, so this runs on bash 3.2 too.)
 #
-# Order matters for `all`: rebuild_libevent ends by copying the whole
-# ${SOURCE_TP}/installed tree aside, rebuilding into the copy, then deleting
-# the original and moving the copy back — so it must run before any target
-# (like libserdes) that builds straight into ${SOURCE_TP}/installed in
-# place, or that target's output would be wiped out by libevent's swap.
+# Order matters for `all`: rebuild_openssl3 and rebuild_libevent each end by
+# copying the whole ${SOURCE_TP}/installed tree aside, rebuilding into the
+# copy, then deleting the original and moving the copy back — so they must
+# run before any target (like libserdes) that builds straight into
+# ${SOURCE_TP}/installed in place, or that target's output would be wiped out
+# by the swap. openssl3 goes first so later targets link the new OpenSSL.
 TARGET_DESCRIPTIONS=(
+    "openssl3:Rebuild OpenSSL and every library compiled against it (OpenSSL from vars.sh)"
     "libevent:Rebuild libevent with OpenSSL support (needed for BE/CN HTTPS)"
     "libserdes:Rebuild libserdes against the deep-bi mTLS branch tip"
+    "openssl_fips:Build the OpenSSL 3.1.2 FIPS provider (every BE package ships it)"
 )
 
 usage() {
@@ -127,6 +130,131 @@ require_files() {
             exit 1
         fi
     done
+}
+
+#####################################################################
+# openssl3: rebuild OpenSSL and everything compiled against it
+#####################################################################
+# Swapping libssl.a/libcrypto.a alone is not enough: objects compiled against
+# 1.1.1 headers call functions that 3.0 turned into macros or renamed
+# (SSL_get_peer_certificate, EVP_PKEY_id, EVP_MD_size, ...), so they fail to
+# link or bind to the wrong ABI. Listed in all_packages order. libevent is
+# left out: the prebuilt one has no libevent_openssl and the BE doesn't link
+# it; the libevent target covers the HTTPS variant.
+OPENSSL3_PACKAGES=(
+    openssl curl thrift brpc kerberos sasl grpc arrow librdkafka pulsar
+    mariadb aws_cpp_sdk serdes poco azure
+)
+
+# prefixes of symbols libssl/libcrypto export; an undefined one that the new
+# libraries don't define means a caller still compiled against 1.1.1 headers
+OPENSSL_SYMBOL_RE='^(SSL|SSL_CTX|TLS|DTLS|EVP|ERR|X509|PEM|BIO|RSA|EC|ECDSA|ECDH|DH|DSA|BN|RAND|HMAC|CRYPTO|OPENSSL|ASN1|OBJ|PKCS[0-9]*|OSSL|CMAC|ENGINE|i2d|d2i)_'
+
+# check_openssl_symbols <installed dir> <version>
+# Fails if any static library calls an OpenSSL-looking symbol that the new
+# libssl/libcrypto don't define. Skips weak references (aws-c-cal binds the
+# 1.0.x names that way and probes at runtime) and symbols the archive defines
+# itself (zstd's own ERR_getErrorString). starlet ships its own OpenSSL in
+# installed/starlet/third_party, which the BE doesn't link; only the
+# top-level lib dirs are checked.
+check_openssl_symbols() {
+    local dir="$1" version="$2"
+    local defined own stale a syms
+    defined=$(mktemp)
+    own=$(mktemp)
+    nm -g --defined-only "${dir}/lib/libcrypto.a" "${dir}/lib/libssl.a" 2>/dev/null \
+        | awk 'NF == 3 {print $3}' | sort -u > "${defined}"
+    stale=0
+    for a in "${dir}"/lib/*.a "${dir}"/lib64/*.a; do
+        [ -f "${a}" ] || continue
+        case "$(basename "${a}")" in libcrypto.a|libssl.a) continue ;; esac
+        nm -g --defined-only "${a}" 2>/dev/null | awk 'NF == 3 {print $3}' | sort -u > "${own}"
+        syms=$(nm -u "${a}" 2>/dev/null | awk '$1 == "U" {print $2}' | grep -E "${OPENSSL_SYMBOL_RE}" | sort -u \
+            | comm -23 - "${defined}" | comm -23 - "${own}" || true)
+        if [ -n "${syms}" ]; then
+            error "$(basename "${a}") references OpenSSL symbols that ${version} doesn't define:"
+            echo "${syms}" | head -10 | sed 's/^/    /'
+            stale=1
+        fi
+    done
+    rm -f "${defined}" "${own}"
+    [ "${stale}" -eq 0 ]
+}
+
+rebuild_openssl3() {
+    local custom_tp="${SOURCE_TP}/custom"
+    local custom_installed="${custom_tp}/installed"
+    local tp_installed="${TP_DIR}/installed"
+    local want_version
+    want_version=$(grep '^OPENSSL_SOURCE=' "${TP_DIR}/vars.sh" | cut -d= -f2 | tr -d '"' | sed 's/^openssl-//')
+    if [ -z "${want_version}" ]; then
+        error "Could not read OPENSSL_SOURCE from ${TP_DIR}/vars.sh"
+        exit 1
+    fi
+
+    require_files "${TP_DIR}/build-thirdparty.sh" "${TP_DIR}/download-thirdparty.sh"
+
+    # a second run in the same container would otherwise redo the whole rebuild
+    local have_version
+    have_version=$(strings "${SOURCE_TP}/installed/lib/libcrypto.a" 2>/dev/null | grep -m1 -E '^OpenSSL [0-9]' | awk '{print $2}')
+    if [ "${have_version}" = "${want_version}" ]; then
+        info "Pre-built thirdparty already has OpenSSL ${want_version}; nothing to do."
+        return 0
+    fi
+
+    # build-thirdparty.sh always installs into ${TP_DIR}/installed (vars.sh
+    # hardcodes it), so that path is pointed at the writable copy. A real
+    # directory there is someone's own full build; leave it alone.
+    if [ -e "${tp_installed}" ] && [ ! -L "${tp_installed}" ]; then
+        error "${tp_installed} is a real directory, not a symlink from an earlier run."
+        error "Run thirdparty/build-thirdparty.sh directly against that tree instead."
+        exit 1
+    fi
+
+    # Step 1: create writable thirdparty copy. Always fresh: a copy left by a
+    # failed run may hold a half-installed package.
+    if [ -d "${custom_tp}" ]; then
+        warn "Removing leftover ${custom_tp} from an earlier run"
+        rm -rf "${custom_tp}"
+    fi
+    info "Copying pre-built thirdparty to writable location..."
+    info "This takes a few minutes ($(du -sh "${SOURCE_TP}/installed" | cut -f1))."
+    mkdir -p "${custom_tp}"
+    cp -a "${SOURCE_TP}/installed" "${custom_installed}"
+
+    ln -sfn "${custom_installed}" "${tp_installed}"
+    trap 'rm -f "'"${tp_installed}"'"' EXIT
+
+    # Step 2: build. download-thirdparty.sh fetches and patches every archive
+    # in vars.sh, not just these, because its patch steps cd into each source
+    # unconditionally; only the listed packages are compiled.
+    info "Building ${#OPENSSL3_PACKAGES[@]} packages against OpenSSL ${want_version}:"
+    info "  ${OPENSSL3_PACKAGES[*]}"
+    "${TP_DIR}/build-thirdparty.sh" -j "${PARALLEL:-$(nproc)}" "${OPENSSL3_PACKAGES[@]}"
+
+    # Step 3: verify before touching ${SOURCE_TP}/installed
+    info "Verifying installation..."
+    local got_version
+    got_version=$(strings "${custom_installed}/lib/libcrypto.a" | grep -m1 -E '^OpenSSL [0-9]' | awk '{print $2}')
+    if [ "${got_version}" != "${want_version}" ]; then
+        error "libcrypto.a reports OpenSSL '${got_version}', expected ${want_version}"
+        exit 1
+    fi
+    info "libcrypto.a: OpenSSL ${got_version}"
+
+    if ! check_openssl_symbols "${custom_installed}" "${want_version}"; then
+        error "Rebuild those libraries too (add them to OPENSSL3_PACKAGES)."
+        error "${SOURCE_TP}/installed is unchanged; the build is in ${custom_installed}."
+        exit 1
+    fi
+    info "No library references OpenSSL symbols missing from ${want_version}"
+
+    # Step 4: swap the writable copy into place
+    rm -f "${tp_installed}"
+    trap - EXIT
+    rm -rf "${SOURCE_TP}/installed"
+    mv "${custom_installed}" "${SOURCE_TP}/installed"
+    rm -rf "${custom_tp}"
 }
 
 #####################################################################
@@ -338,6 +466,75 @@ rebuild_libserdes() {
     info "serdes_conf_set_client_cert: found in ${TP_INSTALL_DIR}/include/libserdes/serdes.h"
 
     rm -rf "${build_dir}"
+}
+
+#####################################################################
+# openssl_fips: build the 3.1.2 FIPS provider
+#####################################################################
+# Installs into ${SOURCE_TP}/installed/openssl-fips only, in place, so it runs
+# after the targets that swap the whole tree. Reuses build_openssl_fips() from
+# build-thirdparty.sh so the validated build steps live in one place.
+rebuild_openssl_fips() {
+    require_files "${TP_DIR}/vars.sh" "${TP_DIR}/build-thirdparty.sh"
+
+    local fips_download fips_name fips_source fips_md5
+    fips_download=$(grep '^OPENSSL_FIPS_DOWNLOAD=' "${TP_DIR}/vars.sh" | cut -d'"' -f2)
+    fips_name=$(grep '^OPENSSL_FIPS_NAME=' "${TP_DIR}/vars.sh" | cut -d= -f2 | tr -d '"')
+    fips_source=$(grep '^OPENSSL_FIPS_SOURCE=' "${TP_DIR}/vars.sh" | cut -d= -f2 | tr -d '"')
+    fips_md5=$(grep '^OPENSSL_FIPS_MD5SUM=' "${TP_DIR}/vars.sh" | cut -d'"' -f2)
+    if [ -z "${fips_download}" ] || [ -z "${fips_name}" ] || [ -z "${fips_source}" ] || [ -z "${fips_md5}" ]; then
+        error "Could not read OPENSSL_FIPS_* from ${TP_DIR}/vars.sh"
+        exit 1
+    fi
+
+    # Step 1: download and check the exact tarball the security policy names
+    local build_dir="/tmp/openssl-fips-rebuild-$$"
+    mkdir -p "${build_dir}"
+    cd "${build_dir}"
+    info "Downloading ${fips_name}..."
+    wget -q --tries=3 "${fips_download}" -O "${fips_name}"
+    if [ "$(md5sum "${fips_name}" | cut -d' ' -f1)" != "${fips_md5}" ]; then
+        error "${fips_name} md5sum does not match OPENSSL_FIPS_MD5SUM"
+        exit 1
+    fi
+    tar xzf "${fips_name}"
+
+    # Step 2: load build_openssl_fips() and its helpers verbatim
+    local extracted_funcs extract_status
+    extracted_funcs=$(extract_functions check_if_source_exist restore_compile_flags build_openssl_fips "${TP_DIR}/build-thirdparty.sh") \
+        && extract_status=0 || extract_status=$?
+    if [ "${extract_status}" -ne 0 ] || [ -z "${extracted_funcs}" ]; then
+        error "Could not extract build_openssl_fips() from ${TP_DIR}/build-thirdparty.sh"
+        exit 1
+    fi
+    eval "${extracted_funcs}"
+
+    export TP_SOURCE_DIR="${build_dir}"
+    export TP_INSTALL_DIR="${SOURCE_TP}/installed"
+    export OPENSSL_FIPS_SOURCE="${fips_source}"
+    export PARALLEL="${PARALLEL:-$(nproc)}"
+    export GLOBAL_CPPFLAGS="-I ${TP_INSTALL_DIR}/include"
+    export GLOBAL_CFLAGS="-O3 -fno-omit-frame-pointer -std=gnu17 -fPIC -g"
+    export GLOBAL_CXXFLAGS="-O3 -fno-omit-frame-pointer -Wno-class-memaccess -fPIC -g"
+
+    info "Building ${fips_source} FIPS provider..."
+    build_openssl_fips > "${build_dir}.log" 2>&1 || { error "Build failed; see ${build_dir}.log"; exit 1; }
+
+    # Step 3: verify the module reports the validated version and passes its
+    # self-tests; the throwaway fipsmodule.cnf is never shipped
+    local dest="${TP_INSTALL_DIR}/openssl-fips"
+    info "Verifying installation..."
+    local tmp_cnf="${build_dir}/fipsmodule.cnf"
+    if ! LD_LIBRARY_PATH="${dest}/lib" "${dest}/bin/openssl" fipsinstall -module "${dest}/lib/ossl-modules/fips.so" \
+            -out "${tmp_cnf}" -provider_name fips -pedantic > "${build_dir}/fipsinstall.log" 2>&1; then
+        error "fipsinstall failed:"
+        tail -5 "${build_dir}/fipsinstall.log"
+        exit 1
+    fi
+    grep -E "version:|INSTALL PASSED" "${build_dir}/fipsinstall.log" | sed 's/^[[:space:]]*/    /'
+
+    cd /
+    rm -rf "${build_dir}" "${build_dir}.log"
 }
 
 if [ "${TARGET}" = "all" ]; then

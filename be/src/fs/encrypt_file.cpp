@@ -30,13 +30,16 @@
 #include "gutil/endian.h"
 #include "io/input_stream.h"
 #include "util/defer_op.h"
+#include "util/fips.h"
 
 namespace starrocks {
 
 bool openssl_supports_aesni() {
 #ifdef OPENSSL_INIT_ENGINE_ALL_BUILTIN
-    // Initialize ciphers and random engines
-    if (!OPENSSL_init_crypto(OPENSSL_INIT_ENGINE_ALL_BUILTIN | OPENSSL_INIT_ADD_ALL_CIPHERS, nullptr)) {
+    // Initialize ciphers and random engines. Not in FIPS mode: builtin engines can be registered as
+    // defaults (rdrand for RAND) and would serve crypto from outside the FIPS provider.
+    if (!is_fips_mode_enabled() &&
+        !OPENSSL_init_crypto(OPENSSL_INIT_ENGINE_ALL_BUILTIN | OPENSSL_INIT_ADD_ALL_CIPHERS, nullptr)) {
         LOG(FATAL) << "OpenSSL initialization failed";
     }
 #endif
@@ -81,7 +84,12 @@ std::string get_openssl_errors() {
     int line, flags;
     const char *file, *data;
     char buf[256];
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+    const char* func;
+    while ((l = ERR_get_error_all(&file, &line, &func, &data, &flags)) != 0) {
+#else
     while ((l = ERR_get_error_line_data(&file, &line, &data, &flags)) != 0) {
+#endif
         ERR_error_string_n(l, buf, sizeof(buf));
         serr << " " << buf << ":" << file << ":" << line << ((flags & ERR_TXT_STRING) ? data : "");
     }

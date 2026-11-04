@@ -77,6 +77,7 @@ set(UTIL_FILES
   spinlock.cc
   file_util.cpp
   filesystem_util.cc
+  fips.cpp
   time.cpp
 # coding_util.cpp
   cidr.cpp

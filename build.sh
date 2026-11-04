@@ -472,6 +472,13 @@ if [ ${BUILD_BE} -eq 1 ] || [ ${BUILD_FORMAT_LIB} -eq 1 ] ; then
 
     source ${STARROCKS_HOME}/bin/common.sh
 
+    # every package ships the fips provider, so one artefact serves both values of enable_fips_mode
+    if [ ! -f "${STARROCKS_THIRDPARTY}/installed/openssl-fips/lib/ossl-modules/fips.so" ]; then
+        echo "Backend packages need the OpenSSL FIPS provider in ${STARROCKS_THIRDPARTY}/installed/openssl-fips."
+        echo "Build it with: ./rebuild-thirdparty.sh openssl_fips"
+        exit 1
+    fi
+
     cd ${CMAKE_BUILD_DIR}
     if [ "${USE_STAROS}" == "ON"  ]; then
       if [ -z "$STARLET_INSTALL_DIR" ] ; then
@@ -680,6 +687,15 @@ if [ ${BUILD_BE} -eq 1 ]; then
         mkdir -p ${STARROCKS_OUTPUT}/be/bin/flamegraph/
         cp -r -p ${STARROCKS_THIRDPARTY}/installed/flamegraph/* ${STARROCKS_OUTPUT}/be/bin/flamegraph/
     fi
+
+    # never strip fips.so: fipsinstall on each host computes its HMAC, and the
+    # module must stay byte-identical to the validated build
+    mkdir -p ${STARROCKS_OUTPUT}/be/lib/ossl-modules ${STARROCKS_OUTPUT}/be/lib/openssl-fips
+    cp -p ${STARROCKS_THIRDPARTY}/installed/openssl-fips/lib/ossl-modules/fips.so ${STARROCKS_OUTPUT}/be/lib/ossl-modules/
+    cp -p ${STARROCKS_THIRDPARTY}/installed/openssl-fips/bin/openssl ${STARROCKS_OUTPUT}/be/lib/openssl-fips/
+    cp -p ${STARROCKS_THIRDPARTY}/installed/openssl-fips/lib/libcrypto.so.3 ${STARROCKS_THIRDPARTY}/installed/openssl-fips/lib/libssl.so.3 ${STARROCKS_OUTPUT}/be/lib/openssl-fips/
+    # in lib/, not conf/: upgrades replace lib/ but usually keep the old conf/
+    cp -p ${STARROCKS_HOME}/conf/openssl-fips.cnf ${STARROCKS_OUTPUT}/be/lib/openssl-fips/
 
     # format $BUILD_TYPE to lower case
     ibuildtype=`echo ${BUILD_TYPE} | tr 'A-Z' 'a-z'`

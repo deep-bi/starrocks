@@ -230,6 +230,48 @@ if [ ${RUN_CN} -eq 1 ]; then
     LOG_FILE=${LOG_DIR}/cn.out
 fi
 
+# ================== fips section =======================
+# fipsmodule.cnf holds the integrity MAC of fips.so for this host, so it is
+# generated here rather than shipped. The BE refuses to start in FIPS mode
+# without it; any failure stops startup rather than falling back to non-FIPS.
+fips_conf_file=$STARROCKS_HOME/conf/be.conf
+if [ ${RUN_CN} -eq 1 ]; then
+    fips_conf_file=$STARROCKS_HOME/conf/cn.conf
+fi
+enable_fips_mode=false
+fips_module_dir=$STARROCKS_HOME/lib/ossl-modules
+read_var_from_conf enable_fips_mode $fips_conf_file
+read_var_from_conf fips_module_dir $fips_conf_file
+# accept what the BE's config parser accepts (strtox in configbase.cpp): "true" in any case, or "1"
+fips_flag=$(echo "$enable_fips_mode" | tr 'A-Z' 'a-z')
+if [[ "${fips_flag}" == "true" || "${fips_flag}" == "1" ]]; then
+    fips_log() { echo "[FIPS] $1" | tee -a ${LOG_FILE} >&2; }
+    fips_module=${fips_module_dir}/fips.so
+    fips_cli=${STARROCKS_HOME}/lib/openssl-fips/openssl
+    fips_module_cnf=${STARROCKS_HOME}/conf/fipsmodule.cnf
+    if [ ! -f "${fips_module}" ] || [ ! -x "${fips_cli}" ]; then
+        fips_log "enable_fips_mode = true, but ${fips_module} or ${fips_cli} is missing. Check fips_module_dir in the conf file, or reinstall the package."
+        exit 1
+    fi
+    # only when missing: regenerating whenever fips.so changes would give a
+    # tampered module a fresh MAC and defeat the integrity check. After an
+    # upgrade that replaces fips.so, the operator deletes the file instead.
+    if [ -f "${fips_module_cnf}" ] && [ "${fips_module}" -nt "${fips_module_cnf}" ]; then
+        fips_log "${fips_module} is newer than ${fips_module_cnf}. If startup fails the integrity check and fips.so came from a trusted build, delete ${fips_module_cnf} and start again."
+    fi
+    if [ ! -f "${fips_module_cnf}" ]; then
+        fips_log "generating ${fips_module_cnf} for this host"
+        # the cli links the 3.1.2 libraries next to it, never the system libcrypto
+        if ! LD_LIBRARY_PATH=${STARROCKS_HOME}/lib/openssl-fips ${fips_cli} fipsinstall -module ${fips_module} \
+                -out ${fips_module_cnf}.tmp -provider_name fips -pedantic >> ${LOG_FILE} 2>&1; then
+            rm -f ${fips_module_cnf}.tmp
+            fips_log "openssl fipsinstall failed, see ${LOG_FILE}"
+            exit 1
+        fi
+        mv ${fips_module_cnf}.tmp ${fips_module_cnf}
+    fi
+fi
+
 # enable DD profile
 if [ "${ENABLE_DATADOG_PROFILE}" == "true" ] && [ -f "${STARROCKS_HOME}/datadog/ddprof" ]; then
     START_BE_CMD="${STARROCKS_HOME}/datadog/ddprof -l debug ${START_BE_CMD}"

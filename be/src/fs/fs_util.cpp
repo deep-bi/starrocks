@@ -16,11 +16,11 @@
 
 #include <fmt/format.h>
 
-#include <iomanip>
+#include <algorithm>
 #include <set>
-#include <sstream>
 
 #include "util/md5.h"
+#include "util/sha.h"
 
 namespace starrocks::fs {
 
@@ -50,22 +50,33 @@ Status list_dirs_files(const std::string& path, std::set<std::string>* dirs, std
     return list_dirs_files(fs.get(), path, dirs, files);
 }
 
-StatusOr<std::string> md5sum(const std::string& path) {
+// reads in fixed-size chunks so that checksumming a large segment file doesn't need its size in memory
+template <typename Digest>
+static StatusOr<std::string> file_digest(const std::string& path) {
+    static constexpr int64_t kChunkSize = 1 << 20;
     ASSIGN_OR_RETURN(auto fs, FileSystem::CreateSharedFromString(path));
     ASSIGN_OR_RETURN(auto file, fs->new_random_access_file(path));
     ASSIGN_OR_RETURN(auto length, file->get_size());
-    std::unique_ptr<unsigned char[]> buf(new (std::nothrow) unsigned char[length]);
+    std::unique_ptr<unsigned char[]> buf(new (std::nothrow) unsigned char[std::min(length, kChunkSize)]);
     if (UNLIKELY(buf == nullptr)) {
-        return Status::MemoryAllocFailed(fmt::format("alloca size={}", length));
+        return Status::MemoryAllocFailed(fmt::format("alloca size={}", std::min(length, kChunkSize)));
     }
-    RETURN_IF_ERROR(file->read_fully(buf.get(), length));
-    unsigned char result[MD5_DIGEST_LENGTH];
-    MD5(buf.get(), length, result);
-    std::stringstream ss;
-    for (unsigned char i : result) {
-        ss << std::setfill('0') << std::setw(2) << std::hex << (int)i;
+    Digest digest;
+    for (int64_t offset = 0; offset < length; offset += kChunkSize) {
+        const int64_t n = std::min(kChunkSize, length - offset);
+        RETURN_IF_ERROR(file->read_at_fully(offset, buf.get(), n));
+        digest.update(buf.get(), n);
     }
-    return ss.str();
+    digest.digest();
+    return digest.hex();
+}
+
+StatusOr<std::string> md5sum(const std::string& path) {
+    return file_digest<Md5Digest>(path);
+}
+
+StatusOr<std::string> sha256sum(const std::string& path) {
+    return file_digest<SHA256Digest>(path);
 }
 
 } // namespace starrocks::fs

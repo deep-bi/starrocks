@@ -17,29 +17,41 @@
 
 #include "util/md5.h"
 
+#include <glog/logging.h>
+
 namespace starrocks {
 
-Md5Digest::Md5Digest() {
-    MD5_Init(&_md5_ctx);
+// "fips=no" takes MD5 from the default provider, also when fips=yes is the default property, so
+// the result is the same with and without FIPS mode. the method is fetched once: MD5 never comes
+// from the fips provider, so the time of the first call doesn't matter.
+static const EVP_MD* md5_method() {
+    static EVP_MD* md = EVP_MD_fetch(nullptr, "MD5", "fips=no");
+    CHECK(md != nullptr) << "cannot fetch MD5 from the default OpenSSL provider";
+    return md;
+}
+
+// a failure here means allocation failed or no provider can serve MD5; a wrong checksum would be
+// worse than stopping, since callers compare it with values from the FE and backup repositories
+Md5Digest::Md5Digest() : _ctx(EVP_MD_CTX_new()) {
+    CHECK(_ctx != nullptr) << "EVP_MD_CTX_new failed";
+    CHECK_EQ(EVP_DigestInit_ex(_ctx.get(), md5_method(), nullptr), 1) << "EVP_DigestInit_ex failed for MD5";
 }
 
 void Md5Digest::update(const void* data, size_t length) {
-    MD5_Update(&_md5_ctx, data, length);
+    CHECK_EQ(EVP_DigestUpdate(_ctx.get(), data, length), 1) << "EVP_DigestUpdate failed for MD5";
 }
 
 void Md5Digest::digest() {
-    unsigned char buf[MD5_DIGEST_LENGTH];
-    MD5_Final(buf, &_md5_ctx);
+    unsigned int len = 0;
+    CHECK_EQ(EVP_DigestFinal_ex(_ctx.get(), _hash, &len), 1) << "EVP_DigestFinal_ex failed for MD5";
+    DCHECK_EQ(len, kDigestLength);
 
-    char hex_buf[2 * MD5_DIGEST_LENGTH];
-
-    static char dig_vec_lower[] = "0123456789abcdef";
-    char* to = hex_buf;
-    for (unsigned char i : buf) {
-        *to++ = dig_vec_lower[i >> 4];
-        *to++ = dig_vec_lower[i & 0x0F];
+    static constexpr char kHex[] = "0123456789abcdef";
+    _hex.resize(2 * kDigestLength);
+    for (size_t i = 0; i < kDigestLength; i++) {
+        _hex[2 * i] = kHex[_hash[i] >> 4];
+        _hex[2 * i + 1] = kHex[_hash[i] & 0x0F];
     }
-    _hex.assign(hex_buf, 2 * MD5_DIGEST_LENGTH);
 }
 
 } // namespace starrocks
