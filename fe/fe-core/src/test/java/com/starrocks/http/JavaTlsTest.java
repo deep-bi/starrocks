@@ -42,6 +42,7 @@ import io.netty.handler.codec.http.HttpServerCodec;
 import io.netty.handler.codec.http.HttpVersion;
 import io.netty.handler.ssl.JdkSslContext;
 import io.netty.handler.ssl.SslContext;
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -58,6 +59,7 @@ import java.security.Provider;
 import java.security.Security;
 import java.text.ParseException;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
@@ -77,10 +79,26 @@ class JavaTlsTest {
     @TempDir
     static Path directory;
     private static TlsTestSupport fixtures;
+    private static final Map<String, String> SAVED_PROPERTIES = new HashMap<>();
 
     @BeforeAll
     static void setupProviders() throws Exception {
+        for (String property : new String[] {"javax.net.ssl.trustStore", "javax.net.ssl.trustStoreType",
+                "javax.net.ssl.trustStorePassword"}) {
+            SAVED_PROPERTIES.put(property, System.getProperty(property));
+        }
         fixtures = new TlsTestSupport(directory);
+    }
+
+    @AfterAll
+    static void restoreProperties() {
+        SAVED_PROPERTIES.forEach((property, value) -> {
+            if (value == null) {
+                System.clearProperty(property);
+            } else {
+                System.setProperty(property, value);
+            }
+        });
     }
 
     @BeforeEach

@@ -546,6 +546,11 @@ if [ ${BUILD_BE} -eq 1 ] || [ ${BUILD_FORMAT_LIB} -eq 1 ] ; then
         if [ ${CLEAN} -eq 1 ]; then
             ${MVN_CMD} $addon_mvn_opts clean
         fi
+        # copy-dependencies does not remove artifacts dropped from the dependency graph.
+        rm -rf hadoop-lib/target/hadoop-lib common-runtime/target/common-runtime-lib \
+            hudi-reader/target/hudi-reader-lib odps-reader/target/odps-reader-lib \
+            iceberg-metadata-reader/target/iceberg-reader-lib paimon-reader/target/paimon-reader-lib \
+            kudu-reader/target/kudu-reader-lib hive-reader/target/hive-reader-lib
         ${MVN_CMD} $addon_mvn_opts package -DskipTests -T ${PARALLEL}
         cd ${STARROCKS_HOME}
     else
@@ -716,8 +721,6 @@ if [ ${BUILD_BE} -eq 1 ]; then
         # note that conf files will not be overwritten when doing upgrade.
         # so we have to preserve directory structure to avoid upgrade incompatibility.
         cp -r -p ${STARROCKS_HOME}/java-extensions/hadoop-lib/target/hadoop-lib ${STARROCKS_OUTPUT}/be/lib/hadoop/common
-        # Hadoop TLS must use BCJSSE, remove the legacy native binding from reused output directories.
-        rm -rf ${STARROCKS_OUTPUT}/be/lib/hadoop/common/wildfly-openssl-2.2.5.Final.jar
         cp -r -p ${STARROCKS_HOME}/java-extensions/jdbc-bridge/target/starrocks-jdbc-bridge-jar-with-dependencies.jar ${STARROCKS_OUTPUT}/be/lib/jni-packages
         cp -r -p ${STARROCKS_HOME}/java-extensions/udf-extensions/target/udf-extensions-jar-with-dependencies.jar ${STARROCKS_OUTPUT}/be/lib/jni-packages
         cp -r -p ${STARROCKS_HOME}/java-extensions/java-utils/target/starrocks-java-utils.jar ${STARROCKS_OUTPUT}/be/lib/jni-packages
@@ -742,6 +745,8 @@ if [ ${BUILD_BE} -eq 1 ]; then
         cp -r -p ${STARROCKS_HOME}/java-extensions/hive-reader/target/hive-reader-lib ${STARROCKS_OUTPUT}/be/lib/
         cp -r -p ${STARROCKS_HOME}/java-extensions/hive-reader/target/starrocks-hive-reader.jar ${STARROCKS_OUTPUT}/be/lib/jni-packages
         cp -r -p ${STARROCKS_HOME}/java-extensions/hive-reader/target/starrocks-hive-reader.jar ${STARROCKS_OUTPUT}/be/lib/hive-reader-lib
+        python3 "${STARROCKS_HOME}/security/check-java-fips.py" \
+            --providers "${STARROCKS_OUTPUT}/be/lib/hadoop/common" "${STARROCKS_OUTPUT}/be/lib"
     fi
 
     cp -r -p ${STARROCKS_HOME}/be/extension/python-udf/src/flight_server.py ${STARROCKS_OUTPUT}/be/lib/py-packages

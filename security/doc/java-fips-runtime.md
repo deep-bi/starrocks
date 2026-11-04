@@ -41,12 +41,14 @@ python3 security/check-java-fips.py --providers output/fe/lib output/fe
 python3 security/check-java-fips.py --providers output/be/lib/hadoop/common output/be
 ```
 
-Neither `build.sh` nor Maven executes the Python validator.
+`build.sh` validates the FE dependency staging directory and the assembled BE Java libraries.
+Direct Maven builds require the explicit package checks above.
 Ship the configuration and validator together with the JARs.
 `check-java-fips.py` is the single validator. Package paths select the full artifact scan.
 `--home` and `--component` select startup validation. Launchers use `--preflight` to check
 injected options before the Java version probe, then `--options` for the final JVM settings and pinned files.
-Startup requires Python 3 and Bash.
+Java-enabled startup requires Python 3 and Bash. BE/CN skips Java validation when `JAVA_HOME`
+is unset and uses the existing native-only path. Java features remain unavailable on that path.
 The configuration is not embedded in application JARs. Startup compares its SHA-256 with
 `security_properties_sha256` in the pin manifest. Update that pin when changing the configuration.
 

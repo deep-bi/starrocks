@@ -17,6 +17,7 @@ import com.starrocks.common.util.TlsTestSupport;
 import com.unboundid.ldap.listener.InMemoryDirectoryServer;
 import com.unboundid.ldap.listener.InMemoryDirectoryServerConfig;
 import com.unboundid.ldap.listener.InMemoryListenerConfig;
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -34,11 +35,27 @@ class LdapTlsTest {
     @TempDir
     static Path directory;
     private static TlsTestSupport fixtures;
+    private static final Map<String, String> SAVED_PROPERTIES = new HashMap<>();
     private static final String DN = "cn=bind,dc=test";
 
     @BeforeAll
     static void setup() throws Exception {
+        for (String property : new String[] {"javax.net.ssl.trustStore", "javax.net.ssl.trustStoreType",
+                "javax.net.ssl.trustStorePassword"}) {
+            SAVED_PROPERTIES.put(property, System.getProperty(property));
+        }
         fixtures = new TlsTestSupport(directory);
+    }
+
+    @AfterAll
+    static void restoreProperties() {
+        SAVED_PROPERTIES.forEach((property, value) -> {
+            if (value == null) {
+                System.clearProperty(property);
+            } else {
+                System.setProperty(property, value);
+            }
+        });
     }
 
     private LDAPAuthProvider login(int port, boolean secure) {

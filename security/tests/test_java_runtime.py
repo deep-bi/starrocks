@@ -113,6 +113,37 @@ class JavaRuntimeTest(unittest.TestCase):
                     ], capture_output=True, text=True)
                     self.assertEqual(0, result.returncode, result.stderr)
 
+    def test_backend_launchers_without_java(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary)
+            for directory in ("bin", "conf", "security", "lib", "jdk/bin"):
+                (home / directory).mkdir(parents=True)
+            for name in ("start_backend.sh", "start_be.sh", "start_cn.sh", "common.sh"):
+                shutil.copy2(ROOT / "bin" / name, home / "bin" / name)
+            for name in ("be.conf", "cn.conf", "hadoop_env.sh", "java-fips.security"):
+                shutil.copy2(ROOT / "conf" / name, home / "conf" / name)
+            for name in ("check-java-fips.py", "java-fips-pinned-dependencies.json"):
+                shutil.copy2(ROOT / "security" / name, home / "security" / name)
+            (home / "lib/starrocks_be").write_text('#!/bin/bash\necho "native backend reached"\n')
+            (home / "lib/starrocks_be").chmod(0o755)
+            (home / "jdk/bin/java").write_text('#!/bin/bash\necho \'openjdk version "17"\' >&2\n')
+            (home / "jdk/bin/java").chmod(0o755)
+            for component in ("be", "cn"):
+                for java_home in ("", str(home / "jdk")):
+                    with self.subTest(component=component, java_home=java_home):
+                        result = subprocess.run([
+                            "bash", str(home / "bin" / ("start_" + component + ".sh")), "--logconsole",
+                        ], env={"PATH": os.defpath, "JAVA_HOME": java_home}, text=True,
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=30)
+                        if java_home:
+                            self.assertNotEqual(0, result.returncode, result.stdout)
+                            self.assertIn("Java startup rejected:", result.stdout)
+                            self.assertIn("Missing package path:", result.stdout)
+                            self.assertNotIn("native backend reached", result.stdout)
+                        else:
+                            self.assertEqual(0, result.returncode, result.stdout)
+                            self.assertIn("native backend reached", result.stdout)
+
     def test_actual_launchers_reject_before_service_jvm_runs(self):
         with tempfile.TemporaryDirectory() as temporary:
             home = Path(temporary)
