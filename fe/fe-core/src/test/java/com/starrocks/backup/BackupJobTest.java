@@ -54,6 +54,7 @@ import com.starrocks.common.util.concurrent.lock.LockManager;
 import com.starrocks.metric.MetricRepo;
 import com.starrocks.persist.EditLog;
 import com.starrocks.persist.TableRefPersist;
+import com.starrocks.persist.gson.GsonUtils;
 import com.starrocks.server.GlobalStateMgr;
 import com.starrocks.server.LocalMetastore;
 import com.starrocks.server.NodeMgr;
@@ -91,11 +92,14 @@ import java.lang.reflect.Method;
 import java.nio.file.FileVisitOption;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.stream.Stream;
 
 public class BackupJobTest {
 
@@ -858,6 +862,191 @@ public class BackupJobTest {
         } catch (Exception e) {
             e.printStackTrace();
             Assertions.fail("Failed to test chooseReplica: " + e.getMessage());
+        }
+    }
+
+    private void runToUploadInfo(BackupJob backupJob) {
+        AgentTaskQueue.clearAllTasks();
+        backupJob.run();
+        Assertions.assertEquals(BackupJobState.SNAPSHOTING, backupJob.getState());
+        SnapshotTask snapshotTask =
+                (SnapshotTask) AgentTaskQueue.getTask(backendId, TTaskType.MAKE_SNAPSHOT, tabletId);
+
+        TBackend tBackend = new TBackend("", 0, 1);
+        TFinishTaskRequest snapshotRequest = new TFinishTaskRequest(tBackend, TTaskType.MAKE_SNAPSHOT,
+                snapshotTask.getSignature(), new TStatus(TStatusCode.OK));
+        snapshotRequest.setSnapshot_files(Lists.newArrayList("1.dat", "1.idx", "1.hdr"));
+        snapshotRequest.setSnapshot_path("/path/to/snapshot");
+        Assertions.assertTrue(backupJob.finishTabletSnapshotTask(snapshotTask, snapshotRequest));
+        backupJob.run();
+        Assertions.assertEquals(BackupJobState.UPLOAD_SNAPSHOT, backupJob.getState());
+
+        AgentTaskQueue.clearAllTasks();
+        backupJob.run();
+        Assertions.assertEquals(BackupJobState.UPLOADING, backupJob.getState());
+        UploadTask uploadTask = (UploadTask) AgentTaskQueue.getTask(backendId, TTaskType.UPLOAD, id.get() - 1);
+
+        TFinishTaskRequest uploadRequest = new TFinishTaskRequest(tBackend, TTaskType.UPLOAD,
+                uploadTask.getSignature(), new TStatus(TStatusCode.OK));
+        Map<Long, List<String>> tabletFileMap = Maps.newHashMap();
+        tabletFileMap.put(tabletId, Lists.newArrayList("1.dat.4f158689243a3d6030352fec3cfd3798",
+                "1.idx.4f158689243a3d6030352fec3cfd3798", "1.hdr.4f158689243a3d6030352fec3cfd3798"));
+        uploadRequest.setTablet_files(tabletFileMap);
+        Assertions.assertTrue(backupJob.finishSnapshotUploadTask(uploadTask, uploadRequest));
+        backupJob.run();
+        Assertions.assertEquals(BackupJobState.SAVE_META, backupJob.getState());
+
+        backupJob.run();
+        Assertions.assertEquals(BackupJobState.UPLOAD_INFO, backupJob.getState());
+    }
+
+    private static void deleteTree(Path dir) throws IOException {
+        if (!Files.exists(dir)) {
+            return;
+        }
+        try (Stream<Path> paths = Files.walk(dir)) {
+            paths.sorted(Comparator.reverseOrder()).map(Path::toFile).forEach(File::delete);
+        }
+    }
+
+    private BackupJob newTableJob(String label) {
+        List<TableRefPersist> tableRefs = Lists.newArrayList();
+        tableRefs.add(new TableRefPersist(new TableName(UnitTestUtil.DB_NAME, UnitTestUtil.TABLE_NAME), null));
+        return new BackupJob(label, dbId, UnitTestUtil.DB_NAME, tableRefs, 13600 * 1000, globalStateMgr, repo.getId());
+    }
+
+    private BackupJob roundTrip(BackupJob source) {
+        BackupJob copy = GsonUtils.GSON.fromJson(GsonUtils.GSON.toJson(source), BackupJob.class);
+        copy.setGlobalStateMgr(globalStateMgr);
+        return copy;
+    }
+
+    // TC-130
+    @Test
+    public void testFinishedJobDeletesLocalJobDir() {
+        runToUploadInfo(job);
+        Path jobDir = job.getLocalJobDirPath();
+        Assertions.assertTrue(Files.isDirectory(jobDir));
+
+        job.run();
+
+        Assertions.assertEquals(BackupJobState.FINISHED, job.getState());
+        Assertions.assertFalse(Files.exists(jobDir));
+        Assertions.assertTrue(Files.isDirectory(BackupHandler.BACKUP_ROOT_DIR));
+    }
+
+    // TC-131
+    @Test
+    public void testFailedInfoUploadKeepsFilesUntilRetrySucceeds() {
+        AtomicBoolean failInfoUpload = new AtomicBoolean(true);
+        new MockUp<Repository>() {
+            @Mock
+            Status upload(String localFilePath, String remoteFilePath) {
+                boolean isJobInfo = new File(localFilePath).getName().startsWith(Repository.PREFIX_JOB_INFO);
+                if (isJobInfo && failInfoUpload.get()) {
+                    return new Status(Status.ErrCode.COMMON_ERROR, "injected upload failure");
+                }
+                return Status.OK;
+            }
+        };
+        runToUploadInfo(job);
+        Path jobDir = job.getLocalJobDirPath();
+
+        job.run();
+
+        Assertions.assertEquals(BackupJobState.UPLOAD_INFO, job.getState());
+        Assertions.assertFalse(job.getStatus().ok());
+        Assertions.assertTrue(new File(job.getLocalMetaInfoFilePath()).exists());
+        Assertions.assertTrue(new File(job.getLocalJobInfoFilePath()).exists());
+
+        failInfoUpload.set(false);
+        job.run();
+
+        Assertions.assertEquals(BackupJobState.FINISHED, job.getState());
+        Assertions.assertFalse(Files.exists(jobDir));
+    }
+
+    // TC-132
+    @Test
+    public void testCancelAndTimeoutInUploadInfoDeleteLocalJobDir() {
+        runToUploadInfo(job);
+        Path cancelledDir = job.getLocalJobDirPath();
+        Assertions.assertTrue(Files.isDirectory(cancelledDir));
+
+        job.cancel();
+
+        Assertions.assertEquals(BackupJobState.CANCELLED, job.getState());
+        Assertions.assertFalse(Files.exists(cancelledDir));
+
+        BackupJob timedOut = newTableJob("label-timeout");
+        runToUploadInfo(timedOut);
+        Path timedOutDir = timedOut.getLocalJobDirPath();
+        Assertions.assertTrue(Files.isDirectory(timedOutDir));
+        Deencapsulation.setField(timedOut, "timeoutMs", -1L);
+
+        timedOut.run();
+
+        Assertions.assertEquals(BackupJobState.CANCELLED, timedOut.getState());
+        Assertions.assertFalse(Files.exists(timedOutDir));
+    }
+
+    // TC-133
+    @Test
+    public void testRoundTrippedJobDeletesDirOfMetaInfoFile() {
+        runToUploadInfo(job);
+        Path jobDir = job.getLocalJobDirPath();
+        BackupJob toCancel = roundTrip(job);
+        Assertions.assertNull(toCancel.getLocalJobDirPath());
+        Assertions.assertEquals(jobDir.toAbsolutePath(), Paths.get(job.getLocalMetaInfoFilePath()).getParent());
+
+        toCancel.cancel();
+
+        Assertions.assertEquals(BackupJobState.CANCELLED, toCancel.getState());
+        Assertions.assertFalse(Files.exists(jobDir));
+
+        BackupJob second = newTableJob("label-second");
+        runToUploadInfo(second);
+        Path viewDir = second.getLocalJobDirPath();
+        BackupJob toFinish = roundTrip(second);
+        Assertions.assertNull(toFinish.getLocalJobDirPath());
+
+        toFinish.run();
+
+        Assertions.assertEquals(BackupJobState.FINISHED, toFinish.getState());
+        Assertions.assertFalse(Files.exists(viewDir));
+    }
+
+    // TC-134
+    @Test
+    public void testFinishedJobDeletesNothingOutsideBackupRoot() throws IOException {
+        Path outside = Files.createTempDirectory("outside_backup_root");
+        try {
+            Path outsideMeta = Files.createFile(outside.resolve(Repository.FILE_META_INFO));
+            Path outsideInfo = Files.createFile(outside.resolve(Repository.PREFIX_JOB_INFO + "1"));
+
+            runToUploadInfo(job);
+            Path realDir = job.getLocalJobDirPath();
+            Deencapsulation.setField(job, "localJobDirPath", null);
+            Deencapsulation.setField(job, "localMetaInfoFilePath", outsideMeta.toString());
+            Deencapsulation.setField(job, "localJobInfoFilePath", outsideInfo.toString());
+            job.run();
+            Assertions.assertEquals(BackupJobState.FINISHED, job.getState());
+            Assertions.assertTrue(Files.exists(outsideMeta));
+            Assertions.assertTrue(Files.exists(outsideInfo));
+
+            BackupJob second = newTableJob("label-second");
+            runToUploadInfo(second);
+            Path viewDir = second.getLocalJobDirPath();
+            Deencapsulation.setField(second, "localJobDirPath", outside);
+            second.run();
+            Assertions.assertEquals(BackupJobState.FINISHED, second.getState());
+            Assertions.assertTrue(Files.exists(outsideMeta));
+            Assertions.assertTrue(Files.exists(outsideInfo));
+
+            deleteTree(realDir);
+            deleteTree(viewDir);
+        } finally {
+            deleteTree(outside);
         }
     }
 }

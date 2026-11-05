@@ -799,6 +799,8 @@ public class BackupJob extends AbstractJob {
         globalStateMgr.getEditLog().logBackupJob(this);
         LOG.info("job is finished. {}", this);
 
+        cleanLocalJobDir();
+
         MetricRepo.COUNTER_UNFINISHED_BACKUP_JOB.increase(-1L);
         WarehouseIdleChecker.updateJobLastFinishTime(WarehouseManager.DEFAULT_WAREHOUSE_ID,
                 "BackupJob: jobId[" + jobId + "]" + " label[" + label + "]");
@@ -846,6 +848,42 @@ public class BackupJob extends AbstractJob {
         return null;
     }
 
+    private void cleanLocalJobDir() {
+        // localJobDirPath is not persisted, so after an FE restart the dir is found through the persisted file path
+        Path jobDir = localJobDirPath;
+        if (jobDir == null && localMetaInfoFilePath != null) {
+            jobDir = Paths.get(localMetaInfoFilePath).getParent();
+        }
+        if (jobDir == null) {
+            return;
+        }
+
+        // The path comes from a persisted job; never recursively delete anything outside the backup root.
+        Path absoluteJobDir = jobDir.toAbsolutePath().normalize();
+        boolean insideBackupRoot = isStrictlyInside(absoluteJobDir, BackupHandler.BACKUP_ROOT_DIR)
+                || isStrictlyInside(absoluteJobDir, BackupHandler.TEST_BACKUP_ROOT_DIR);
+        if (!insideBackupRoot) {
+            LOG.warn("skip cleaning the backup job dir outside the backup root: {}", jobDir);
+            return;
+        }
+
+        try {
+            if (!Files.exists(absoluteJobDir)) {
+                return;
+            }
+            try (Stream<Path> path = Files.walk(absoluteJobDir, FileVisitOption.FOLLOW_LINKS)) {
+                path.sorted(Comparator.reverseOrder()).map(Path::toFile).forEach(File::delete);
+            }
+        } catch (Exception e) {
+            LOG.warn("failed to clean the backup job dir: {}", jobDir, e);
+        }
+    }
+
+    private static boolean isStrictlyInside(Path dir, Path root) {
+        Path absoluteRoot = root.toAbsolutePath().normalize();
+        return dir.startsWith(absoluteRoot) && !dir.equals(absoluteRoot);
+    }
+
     private void cancelInternal() {
         // We need to clean the residual due to current state
         switch (state) {
@@ -865,21 +903,7 @@ public class BackupJob extends AbstractJob {
                 break;
         }
 
-        // clean the backup job dir
-        if (localJobDirPath != null) {
-            try {
-                File jobDir = new File(localJobDirPath.toString());
-                if (jobDir.exists()) {
-                    try (Stream<Path> path = Files.walk(localJobDirPath,
-                            FileVisitOption.FOLLOW_LINKS)) {
-                        path.sorted(Comparator.reverseOrder()).map(Path::toFile)
-                                .forEach(File::delete);
-                    }
-                }
-            } catch (Exception e) {
-                LOG.warn("failed to clean the backup job dir: " + localJobDirPath.toString());
-            }
-        }
+        cleanLocalJobDir();
 
         releaseSnapshots();
 
