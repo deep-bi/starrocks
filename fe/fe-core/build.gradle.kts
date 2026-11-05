@@ -102,6 +102,7 @@ dependencies {
     implementation("com.google.protobuf:protobuf-java")
     implementation("com.google.protobuf:protobuf-java-util")
     implementation("com.microsoft.sqlserver:mssql-jdbc")
+    testImplementation("com.mysql:mysql-connector-j:8.2.0")
     testImplementation("com.mockrunner:mockrunner-jdbc") {
         exclude(group = "xerces", module = "xercesImpl")
         exclude(group = "junit", module = "junit")

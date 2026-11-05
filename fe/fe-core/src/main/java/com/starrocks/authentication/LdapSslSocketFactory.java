@@ -16,6 +16,7 @@
 //   https://github.com/trinodb/trino/blob/master/lib/trino-plugin-toolkit/src/main/java/io/trino/plugin/base/ldap/LdapSslSocketFactory.java
 package com.starrocks.authentication;
 
+import com.starrocks.connector.share.security.FipsTlsCryptoProvider;
 
 import java.io.IOException;
 import java.net.InetAddress;
@@ -60,6 +61,7 @@ public final class LdapSslSocketFactory extends SocketFactory {
     @Override
     public Socket createSocket(String host, int port)
             throws IOException {
+        FipsTlsCryptoProvider.checkReady();
         Socket transport = new Socket();
         try {
             transport.connect(new InetSocketAddress(host, port), connectTimeout);
@@ -73,18 +75,21 @@ public final class LdapSslSocketFactory extends SocketFactory {
     @Override
     public Socket createSocket(String host, int port, InetAddress localHost, int localPort)
             throws IOException {
+        FipsTlsCryptoProvider.checkReady();
         return verifyHostname(socketFactory.createSocket(host, port, localHost, localPort));
     }
 
     @Override
     public Socket createSocket(InetAddress host, int port)
             throws IOException {
+        FipsTlsCryptoProvider.checkReady();
         return verifyHostname(socketFactory.createSocket(host, port));
     }
 
     @Override
     public Socket createSocket(InetAddress address, int port, InetAddress localAddress, int localPort)
             throws IOException {
+        FipsTlsCryptoProvider.checkReady();
         return verifyHostname(socketFactory.createSocket(address, port, localAddress, localPort));
     }
 
@@ -100,6 +105,7 @@ public final class LdapSslSocketFactory extends SocketFactory {
     // entry point per https://docs.oracle.com/javase/jndi/tutorial/ldap/security/ssl.html
     @SuppressWarnings({"unused", "MethodOverridesStaticMethodOfSuperclass"})
     public static SocketFactory getDefault() {
+        FipsTlsCryptoProvider.checkReady();
         ConnectionSettings settings = SSL_CONTEXT.get();
         checkState(settings != null, "SSLContext was not set");
         return new LdapSslSocketFactory(settings.context().getSocketFactory(), settings.connectTimeout());

@@ -34,6 +34,7 @@ import com.starrocks.connector.ConnectorTableId;
 import com.starrocks.connector.PartitionInfo;
 import com.starrocks.connector.PartitionUtil;
 import com.starrocks.connector.exception.StarRocksConnectorException;
+import com.starrocks.connector.share.security.FipsTlsCryptoProvider;
 import com.starrocks.connector.share.security.JdbcSecurityPolicy;
 import com.starrocks.connector.statistics.ConnectorNdvEstimator;
 import com.starrocks.qe.ConnectContext;
@@ -48,6 +49,7 @@ import com.starrocks.type.DateType;
 import com.starrocks.type.IntegerType;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
+import com.zaxxer.hikari.util.DriverDataSource;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -57,7 +59,6 @@ import java.sql.SQLException;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Properties;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
@@ -202,13 +203,14 @@ public class JDBCMetadata implements ConnectorMetadata {
     }
 
     private HikariDataSource createHikariDataSource() {
+        FipsTlsCryptoProvider.checkReady();
         HikariConfig config = new HikariConfig();
-        Properties connectionProperties = new Properties();
-        config.setJdbcUrl(JdbcSecurityPolicy.configure(getDriverName(), getJdbcUrl(), connectionProperties));
-        config.setDataSourceProperties(connectionProperties);
+        config.setJdbcUrl(getJdbcUrl());
         config.setUsername(properties.get(JDBCResource.USER));
         config.setPassword(properties.get(JDBCResource.PASSWORD));
         config.setDriverClassName(getDriverName());
+        config.setDataSource(JdbcSecurityPolicy.guard(new DriverDataSource(config.getJdbcUrl(), getDriverName(),
+                config.getDataSourceProperties(), config.getUsername(), config.getPassword())));
         config.setMaximumPoolSize(Config.jdbc_connection_pool_size);
         config.setMinimumIdle(Config.jdbc_minimum_idle_connections);
         config.setIdleTimeout(Config.jdbc_connection_idle_timeout_ms);

@@ -19,6 +19,7 @@ import com.google.common.base.Strings;
 import com.starrocks.catalog.UserIdentity;
 import com.starrocks.common.Config;
 import com.starrocks.common.DdlException;
+import com.starrocks.connector.share.security.FipsTlsCryptoProvider;
 import com.starrocks.sql.analyzer.SemanticException;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.logging.log4j.LogManager;
@@ -155,6 +156,7 @@ public class LDAPGroupProvider extends GroupProvider {
 
     @Override
     public Set<String> getGroup(UserIdentity userIdentity, String distinguishedName) {
+        FipsTlsCryptoProvider.checkReady();
         String ldapUserSearchAttr = getLdapUserSearchAttr();
         String lookupKey;
         if (ldapUserSearchAttr != null) {
@@ -205,7 +207,9 @@ public class LDAPGroupProvider extends GroupProvider {
             } else {
                 LOG.warn("Neither ldap_group_filter nor ldap_group_dn exists");
             }
+            FipsTlsCryptoProvider.checkReady();
         } catch (Exception e) {
+            refreshed = false;
             LOG.error("LDAP group search failed", e);
         } finally {
             if (ctx != null) {
@@ -358,6 +362,7 @@ public class LDAPGroupProvider extends GroupProvider {
 
     public DirContext createDirContextOnConnection(String dn, String pwd) throws NamingException, IOException,
             GeneralSecurityException {
+        FipsTlsCryptoProvider.checkReady();
         if (Strings.isNullOrEmpty(pwd)) {
             LOG.warn("empty password is not allowed for simple authentication");
             throw new IOException("empty password is not allowed for simple authentication");
@@ -374,7 +379,7 @@ public class LDAPGroupProvider extends GroupProvider {
         environment.put("com.sun.jndi.ldap.connect.timeout", getLdapConnTimeout());
         environment.put("com.sun.jndi.ldap.read.timeout", getLdapConnReadTimeout());
 
-        if (!isLdapSslConnAllowInsecure()) {
+        if (usesTls(url)) {
             String trustStorePath = getLdapSslConnTrustStorePath();
             String trustStorePwd = getLdapSslConnTrustStorePwd();
             SSLContext sslContext = SslUtils.createSSLContext(
@@ -387,6 +392,23 @@ public class LDAPGroupProvider extends GroupProvider {
         }
 
         return new InitialDirContext(environment);
+    }
+
+    private boolean usesTls(String url) {
+        boolean tls = false;
+        boolean plain = false;
+        for (String endpoint : url.trim().split("\\s+")) {
+            if (endpoint.regionMatches(true, 0, "ldaps:", 0, 6)) {
+                tls = true;
+            } else {
+                plain = true;
+            }
+        }
+        if (tls && plain && isLdapSslConnAllowInsecure()) {
+            throw new IllegalArgumentException("LDAP URL lists must not mix plaintext and TLS endpoints");
+        }
+        // An ldaps URL configures TLS even when the legacy allow-insecure option is unset.
+        return tls || !isLdapSslConnAllowInsecure();
     }
 
     public String getLdapConnUrl() {

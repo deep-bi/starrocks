@@ -19,6 +19,7 @@ import com.google.common.base.Strings;
 import com.starrocks.catalog.UserIdentity;
 import com.starrocks.common.Config;
 import com.starrocks.common.util.NetUtils;
+import com.starrocks.connector.share.security.FipsTlsCryptoProvider;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -191,6 +192,7 @@ public class LDAPAuthProvider implements AuthenticationProvider {
             // assumption that breaks when the field gets reused somewhere else later.
             authContext.setMemberOfGroups(Set.of());
         }
+        FipsTlsCryptoProvider.checkReady();
     }
 
     /**
@@ -233,6 +235,7 @@ public class LDAPAuthProvider implements AuthenticationProvider {
      * empty result is never an error here, it just means the caller keeps the group providers only
      */
     public TargetUserGroups resolveMemberOfGroupsForUser(String user) {
+        FipsTlsCryptoProvider.checkReady();
         if (!ldapGroupSource.readsMemberOf()) {
             // Nothing to read, and deliberately no request: the default configuration must not pay
             // for a directory round trip it does not need.
@@ -445,6 +448,7 @@ public class LDAPAuthProvider implements AuthenticationProvider {
      * a change to URL handling, SSL or timeouts only has to be made once.
      */
     private Hashtable<String, String> buildEnv(String principal, String credentials) throws Exception {
+        FipsTlsCryptoProvider.checkReady();
         Hashtable<String, String> env = new Hashtable<>();
         env.put(Context.SECURITY_AUTHENTICATION, "simple");
         env.put(Context.SECURITY_CREDENTIALS, credentials);
@@ -496,6 +500,7 @@ public class LDAPAuthProvider implements AuthenticationProvider {
         try {
             //this will send a bind call to ldap server, throw exception if failed
             ctx = new InitialDirContext(env);
+            FipsTlsCryptoProvider.checkReady();
             if (requestedAttributes.length == 0) {
                 return new LdapUserEntry(dn, null);
             }
@@ -525,6 +530,7 @@ public class LDAPAuthProvider implements AuthenticationProvider {
         DirContext ctx = null;
         try {
             ctx = new InitialDirContext(env);
+            FipsTlsCryptoProvider.checkReady();
             // LdapName for the same reason as in checkPasswordAndReadAttributes().
             return ctx.getAttributes(new LdapName(dn), requestedAttributes);
         } finally {
@@ -575,6 +581,7 @@ public class LDAPAuthProvider implements AuthenticationProvider {
             String safeUser = escapeLdapValue(normalizedUser);
             String searchFilter = "(" + ldapSearchFilter + "=" + safeUser + ")";
             ctx = new InitialDirContext(env);
+            FipsTlsCryptoProvider.checkReady();
             NamingEnumeration<SearchResult> results = ctx.search(baseDN, searchFilter, sc);
 
             String userDN = null;

@@ -1,7 +1,6 @@
 // Copyright 2021-present StarRocks, Inc. All rights reserved.
 // Licensed under the Apache License, Version 2.0
 
-import com.starrocks.connector.share.security.MariaDbJdbcPolicy;
 import org.mariadb.jdbc.Configuration;
 import org.mariadb.jdbc.client.Context;
 import org.mariadb.jdbc.client.impl.StandardReadableByteBuf;
@@ -19,6 +18,7 @@ import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.security.Security;
 import java.sql.SQLException;
 import java.util.Arrays;
@@ -32,13 +32,13 @@ public final class MariaDbAuthenticationTest {
 
     public static void main(String[] args) throws Exception {
         String mode = args[0];
-        Configuration config = Configuration.parse(MariaDbJdbcPolicy.restrictAuthentication(
-                "org.mariadb.jdbc.Driver", "jdbc:mariadb://localhost/review"));
+        Configuration config = Configuration.parse("jdbc:mariadb://localhost/review"
+                + "?restrictedAuth=mysql_native_password,caching_sha2_password");
         if (mode.equals("healthy") || mode.equals("active-fault")) {
             healthy(config);
         }
         if (mode.equals("healthy")) {
-            System.out.println("MariaDB initial handshake and authentication switches use BCFIPS");
+            System.out.println("MariaDB initial/native/caching-SHA2 fast responses use BCFIPS and full TLS response passed");
             return;
         }
         if (mode.equals("missing-provider")) {
@@ -55,7 +55,7 @@ public final class MariaDbAuthenticationTest {
         }
         for (int retry = 0; retry < 3; retry++) {
             rejectUnsupportedPlugins(config);
-            for (String operation : List.of("initial", "mysql_native_password", "caching_sha2_password")) {
+            for (String operation : List.of("initial", "mysql_native_password", "caching_sha2_password", "caching_sha2_full")) {
                 ByteArrayOutputStream output = new ByteArrayOutputStream();
                 try {
                     authenticate(config, operation, output);
@@ -80,11 +80,26 @@ public final class MariaDbAuthenticationTest {
             }
         }
         rejectUnsupportedPlugins(config);
-        for (String operation : List.of("initial", "mysql_native_password", "caching_sha2_password")) {
+        ByteArrayOutputStream rejectedFull = new ByteArrayOutputStream();
+        try {
+            authenticate(config, "caching_sha2_full_plain", rejectedFull);
+            throw new AssertionError("Plaintext full caching-SHA2 authentication was accepted");
+        } catch (SQLException expected) {
+            if (!expected.getMessage().contains("RSA public key is not available") || rejectedFull.size() != 36) {
+                throw expected;
+            }
+        }
+        for (String operation : List.of("initial", "mysql_native_password", "caching_sha2_password", "caching_sha2_full")) {
             ByteArrayOutputStream output = new ByteArrayOutputStream();
             authenticate(config, operation, output);
             byte[] packet = output.toByteArray();
-            byte[] expected = response(operation.equals("caching_sha2_password") ? "SHA-256" : "SHA-1");
+            byte[] expected = response(operation.startsWith("caching_sha2") ? "SHA-256" : "SHA-1");
+            if (operation.equals("caching_sha2_full")) {
+                byte[] password = (PASSWORD + "\0").getBytes(StandardCharsets.UTF_8);
+                if (!Arrays.equals(password, Arrays.copyOfRange(packet, packet.length - password.length, packet.length))) {
+                    throw new AssertionError("Full caching-SHA2 TLS response changed");
+                }
+            }
             int offset = 4; // MySQL packet header.
             if (operation.equals("initial")) {
                 offset += 32 + USER.getBytes(StandardCharsets.UTF_8).length + 1;
@@ -147,14 +162,21 @@ public final class MariaDbAuthenticationTest {
             new HandshakeResponse(new Credential(USER, PASSWORD), "mysql_native_password",
                     Arrays.copyOf(SEED, 20), config, "localhost", 32768L, (byte) 45).encode(writer, context);
         } else {
+            boolean full = operation.startsWith("caching_sha2_full");
+            if (operation.equals("caching_sha2_full")) {
+                config = Configuration.parse("jdbc:mariadb://localhost/review?restrictedAuth=mysql_native_password,caching_sha2_password"
+                        + "&sslMode=verify-full");
+            }
+            AtomicInteger reads = new AtomicInteger();
             Reader reader = (Reader) Proxy.newProxyInstance(Reader.class.getClassLoader(), new Class<?>[] {Reader.class},
                     (proxy, method, arguments) -> {
                         if (method.getName().equals("readReusablePacket")) {
-                            return new StandardReadableByteBuf(new byte[] {0});
+                            return new StandardReadableByteBuf(full && reads.getAndIncrement() == 0
+                                    ? new byte[] {1, 4} : new byte[] {0});
                         }
                         throw new AssertionError("Unexpected reader operation: " + method.getName());
                     });
-            AuthenticationPlugin plugin = AuthenticationPluginLoader.get(operation, config);
+            AuthenticationPlugin plugin = AuthenticationPluginLoader.get(full ? "caching_sha2_password" : operation, config);
             plugin.initialize(PASSWORD, SEED, config);
             plugin.process(writer, reader, null);
         }

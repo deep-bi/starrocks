@@ -756,6 +756,13 @@ under the License.
             <artifactId>mariadb-java-client</artifactId>
         </dependency>
 
+        <dependency>
+            <groupId>com.mysql</groupId>
+            <artifactId>mysql-connector-j</artifactId>
+            <version>8.2.0</version>
+            <scope>test</scope>
+        </dependency>
+
         <!-- https://mvnrepository.com/artifact/org.postgresql/postgresql -->
         <!-- we need pg driver for jdbc connector -->
         <dependency>

@@ -18,9 +18,12 @@ import java.io.OutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.KeyStore;
+import java.security.Provider;
+import java.security.Security;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Properties;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import javax.net.ssl.KeyManagerFactory;
@@ -33,6 +36,40 @@ public class TlsTestSupport {
     public final String type = "BCFKS";
     public final Path trust;
     public final Path pemTrust;
+
+    /** Selects the production TLS providers and restores JVM settings when the test finishes. */
+    public static AutoCloseable useFipsProviders() {
+        Properties original = (Properties) System.getProperties().clone();
+        Provider[] providers = Security.getProviders();
+        String keyAlgorithm = Security.getProperty("ssl.KeyManagerFactory.algorithm");
+        String trustAlgorithm = Security.getProperty("ssl.TrustManagerFactory.algorithm");
+        Provider bc = Security.getProvider("BCFIPS");
+        Provider jsse = Security.getProvider("BCJSSE");
+        Security.removeProvider("BCFIPS");
+        Security.removeProvider("BCJSSE");
+        Security.insertProviderAt(jsse, 1);
+        Security.insertProviderAt(bc, 1);
+        Security.setProperty("ssl.KeyManagerFactory.algorithm", "PKIX");
+        Security.setProperty("ssl.TrustManagerFactory.algorithm", "PKIX");
+        return () -> {
+            Security.setProperty("ssl.KeyManagerFactory.algorithm", keyAlgorithm);
+            Security.setProperty("ssl.TrustManagerFactory.algorithm", trustAlgorithm);
+            for (Provider provider : providers) {
+                Security.removeProvider(provider.getName());
+            }
+            for (int i = 0; i < providers.length; i++) {
+                Security.insertProviderAt(providers[i], i + 1);
+            }
+            for (String key : new String[] {"javax.net.ssl.trustStore", "javax.net.ssl.trustStoreType",
+                    "javax.net.ssl.trustStorePassword"}) {
+                if (original.getProperty(key) == null) {
+                    System.clearProperty(key);
+                } else {
+                    System.setProperty(key, original.getProperty(key));
+                }
+            }
+        };
+    }
 
     public TlsTestSupport(Path directory) throws Exception {
         this.directory = directory;

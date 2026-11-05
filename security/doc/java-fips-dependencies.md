@@ -134,7 +134,7 @@ assembly rules. Extension dependency copying is restricted to runtime scope.
 `start_fe.sh` places the FE library JARs on the application classpath.
 Both service classpaths must include `starrocks-hadoop-ext.jar`. It supplies the restricted SASL
 factory and restricted JDK provider named in `conf/java-fips.security`, the BCFIPS Hadoop codec,
-and the PostgreSQL/MariaDB authentication policies used by FE and embedded JDBC scans.
+and JDBC runtime readiness checks used by FE metadata, Iceberg catalogs and embedded scans.
 `conf/hadoop_env.sh` and `start_backend.sh` place Hadoop common on the embedded JVM's parent
 classpath. Reader classloaders explicitly delegate BC classes to that parent. The existing JDBC
 loader also delegates to its parent. No BC provider classes are shaded, relocated, stripped of
@@ -213,9 +213,7 @@ The runtime handoff records the tested consumers and the remaining signing/diges
 | Tencent COS and CHDFS | These dependencies are excluded from both reactors. The incompatible COS chain is `com.qcloud.cos:hadoop-cos:3.3.0-8.3.2 -> com.qcloud:cos_api-bundle:5.6.137.2` the bundle contains ordinary and relocated BC classes, including `META-INF/versions/9/org/bouncycastle/jcajce/spec/DHDomainParameterSpec.class`. Maven exclusions cannot remove classes inside a bundle. S3/S3A aliases remain available the excluded connector implementation is unsupported |
 | Aliyun HMAC-SM3 | `aliyun-java-auth:0.1.13-beta`, reached through `odps-sdk-core:0.48.7-public`, uses ordinary BC's lightweight `HMac` and `SM3Digest` in `SignAlgorithmHmacSM3`. Loading that signer fails with `NoClassDefFoundError: org/bouncycastle/crypto/Digest` on the selected classpath. FE `OdpsConnector` and embedded `OdpsSplitScanner` construct `AliyunAccount` with access ID/key and do not select SM3 directly. SM3 is unsupported dependency dispatch and live requests still require qualification |
 | BCJSSE algorithm restrictions | `conf/java-fips.security` uses unconditional SHA-1 and DSA exclusions in TLS/certificate-path policy because BCJSSE does not parse every compound Temurin clause. Unsupported handshake-signature identifiers can still produce diagnostic warnings. The runtime and TLS handoffs record policy tests creating an SSL engine alone does not establish equivalent TLS policy |
-| PostgreSQL JDBC authentication | The bundled driver is `42.7.12`. `PostgresJdbcPolicy` rejects MD5 authentication in FE and embedded scans using `requireAuth`, including URL overrides and drivers lacking this capability. External drivers and other authentication mechanisms require separate qualification |
-| MariaDB JDBC authentication | The bundled driver is `3.3.2`, also used for FE MySQL metadata. Both pools restrict negotiated plugins to `mysql_native_password,caching_sha2_password` using driver-parsed `restrictedAuth`, Ed25519/GSSAPI/PAM switches are unsupported. The initial native-password response and supported plugins use default SHA digests, whose only configured implementation is BCFIPS. External MySQL Connector/J remains separately unqualified |
-| Oracle JDBC authentication | The bundled `ojdbc10:19.18.0.0` driver uses Thin-driver 12a authentication and JCE cryptography in both pools. The policy resolves URL properties before enforcing `allowedLogonVersion=12a` and `useJCEAPI=true`. A 12C password verifier is required. The runtime test checks PBKDF2 session-key derivation with MD5 blocked |
+| Outbound JDBC | Runtime readiness checks cover initialization and physical connection creation. Driver authentication, TLS settings and FIPS qualification are the operator's responsibility. No FIPS driver allowlist is enforced. See the [configuration guidance](java-fips-tls.md#ldap-and-outbound-jdbc-coverage) |
 | Hadoop authentication and crypto | The shared SASL provider exposes only PLAIN/EXTERNAL from SunSASL JdkSASL remains configured separately. DIGEST-MD5, CRAM-MD5 and NTLM are unavailable. Delegation-token/HDFS transfer paths requiring them are unsupported. AES-CTR uses the BCFIPS codec and RNG. GSSAPI and unrelated Commons Crypto consumers remain unqualified |
 | HTTP authentication | FE HTTP clients, default AWS SDK v2 transports, Hadoop S3A and Paimon's AWS v1/v2 clients permit only Basic HTTP challenge authentication for targets and proxies. Their registries reject Digest, NTLM, Negotiate and Kerberos. The required AWS transport property selects the restricted transport for S3, STS, Glue and Iceberg clients, including Paimon's default v2 transport. AWS request signing is unchanged |
 | Certificate constraints | The shared certificate policy rejects email/URI-constrained CA chains and trailing-dot DNS names. Other DNS constraints remain supported. Supplied OCSP responses must bind to the certificate and its actual issuer. Invalid responses are removed before retrying the configured revocation policy. BCJSSE cryptography and certificate-path validation still use the unchanged BCFIPS module |
@@ -256,7 +254,7 @@ This test creates temporary children of both workspace parents with a direct
 `bcprov-jdk18on:1.85` dependency. It runs Maven offline and requires the specific
 banned-dependency error, rather than accepting any build failure.
 
-Remote JDBC/ODPS/Hadoop operations, a complete PostgreSQL SCRAM exchange, full BE/CN startup,
+Remote JDBC/ODPS/Hadoop operations, full BE/CN startup,
 cross-process FE/BE key exchange and rotation, deployment performance, Docker integration and the
 host/CPU/VM/container entropy configuration remain separate qualification work. Local build
 and runtime logs are validation artifacts, not release qualification by themselves.

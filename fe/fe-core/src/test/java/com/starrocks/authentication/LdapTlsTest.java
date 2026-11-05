@@ -87,13 +87,16 @@ class LdapTlsTest {
                 server.startListening();
                 LDAPAuthProvider login = login(server.getListenPort(), true);
                 LDAPGroupProvider groups = groups(server.getListenPort(), true, "ldaps");
+                LDAPGroupProvider urlTls = groups(server.getListenPort(), false, "ldaps");
                 if (certificate.equals("valid")) {
                     login.checkPassword(DN, fixtures.password);
                     DirContext connection = groups.createDirContextOnConnection(DN, fixtures.password);
                     connection.close();
+                    urlTls.createDirContextOnConnection(DN, fixtures.password).close();
                 } else {
                     assertThrows(Exception.class, () -> login.checkPassword(DN, fixtures.password), certificate);
                     assertThrows(Exception.class, () -> groups.createDirContextOnConnection(DN, fixtures.password), certificate);
+                    assertThrows(Exception.class, () -> urlTls.createDirContextOnConnection(DN, fixtures.password), certificate);
                 }
             }
         }
@@ -112,5 +115,12 @@ class LdapTlsTest {
                     .createDirContextOnConnection(DN, fixtures.password);
             connection.close();
         }
+    }
+
+    @Test
+    void rejectsMixedTransportUrlFallbackBeforeConnecting() {
+        LDAPGroupProvider groups = new LDAPGroupProvider("mixed", Map.of(
+                LDAPGroupProvider.LDAP_LDAP_CONN_URL, "ldaps://localhost:1 ldap://localhost:2"));
+        assertThrows(IllegalArgumentException.class, () -> groups.createDirContextOnConnection(DN, fixtures.password));
     }
 }

@@ -147,66 +147,64 @@ paths in two fresh JVMs. It checks recovery of an existing wrapped key, generati
 module IV and compatibility with the existing Parquet representation. No key-format migration
 or automatic master-key replacement is introduced.
 
-### PostgreSQL JDBC authentication
+### LDAP and outbound JDBC coverage
 
-FE metadata connections and embedded JDBC scans apply the same `PostgresJdbcPolicy` before
-constructing their connection pools. It requires a driver advertising `requireAuth`, adds
-`requireAuth=!md5` when no policy is configured, and rejects a configured policy that permits
-MD5. Stricter authentication policies are preserved. The effective restriction is placed in the
-JDBC URL because PostgreSQL URL options take precedence over connection properties.
+The shipped Java security overlay selects approved-only BCFIPS cryptography and BCJSSE TLS.
+LDAP applies provider, certificate and hostname controls in StarRocks. JDBC driver selection,
+authentication settings, TLS options and FIPS qualification are the operator's responsibility.
+StarRocks does not maintain a FIPS driver allowlist, block Oracle, or rewrite driver-specific
+security settings. An unreviewed driver is not rejected merely because it is unreviewed.
 
-The packaged PostgreSQL driver is 42.7.12. External drivers that silently ignore `requireAuth`
-are rejected. PostgreSQL servers requesting MD5 password authentication fail before a
-password response is sent. Configure and qualify a permitted authentication mechanism before
-upgrading such catalogs. Other JDBC drivers and PostgreSQL mechanisms still need their own
-provider/TLS qualification this restriction closes the identified MD5 path only.
+| Path | StarRocks controls |
+| --- | --- |
+| FE LDAP direct DN bind, service-account search and user bind, DN patterns | `LDAPAuthProvider`, `SslUtils` and `LdapSslSocketFactory` apply shared readiness checks and verified BCJSSE LDAPS to global configuration and security integrations |
+| FE LDAP memberOf lookup and separate group provider | `LDAPGroupProvider` checks readiness for directory connections, refreshes and cached group reads. LDAPS verifies certificates and hostnames |
+| FE JDBC metadata catalogs | Checks readiness before Hikari initialization and new or replacement physical connections. Cached borrows do not recheck readiness |
+| FE Iceberg JDBC catalogs | Checks readiness before catalog initialization and new or replacement physical connections. URLs and `jdbc.*` driver properties pass through without security-policy rewrites |
+| Embedded BE/CN JDBC scans | Checks readiness in `open()` and before physical connection creation. The configured driver and URL pass through without security-policy rewrites. Result reads do not recheck readiness |
 
-### MariaDB JDBC authentication
+Existing connector compatibility rules still apply. FE metadata uses its existing database
+schema resolvers and maps MySQL metadata URLs and drivers to MariaDB. Embedded scans keep
+the configured external driver. Iceberg catalog compatibility remains Iceberg's contract.
 
-FE uses MariaDB 3.3.2 for MariaDB and MySQL metadata catalogs. FE and embedded scans using
-that driver apply `MariaDbJdbcPolicy` before pool creation. The permitted plugin list
-is `mysql_native_password,caching_sha2_password`. Ed25519's independent curve implementation,
-GSSAPI and PAM plugins are rejected. A configured native-password-only list is preserved.
-The driver parses the URL before and after policy insertion, including duplicate keys.
-Drivers without `restrictedAuth` support and incompatible policies fail before opening a pool.
+### JDBC configuration requirements
 
-MariaDB always computes native-password in the initial handshake, before consulting its
-plugin restriction. A policy excluding native-password therefore cannot be enforced by this
-driver and is rejected. Its special initial `mysql_clear_password` response over TLS performs
-no local cryptography and retains the driver's behavior. Clear-password authentication switches
-are excluded. This is not a new TLS requirement or qualification of remote database authentication.
+The operator must select a compatible driver and configure its authentication, cryptographic
+providers, trust stores, client keys and server identity verification. The shared Java runtime
+does not guarantee that arbitrary driver code uses approved cryptography. Drivers can use
+private implementations, native libraries or explicitly selected providers. The compatibility
+provider retains MD5 for nonsecurity checksums, so an MD5 password implementation does not
+necessarily fail automatically. Plaintext connections remain configurable and do not provide
+FIPS-protected transport.
 
-The restricted JDK provider removes competing SHA implementations. The driver's initial
-SHA-1 response and native-password/caching-SHA2 plugin responses therefore use BCFIPS and fail
-after missing-provider or module errors, including retries. Runtime tests encode real driver
-handshakes and process native-password/caching-SHA2 fast responses, compare healthy bytes, and
-require no emitted response bytes on failure. Full caching-SHA2 authentication and remote TLS
-exchanges, and external MySQL Connector/J, remain separately unqualified.
+The following observations apply to the inspected artifacts. They are configuration guidance
+and known limitations, not restrictions enforced by StarRocks or complete driver qualification.
 
-### Oracle JDBC authentication
+| Inspected driver | Configuration and known limitations |
+| --- | --- |
+| PostgreSQL 42.7.12 | Configure `requireAuth` to exclude MD5 and unqualified GSS/SSPI mechanisms, and disable GSS transport encryption with `gssEncMode=disable`. For TLS use `sslmode=verify-full` and `sslfactory=org.postgresql.ssl.DefaultJavaSSLFactory` with JVM stores |
+| MariaDB 3.3.2 | `restrictedAuth` can select `mysql_native_password,caching_sha2_password`. The initial handshake computes native-password before consulting this setting. Full caching-SHA2 needs verified TLS with the current BCFIPS configuration. Use BCFKS client keys and `trustStoreType=BCFKS` for PEM `serverSslCert` anchors |
+| MySQL Connector/J 8.2.0 | Configure authentication plugins explicitly. For verified TLS use `sslMode=VERIFY_IDENTITY`, BCJSSE SSL context and manager providers, `keyStoreProvider=BCFIPS` and `fipsCompliantJsse=true`. Plaintext RSA password encryption is incompatible with the current approved-only module |
+| Oracle Thin ojdbc10 19.18.0.0 | The artifact accepts unsolicited RADIUS/Kerberos despite an empty offered list. RADIUS can reach private DES, MD5 and `java.util.Random`, and `useJCEAPI=true` does not cover that implementation. TCPS still leaves unsolicited Kerberos reachable. Complete FIPS qualification is not established, and StarRocks does not block this artifact |
+| SQL Server 12.4.2.jre11 | SQL password authentication and Java TLS were examined. The driver's `fips=true` option disables its hostname verifier. Connection-level trust-store password encryption supplies an AES-GCM IV that the current module rejects. Integrated/Azure authentication, Always Encrypted and native paths require separate qualification |
+| ClickHouse 0.4.6 | The TLS fixtures use `http_connection_provider=HTTP_URL_CONNECTION` and strict SSL verification. Explicit `server_version` and `server_time_zone` avoid server-supplied JDBC configuration overrides. Other transports and custom clients require separate qualification |
 
-FE metadata connections and embedded JDBC scans apply `OracleJdbcPolicy` before pool creation.
-The bundled `ojdbc10:19.18.0.0` driver receives `oracle.jdbc.allowedLogonVersion=12a` and
-`oracle.net.useJCEAPI=true`. The driver requires the server's O7L_MR capability and a 12C
-password verifier. It derives the session key with PBKDF2-HMAC-SHA512 instead of MD5 and uses
-JCE for encryption. The configured JCA providers route these operations to BCFIPS.
+Use direct `jdbc.*` keys or URL options for case-sensitive Iceberg driver settings such as
+`jdbc.requireAuth`. Existing `iceberg.catalog.*` handling lowercases property names.
 
-The policy parses URL options with the actual Oracle driver, preserves other connection
-properties and rejects authentication or JCE overrides that weaken these settings. It passes
-the resolved URL and required properties to Hikari so URL options cannot restore a downgrade.
-Oracle OCI URLs are rejected because they select a native driver outside this Java configuration.
+Missing providers or a module error stop JDBC operations at the readiness boundaries above.
+Provider construction performs startup checks. Repeated checks read the module error state
+without taking the startup lock while the module is healthy. These checks do not validate the
+driver's cryptographic behavior.
 
-Use Oracle Database 12.1.0.2 or later with a 12C password verifier for the catalog account.
-Check `DBA_USERS.PASSWORD_VERSIONS`. If the account lacks a 12C verifier, configure
-`SQLNET.ALLOWED_LOGON_VERSION_SERVER=12a` and reset its password through the database's
-credential-management procedure. Update the catalog credential to match. BCFIPS enforces a 112-bit minimum password input
-length for PBKDF2. For ASCII passwords this requires at least 14 characters.
-The [Oracle JDBC authentication documentation](https://docs.oracle.com/en/database/oracle/oracle-database/19/jjdbc/client-side-security.html)
-describes the server and password-version requirements.
+FE metadata cached borrows and Iceberg actions on pooled connections may continue after
+provider removal or a module error. Embedded scans do not recheck during `hasNext()` or
+`getNextChunk()`, so an already-open result set may remain readable. Driver-internal retries,
+Hikari validation and keepalive calls can run without another StarRocks readiness check.
 
-The runtime test uses the bundled authentication helper with MD5 operations blocked. It
-checks the generated session key against BCFIPS PBKDF2 and tests provider failures and retries.
-A remote Oracle login and TCPS connection still require integration testing.
+Focused tests and the embedded-JVM harness exercise explicitly configured protocol branches.
+They do not qualify every driver configuration, remote databases, full BE/CN services or the
+product for FIPS certification.
 
 ### HTTP authentication
 
@@ -240,9 +238,7 @@ failure and default AWS transport selection in all six embedded reader classload
 | Azure/Netty | Native TLS is disabled by a required startup option. The , Azure/Reactor TLS context uses BCJSSE. Focused tests cover provider selection and module-error rejection, not remote Azure I/O |
 | Other outbound clients | Cloud SDK, Iceberg, JDBC, Hive and Hadoop clients have independent factories. Remaining paths still need compatibility and provider/trust qualification |
 | Java extensions | The Hadoop codec selects BCFIPS explicitly. JDBC, UDF and other reader code delegates to dependencies or user code, those independent operations are not covered by the FE helper |
-| PostgreSQL JDBC authentication | FE and embedded scans reject MD5 authentication through the driver's `requireAuth` policy, including URL overrides and drivers lacking this capability. Other authentication mechanisms remain subject to qualification |
-| MariaDB JDBC authentication | Both pools reject unqualified negotiated plugins, including Ed25519. Initial handshake and native-password/caching-SHA2 digests use BCFIPS without SUN SHA fallback. Remote authentication/TLS and other external drivers remain separate qualification work |
-| Oracle JDBC authentication | FE and embedded pools require Thin-driver 12a authentication and JCE cryptography. URL downgrades fail before pool creation. A 12C password verifier is required. Remote Oracle authentication and TCPS remain integration tests |
+| Outbound JDBC | StarRocks checks shared runtime readiness at connection boundaries. The operator configures and qualifies driver authentication and TLS. Driver-specific security settings are not rewritten or rejected |
 | ODPS | Both FE `OdpsConnector` and embedded `OdpsSplitScanner` construct `AliyunAccount` with access ID/key. These callers do not select HMAC-SM3 directly. The SDK's ordinary-BC HMAC-SM3 signer is incompatible with BCFIPS. Dependency dispatch and live requests still need checking |
 | Hadoop/JNI | SASL DIGEST-MD5, CRAM-MD5 and NTLM are rejected at the provider factory boundary, including direct Hadoop factory calls. Delegation-token/HDFS transfer paths requiring them are unsupported. PLAIN/EXTERNAL retain JDK behavior. AES-CTR uses the explicit BCFIPS codec/RNG without fallback, incompatible overrides and SM4/native codecs are rejected. Kerberos and arbitrary drivers remain separate qualification work |
 | Hadoop cloud TLS | WildFly OpenSSL is excluded, including the copy embedded in the packaged Paimon S3 plugin. ABFS/S3A and Paimon's isolated Hadoop , factories select BCJSSE, explicit native TLS fails. Azure Data Lake Gen1 is unsupported because its SDK requires WildFly at initialization |

@@ -76,8 +76,7 @@ A new security-sensitive dependency path needs its own provider and failure evid
 | HTTP authentication | FE HTTP clients and Hadoop S3A use `HttpAuthenticationPolicy`. The required AWS transport property selects `FipsAwsHttpService` for default SDK v2 clients, including the copy inside Paimon's plugin. Paimon's Apache HTTP factory permits only Basic HTTP challenge authentication for both bundled SDK versions |
 | Hadoop AES-CTR and randomness | `FipsAesCtrCryptoCodec` selects BCFIPS without RNG fallback, `HadoopExt` rejects incompatible filesystem configuration |
 | Hadoop SASL mechanisms | `FipsSaslProvider` in the shared `starrocks-hadoop-ext.jar` exposes only JDK PLAIN/EXTERNAL. JdkSASL remains separately configured |
-| PostgreSQL JDBC authentication | `PostgresJdbcPolicy` rejects MD5 negotiation in FE and embedded scans using the driver's `requireAuth` capability |
-| MariaDB JDBC authentication | `MariaDbJdbcPolicy` restricts negotiated plugins to native-password and caching-SHA2, `FipsJdkProvider` removes competing JDK SHA services so their default digests cannot fall back |
+| LDAP and outbound JDBC | LDAP enforces shared readiness and TLS controls. JDBC checks runtime readiness, while the operator configures and qualifies driver authentication and TLS. See the [responsibility boundary](java-fips-tls.md#ldap-and-outbound-jdbc-coverage) |
 | FE key wrapping after JVM restart | Existing key records are replayed and their bytes imported into the new module instance BCFIPS generates each new wrapping IV internally |
 | Application certificate-only BCFKS/JKS/PEM trust loading | Existing `TlsUtils` consumer methods |
 | Default JSSE trust | Standard JSSE properties, certificate-only JKS read by BCFIPS |
@@ -249,26 +248,12 @@ The focused signing test verified BCFIPS for that digest and its HMAC, and rejec
 with a failed module both before and after first use. No remote AWS request was sent.
 The full connector signing/digest inventory and external service qualification remain open.
 
-FE and embedded JDBC scans reject PostgreSQL MD5 password authentication before sending a
-password response. The shared policy checks driver support and URL options, preventing the
-bundled driver's SUN MD5 path from bypassing approved-only mode.
-See [the authentication and restart contracts](java-fips-tls.md). Other JDBC mechanisms are
-not qualified merely by rejecting MD5.
-
-FE's bundled MariaDB 3.3.2 driver also serves MySQL metadata catalogs. Both FE and embedded
-MariaDB scans apply `restrictedAuth` before creating a pool, rejecting Ed25519, GSSAPI and PAM
-authentication switches. The driver performs its initial native-password response outside its
-plugin loader, the restricted JDK provider therefore covers that direct SHA-1 call as well as
-the native-password and caching-SHA2 plugin digests. The runtime regression exercises actual
-handshake encoding and plugin processing, including failed-module retries before any response
-bytes are sent. Caching-SHA2 coverage is its fast response, complete authentication, remote TLS,
-externally supplied MySQL Connector/J and other drivers remain unqualified.
-
-Oracle FE and embedded JDBC pools require `oracle.jdbc.allowedLogonVersion=12a` and
-`oracle.net.useJCEAPI=true`. Driver-parsed URL properties cannot override the policy.
-The 12a authentication helper uses BCFIPS PBKDF2-HMAC-SHA512 for its session key and the
-runtime test rejects any MD5 operation. See the Oracle credential requirements in
-[the TLS handoff](java-fips-tls.md#oracle-jdbc-authentication).
+LDAP and outbound JDBC use the shared provider-readiness checks. FE metadata, Iceberg
+JDBC catalogs and embedded scans preserve driver URLs and authentication/TLS settings.
+StarRocks does not enforce a FIPS driver allowlist. Operators select, configure and qualify
+their drivers for the deployment. The
+[coverage matrix and configuration requirements](java-fips-tls.md#ldap-and-outbound-jdbc-coverage)
+describe runtime checks, driver observations and internal-retry limits.
 
 Focused tests verify actual BCFIPS/BCJSSE selection, approved-only execution and disabled BC
 native services on Java/native workers and reader classloaders.
@@ -304,12 +289,12 @@ mvn -B -f fe/pom.xml -pl fe-server -am clean package -DskipTests \
 python3 security/check-java-fips.py --providers fe/fe-server/target/lib fe/fe-server/target/lib
 python3 security/check-java-fips.py --providers java-extensions/hadoop-lib/target/hadoop-lib java-extensions
 mvn -B -f fe/pom.xml -pl fe-core -am test \
-  -Dtest=JavaTlsTest,LdapTlsTest,JavaCryptoProviderTest,JDBCAuthenticationPolicyTest,AwsCloudConfigurationTest,CloudConfigurationFactoryTest,S3FileSystemTest,MysqlPasswordTest,MysqlSslEngineConfigTest,HttpSslContextBuilderTest,MysqlJsseTlsCiphersTest,SslUtilTest,NormalKeyTest,KeyMgrTest,OpenIdConnectAuthenticationTest,LDAPAuthProviderTest,LDAPMemberOfDirectoryTest,LDAPGroupProviderStaleCacheTest,LDAPGroupProviderCaseInsensitiveTest,HttpUtilsTest,EsRestClientTest,EsRestClientTlsTest,RangerCredentialProviderTest \
+  -Dtest=JavaTlsTest,LdapTlsTest,JavaCryptoProviderTest,JDBCConnectionConfigurationTest,AwsCloudConfigurationTest,CloudConfigurationFactoryTest,S3FileSystemTest,MysqlPasswordTest,MysqlSslEngineConfigTest,HttpSslContextBuilderTest,MysqlJsseTlsCiphersTest,SslUtilTest,NormalKeyTest,KeyMgrTest,OpenIdConnectAuthenticationTest,LDAPAuthProviderTest,LDAPMemberOfDirectoryTest,LDAPGroupProviderStaleCacheTest,LDAPGroupProviderCaseInsensitiveTest,HttpUtilsTest,EsRestClientTest,EsRestClientTlsTest,RangerCredentialProviderTest \
   -Dsurefire.failIfNoSpecifiedTests=false \
   -Dmaven.clean.skip=true \
   -Dstarrocks.thrift="$THRIFT"
 mvn -B -f java-extensions/pom.xml -pl java-utils,hadoop-ext,jdbc-bridge,udf-extensions -am test \
-  -Dtest=CloudConfigurationApplierTest,OverwriteAwsDefaultCredentialsProviderTest,AssumedRoleCredentialProviderTest,PostgresJdbcPolicyTest,MariaDbJdbcPolicyTest,OracleJdbcPolicyTest,JDBCScannerTest,UDFHelperDirectBufferTest \
+  -Dtest=CloudConfigurationApplierTest,OverwriteAwsDefaultCredentialsProviderTest,AssumedRoleCredentialProviderTest,JDBCScannerTest,UDFHelperDirectBufferTest \
   -Dsurefire.failIfNoSpecifiedTests=false
 bash security/tests/run-dependency-crypto.sh "$JAVA_HOME" /tmp/starrocks-dependency-crypto
 bash security/tests/run-embedded-jvm.sh "$JAVA_HOME" /tmp/starrocks-embedded-jvm
@@ -358,16 +343,16 @@ Full BE/CN services and deployment images still need testing.
 | Check | Evidence and scope |
 | --- | --- |
 | Python package/options/launcher tests | 20 passed, including malformed inherited options, JVM option files, environment parsing, required native-TLS flags and nested/stale WildFly bindings |
-| Java-extension build and regression tests | Maven clean/package and Checkstyle passed. All 72 focused tests passed: 44 Hadoop extension, 21 JDBC scanner and 7 UDF direct-buffer tests |
-| FE regression tests | 197 focused tests passed through Maven against the fresh source build, covering key handling/reload, all three JDBC policies, TLS, LDAP, Elasticsearch and Ranger credentials |
-| PostgreSQL JDBC authentication | The 42.7.12 driver rejects MD5 before a password response. URL overrides and unsupported drivers fail. Stricter policies remain. FE and embedded pool guards passed with the production overlay and after injected BCFIPS failure. Initial SCRAM negotiation passed. A complete remote SCRAM exchange was not tested |
-| MariaDB JDBC authentication | The 3.3.2 initial handshake and native-password/caching-SHA2 fast responses match BCFIPS-computed bytes. Ed25519/GSSAPI/PAM switches and incompatible URL policies are rejected. Missing-provider and readiness/active module faults reject three retries before authentication bytes are emitted. Both pool guards passed |
+| Java-extension build and regression tests | Maven compilation and Checkstyle passed for hadoop-ext and jdbc-bridge. All 20 focused JDBC scanner tests passed, including external-driver configuration preservation and cached result reads |
+| FE JDBC regression tests | All 22 focused JDBC/Iceberg tests passed through the isolated JUnit launcher after compiling the affected sources. Coverage includes configuration preservation, physical connection readiness, explicitly configured TLS and catalog operations. FE Checkstyle passed |
+| PostgreSQL JDBC authentication | The local fixture explicitly selects SCRAM and exercises the actual driver under the Java security overlay. Authentication restrictions are supplied by the fixture, not injected by StarRocks |
+| MariaDB JDBC authentication | The 3.3.2 fixture explicitly selects native-password/caching-SHA2 authentication and its fast responses match BCFIPS-computed bytes. The fixture's restrictedAuth setting rejects other plugins. Missing-provider and readiness/active module faults reject three retries before authentication bytes are emitted. StarRocks does not inject authentication restrictions |
 | Restricted JDK services | Java/native workers assert the exact six-service SUN registration. Default SHA-1/SHA-256/SHA-384/SHA-512 operations reject missing BCFIPS and repeated readiness/active faults. Entropy, certificate collections, policy/JAAS and nonsecurity MD5 compatibility remain available |
 | Java key reload | `JavaCryptoProviderTest` passed, including two fresh JVMs using the production overlay to persist/replay keys, decrypt an existing wrapped key and create a new wrap with an internal IV. Parquet compatibility passed. Full FE crash recovery and native BE rotation were not tested |
 | Hadoop AES-CTR and randomness | Stream round trips and actual BCFIPS cipher/RNG identity passed, incompatible configuration, missing providers and module errors rejected, including cached encryptors/decryptors, randomness and retries |
 | S3A proxy authentication | Actual Hadoop AWS clients rejected Digest/NTLM challenges. A loopback proxy confirmed that Digest received no authentication response and Basic completed authentication. Bucket and JVM proxy credentials retained the restriction. Fresh and cached clients passed readiness/active module-failure checks. Missing authentication-binding dependencies failed without restoring SDK defaults |
 | FE and AWS HTTP authentication | Actual FE shared/cost clients, default AWS S3/STS/Glue transports, Iceberg S3 and the isolated Paimon factory reject Digest, NTLM, Negotiate and Kerberos challenges. Loopback exchanges verify Basic authentication and rejection of MD5 and MD5-sess challenges, including cached clients after a module failure. Failed initialization prevents new clients from falling back |
-| Oracle JDBC authentication | Both pools enforce 12a and JCE settings. Driver-parsed URL downgrade tests pass. The actual 19.18.0.0 authentication helper produces a session key matching BCFIPS PBKDF2-HMAC-SHA512 with MD5 operations blocked. Missing-provider and readiness/active module faults reject three retries without a password response. Remote login and TCPS were not tested |
+| Oracle JDBC authentication | The 12a helper exercises selected authentication primitives. Unsolicited RADIUS/Kerberos in the inspected artifact remains a qualification limitation. StarRocks does not block Oracle connections. See the [driver guidance](java-fips-tls.md#jdbc-configuration-requirements) |
 | OCSP response binding | Valid responses pass through PKIX validation/building and BCJSSE. Revoked, unknown, wrong-serial and wrong-issuer responses are rejected. CRL fallback accepts a valid certificate and rejects a revoked certificate. Caller response maps remain unchanged. The embedded libhdfs and native-worker harness runs the same checks |
 | Certificate constraints | Sixteen chain cases passed through default/explicit BCJSSE trust managers, TLS 1.2/1.3 handshakes and default PKIX building/validation. Email/URI constraints and trailing-dot DNS names were rejected. Supported chains, mixed trust anchors and caller-supplied checkers behaved as expected |
 | Dependency TLS | ABFS/S3A, Paimon's isolated Hadoop factory, Azure and packaged Netty copies selected BCJSSE and generated ClientHello messages. Fresh and cached contexts rejected injected module errors and retries. Explicit Hadoop native TLS was rejected |
