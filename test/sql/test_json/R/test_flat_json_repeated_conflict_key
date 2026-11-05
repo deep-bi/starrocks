@@ -1,0 +1,53 @@
+-- name: test_flat_json_repeated_conflict_key @sequential
+update information_schema.be_configs set value = "true" where name= "enable_json_flat";
+-- result:
+-- !result
+create table t_${uuid0}(id bigint not null, j json not null) primary key(id)
+  distributed by hash(id) buckets 1
+  properties("replication_num"="1");
+-- result:
+-- !result
+insert into t_${uuid0} values
+  (1, parse_json('{"a": 1, "s": "str_01", "x": {"y": 1}}')),
+  (2, parse_json('{"a": 2, "s": "str_02", "x": {"y": 2}}')),
+  (3, parse_json('{"a": 3, "s": "str_03", "x": {"y": 3}}')),
+  (4, parse_json('{"a": 4, "s": "str_04", "x": {"y": 4}}')),
+  (5, parse_json('{"a": 5, "s": "str_05", "x": {"y": 5}}')),
+  (6, parse_json('{"a": 6, "s": "str_06", "x": {"y": 6}}')),
+  (7, parse_json('{"a": 7, "s": "str_07", "x": {"y": 7}}')),
+  (8, parse_json('{"a": 8, "s": "str_08", "x": {"y": 8}}')),
+  (9, parse_json('{"a": 9, "s": "str_09", "x": {"y": 9}}')),
+  (10, parse_json('{"a": 10, "s": "str_10", "x": {"y": 10}}')),
+  (11, parse_json('{"a": 11, "s": "str_11", "x": {"y": 11}}')),
+  (12, parse_json('{"a": 12, "s": "str_12", "x": {"y": 12}}')),
+  (13, parse_json('{"a": 13, "s": "str_13", "x": {"y": 13}}')),
+  (14, parse_json('{"a": 14, "s": "str_14", "x": {"y": 14}}')),
+  (15, parse_json('{"a": 15, "s": "str_15", "x": {"y": 15}}')),
+  (16, parse_json('{"a": 16, "s": "str_16", "x": {"y": 16}}')),
+  (17, parse_json('{"a": 17, "s": "str_17", "x": {"y": 17}}')),
+  (18, parse_json('{"a": 18, "s": "str_18", "x": {"y": 18}}')),
+  (19, parse_json('{"a": 19, "s": "str_19", "x": {"y": 19}}')),
+  (20, parse_json('{"a": 20, "x": 1, "x": 2}'));
+-- result:
+-- !result
+select sum(json_length(j)) from t_${uuid0};
+-- result:
+60
+-- !result
+select count(*) from t_${uuid0} where get_json_string(j, '$.s') is null;
+-- result:
+1
+-- !result
+select get_json_int(j, '$.a') from t_${uuid0} where id = 20;
+-- result:
+20
+-- !result
+update information_schema.be_configs set value = "false" where name= "enable_json_flat";
+-- result:
+-- !result
+drop table t_${uuid0} force;
+-- result:
+-- !result
+CLEANUP {
+  update information_schema.be_configs set value = "false" where name= "enable_json_flat";
+} END CLEANUP
