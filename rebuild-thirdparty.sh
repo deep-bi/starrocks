@@ -1,19 +1,27 @@
 #!/bin/bash
-# Rebuilds a single thirdparty library against the pre-built thirdparty that
-# ships in the starrocks/dev-env-centos7:3.5.11 image, without re-running the
-# full thirdparty/build-thirdparty.sh (which builds everything from scratch).
+# Rebuilds selected thirdparty libraries against the pre-built thirdparty that
+# ships in the StarRocks dev-env image (starrocks/dev-env-<os>:<version>),
+# without re-running the full thirdparty/build-thirdparty.sh (which builds
+# everything from scratch). Library versions come from thirdparty/vars.sh.
 #
-# Usage (inside the starrocks/dev-env-centos7:3.5.11 container):
+# Usage (inside a starrocks/dev-env-* container):
 #   ./rebuild-thirdparty.sh [target]
 #   ./build.sh --be -j$(nproc)
 #
-# With no target, rebuilds every registered library (both libevent and
-# libserdes are always needed together for a BE build with HTTPS + mTLS
-# support). Pass a specific target to rebuild just that one, e.g. while
-# iterating on a single patch. Run with an unknown target to list them.
+# Environment is set up through env.sh, like build.sh, so no exports are
+# needed in the dev-env image. Override STARROCKS_GCC_HOME, JAVA_HOME or
+# STARROCKS_THIRDPARTY (default /var/local/thirdparty) only to change them.
 #
-# To add another target: write a rebuild_<name>() function below and add
-# [<name>]="description" to TARGET_DESCRIPTIONS.
+# With no target, or with `all`, runs every registered target in the order
+# listed in TARGET_DESCRIPTIONS: OpenSSL and its dependants, libevent and
+# libserdes (HTTPS + mTLS), and the OpenSSL FIPS provider that every BE
+# package ships. It needs no input and is safe to re-run: a target whose
+# result is already installed is skipped. Pass a specific target to rebuild
+# just that one, e.g. while iterating on a single patch. Run with an unknown
+# target to list them.
+#
+# To add another target: write a rebuild_<name>() function below and add a
+# "<name>:<description>" entry to TARGET_DESCRIPTIONS.
 
 set -e
 
@@ -28,18 +36,18 @@ error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
 # Each target is a rebuild_<name>() function defined below plus one line
 # here; add both and it becomes selectable, with no other list to update.
-# (Plain array + case, not an associative array, so this runs on bash 3.2 too.)
+# (Plain array, not an associative array, so this runs on bash 3.2 too.)
 #
 # Order matters for `all`: rebuild_openssl3 and rebuild_libevent each end by
 # copying the whole ${SOURCE_TP}/installed tree aside, rebuilding into the
-# copy, then deleting the original and moving the copy back — so they must
-# run before any target (like libserdes) that builds straight into
+# copy, then deleting the original and moving the copy back. They must run
+# before any target (like libserdes) that builds straight into
 # ${SOURCE_TP}/installed in place, or that target's output would be wiped out
 # by the swap. openssl3 goes first so later targets link the new OpenSSL.
 TARGET_DESCRIPTIONS=(
     "openssl3:Rebuild OpenSSL and every library compiled against it (OpenSSL from vars.sh)"
     "libevent:Rebuild libevent with OpenSSL support (needed for BE/CN HTTPS)"
-    "libserdes:Rebuild libserdes against the deep-bi mTLS branch tip"
+    "libserdes:Rebuild libserdes from the deep-bi mTLS fork (SERDES_* in vars.sh)"
     "openssl_fips:Build the OpenSSL 3.1.2 FIPS provider (every BE package ships it)"
 )
 
@@ -47,9 +55,9 @@ usage() {
     echo "Usage: $0 [target]"
     echo ""
     echo "Targets:"
-    printf "  %-10s %s\n" "all" "Rebuild every target below (default)"
+    printf "  %-14s %s\n" "all" "Rebuild every target below (default)"
     for entry in "${TARGET_DESCRIPTIONS[@]}"; do
-        printf "  %-10s %s\n" "${entry%%:*}" "${entry#*:}"
+        printf "  %-14s %s\n" "${entry%%:*}" "${entry#*:}"
     done
 }
 
@@ -70,12 +78,16 @@ fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TP_DIR="${SCRIPT_DIR}/thirdparty"
-SOURCE_TP="${STARROCKS_THIRDPARTY:-/var/local/thirdparty}"
 
-if [ -z "${STARROCKS_GCC_HOME}" ]; then
-    error "STARROCKS_GCC_HOME environment variable is not set"
-    exit 1
-fi
+# same environment as build.sh: env.sh loads custom_env.sh, infers
+# STARROCKS_GCC_HOME and JAVA_HOME when unset and checks the gcc, java,
+# python and mvn versions. STARROCKS_THIRDPARTY is set first because env.sh
+# would otherwise default it to the repo's thirdparty/, not the image's.
+export STARROCKS_HOME="${SCRIPT_DIR}"
+export STARROCKS_THIRDPARTY="${STARROCKS_THIRDPARTY:-/var/local/thirdparty}"
+. "${STARROCKS_HOME}/env.sh"
+SOURCE_TP="${STARROCKS_THIRDPARTY}"
+
 export CC="${STARROCKS_GCC_HOME}/bin/gcc"
 export CXX="${STARROCKS_GCC_HOME}/bin/g++"
 export PATH="${STARROCKS_GCC_HOME}/bin:${PATH}"
@@ -122,7 +134,7 @@ extract_functions() {
     ' "${file}"
 }
 
-# require_files <path>... — fail fast if any of the given files/dirs are missing.
+# require_files <path>...: fail fast if any of the given files/dirs are missing.
 require_files() {
     for f in "$@"; do
         if [ ! -e "${f}" ]; then
@@ -132,6 +144,11 @@ require_files() {
     done
 }
 
+# tp_var <NAME>: value of NAME from vars.sh, read without sourcing it
+tp_var() {
+    grep "^$1=" "${TP_DIR}/vars.sh" | head -1 | cut -d= -f2- | tr -d '"'
+}
+
 #####################################################################
 # openssl3: rebuild OpenSSL and everything compiled against it
 #####################################################################
@@ -139,12 +156,71 @@ require_files() {
 # 1.1.1 headers call functions that 3.0 turned into macros or renamed
 # (SSL_get_peer_certificate, EVP_PKEY_id, EVP_MD_size, ...), so they fail to
 # link or bind to the wrong ABI. Listed in all_packages order. libevent is
-# left out: the prebuilt one has no libevent_openssl and the BE doesn't link
-# it; the libevent target covers the HTTPS variant.
+# left out: the prebuilt one has no libevent_openssl.a, and the libevent
+# target builds it with OpenSSL support.
 OPENSSL3_PACKAGES=(
     openssl curl thrift brpc kerberos sasl grpc arrow librdkafka pulsar
     mariadb aws_cpp_sdk serdes poco azure
 )
+
+# vars.sh archives those packages read: their own sources, c-ares (built
+# inside grpc) and the archives build_arrow hands to arrow as ARROW_*_URL.
+# Everything else in vars.sh (llvm, boost, hadoop, the JDK, ...) is skipped.
+OPENSSL3_ARCHIVES=(
+    OPENSSL CURL THRIFT BRPC KRB5 SASL CARES GRPC ARROW BROTLI GLOG LZ4 SNAPPY
+    ZLIB FLATBUFFERS ZSTD LIBRDKAFKA PULSAR MARIADB AWS_SDK_CPP SERDES POCO AZURE
+)
+
+# make_shadow_tp <dir> <installed> <archive>...
+# Creates a thirdparty dir that build-thirdparty.sh runs from unchanged but
+# that downloads, unpacks and patches only the given archives. Every file is
+# linked from thirdparty/ except vars.sh, whose copy ends by narrowing
+# TP_ARCHIVES. download-thirdparty.sh cds into most sources unconditionally
+# and patches whatever directory it lands in, so each skipped package gets an
+# empty source dir that already carries every patch mark. Archives already in
+# thirdparty/src are linked in rather than downloaded again.
+make_shadow_tp() {
+    local shadow="$1" installed="$2"
+    shift 2
+    local wanted=" $* " f name marks arch archive src
+    mkdir -p "${shadow}/src"
+    : > "${shadow}/archives.txt"
+    for f in "${TP_DIR}"/*; do
+        name=$(basename "${f}")
+        case "${name}" in vars.sh|src|installed) continue ;; esac
+        ln -s "${f}" "${shadow}/${name}"
+    done
+    ln -s "${installed}" "${shadow}/installed"
+    cp "${TP_DIR}/vars.sh" "${shadow}/vars.sh"
+    echo "TP_ARCHIVES=\"$*\"" >> "${shadow}/vars.sh"
+
+    marks=$(grep -oE 'PATCHED_MARK\.[A-Za-z0-9_]+' "${TP_DIR}/download-thirdparty.sh" \
+        | sed 's/^PATCHED_MARK/patched_mark/' | sort -u | tr '\n' ' ')
+    while read -r arch archive src; do
+        if [[ "${wanted}" == *" ${arch} "* ]]; then
+            echo "${archive}" >> "${shadow}/archives.txt"
+            if [ -f "${TP_DIR}/src/${archive}" ]; then
+                ln -s "${TP_DIR}/src/${archive}" "${shadow}/src/${archive}"
+            fi
+        elif [ -n "${src}" ]; then
+            mkdir -p "${shadow}/src/${src}"
+            (cd "${shadow}/src/${src}" && touch patched_mark ${marks})
+        fi
+    done < <(TP_DIR="${TP_DIR}" bash -c '. "${TP_DIR}/vars.sh" > /dev/null
+        for a in ${TP_ARCHIVES}; do n=${a}_NAME; s=${a}_SOURCE; echo "${a} ${!n:--} ${!s}"; done')
+}
+
+# cache_archives <shadow>
+# copies archives the shadow run downloaded into thirdparty/src for next time
+cache_archives() {
+    local shadow="$1" name
+    mkdir -p "${TP_DIR}/src"
+    while read -r name; do
+        if [ -f "${shadow}/src/${name}" ] && [ ! -L "${shadow}/src/${name}" ]; then
+            cp "${shadow}/src/${name}" "${TP_DIR}/src/${name}"
+        fi
+    done < "${shadow}/archives.txt"
+}
 
 # prefixes of symbols libssl/libcrypto export; an undefined one that the new
 # libraries don't define means a caller still compiled against 1.1.1 headers
@@ -184,9 +260,9 @@ check_openssl_symbols() {
 rebuild_openssl3() {
     local custom_tp="${SOURCE_TP}/custom"
     local custom_installed="${custom_tp}/installed"
-    local tp_installed="${TP_DIR}/installed"
+    local shadow_tp="${custom_tp}/thirdparty"
     local want_version
-    want_version=$(grep '^OPENSSL_SOURCE=' "${TP_DIR}/vars.sh" | cut -d= -f2 | tr -d '"' | sed 's/^openssl-//')
+    want_version=$(tp_var OPENSSL_SOURCE | sed 's/^openssl-//')
     if [ -z "${want_version}" ]; then
         error "Could not read OPENSSL_SOURCE from ${TP_DIR}/vars.sh"
         exit 1
@@ -202,15 +278,6 @@ rebuild_openssl3() {
         return 0
     fi
 
-    # build-thirdparty.sh always installs into ${TP_DIR}/installed (vars.sh
-    # hardcodes it), so that path is pointed at the writable copy. A real
-    # directory there is someone's own full build; leave it alone.
-    if [ -e "${tp_installed}" ] && [ ! -L "${tp_installed}" ]; then
-        error "${tp_installed} is a real directory, not a symlink from an earlier run."
-        error "Run thirdparty/build-thirdparty.sh directly against that tree instead."
-        exit 1
-    fi
-
     # Step 1: create writable thirdparty copy. Always fresh: a copy left by a
     # failed run may hold a half-installed package.
     if [ -d "${custom_tp}" ]; then
@@ -222,15 +289,16 @@ rebuild_openssl3() {
     mkdir -p "${custom_tp}"
     cp -a "${SOURCE_TP}/installed" "${custom_installed}"
 
-    ln -sfn "${custom_installed}" "${tp_installed}"
-    trap 'rm -f "'"${tp_installed}"'"' EXIT
-
-    # Step 2: build. download-thirdparty.sh fetches and patches every archive
-    # in vars.sh, not just these, because its patch steps cd into each source
-    # unconditionally; only the listed packages are compiled.
+    # Step 2: build from a shadow thirdparty dir, so build-thirdparty.sh
+    # installs into the copy (vars.sh pins TP_INSTALL_DIR to $TP_DIR/installed)
+    # and downloads only the archives these packages need
+    make_shadow_tp "${shadow_tp}" "${custom_installed}" "${OPENSSL3_ARCHIVES[@]}"
+    info "Downloading ${#OPENSSL3_ARCHIVES[@]} archives (not all of vars.sh):"
+    info "  ${OPENSSL3_ARCHIVES[*]}"
     info "Building ${#OPENSSL3_PACKAGES[@]} packages against OpenSSL ${want_version}:"
     info "  ${OPENSSL3_PACKAGES[*]}"
-    "${TP_DIR}/build-thirdparty.sh" -j "${PARALLEL:-$(nproc)}" "${OPENSSL3_PACKAGES[@]}"
+    "${shadow_tp}/build-thirdparty.sh" -j "${PARALLEL:-$(nproc)}" "${OPENSSL3_PACKAGES[@]}"
+    cache_archives "${shadow_tp}"
 
     # Step 3: verify before touching ${SOURCE_TP}/installed
     info "Verifying installation..."
@@ -250,8 +318,6 @@ rebuild_openssl3() {
     info "No library references OpenSSL symbols missing from ${want_version}"
 
     # Step 4: swap the writable copy into place
-    rm -f "${tp_installed}"
-    trap - EXIT
     rm -rf "${SOURCE_TP}/installed"
     mv "${custom_installed}" "${SOURCE_TP}/installed"
     rm -rf "${custom_tp}"
@@ -263,42 +329,50 @@ rebuild_openssl3() {
 rebuild_libevent() {
     local custom_tp="${SOURCE_TP}/custom"
     local custom_installed="${custom_tp}/installed"
-    local libevent_commit="24236aed01798303745470e6c498bf606e88724a"
-    local libevent_short="24236ae"
-    local libevent_download="https://github.com/libevent/libevent/archive/${libevent_short}.zip"
+    local libevent_download libevent_name libevent_source libevent_md5
+    libevent_download=$(tp_var LIBEVENT_DOWNLOAD)
+    libevent_name=$(tp_var LIBEVENT_NAME)
+    libevent_source=$(tp_var LIBEVENT_SOURCE)
+    libevent_md5=$(tp_var LIBEVENT_MD5SUM)
+    if [ -z "${libevent_download}" ] || [ -z "${libevent_name}" ] || [ -z "${libevent_source}" ] || [ -z "${libevent_md5}" ]; then
+        error "Could not read LIBEVENT_* from ${TP_DIR}/vars.sh"
+        exit 1
+    fi
     local patch_file="${TP_DIR}/patches/libevent_on_free_cb.patch"
 
     require_files "${SOURCE_TP}/installed/lib/libssl.a" "${patch_file}"
 
-    # Step 1: create writable thirdparty copy
-    if [ -d "${custom_installed}" ]; then
-        warn "Custom thirdparty already exists at ${custom_tp}"
-        read -p "Remove and rebuild? (y/N): " -n 1 -r
-        echo
-        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-            info "Keeping existing directory. Skipping copy."
-        else
-            rm -rf "${custom_tp}"
-        fi
+    if [ -f "${SOURCE_TP}/installed/lib/libevent_openssl.a" ] &&
+            grep -q '#define EVENT__HAVE_OPENSSL 1' "${SOURCE_TP}/installed/include/event2/event-config.h" 2>/dev/null; then
+        info "Installed libevent already has OpenSSL support; nothing to do."
+        return 0
     fi
 
-    if [ ! -d "${custom_installed}" ]; then
-        info "Copying pre-built thirdparty to writable location..."
-        info "This takes a few minutes (~3-7GB depending on the image)."
-        mkdir -p "${custom_installed}"
-        cp -r "${SOURCE_TP}/installed/"* "${custom_installed}/"
-        info "Done. Size: $(du -sh "${custom_tp}" | cut -f1)"
+    # Step 1: create writable thirdparty copy. Always fresh, as for openssl3: a
+    # copy left by a failed run may hold a half-installed package.
+    if [ -d "${custom_tp}" ]; then
+        warn "Removing leftover ${custom_tp} from an earlier run"
+        rm -rf "${custom_tp}"
     fi
+    info "Copying pre-built thirdparty to writable location..."
+    info "This takes a few minutes ($(du -sh "${SOURCE_TP}/installed" | cut -f1))."
+    mkdir -p "${custom_tp}"
+    cp -a "${SOURCE_TP}/installed" "${custom_installed}"
 
     # Step 2: download libevent source
     local build_dir="/tmp/libevent-rebuild-$$"
+    rm -rf "${build_dir}"
     mkdir -p "${build_dir}"
     cd "${build_dir}"
 
-    info "Downloading libevent (commit ${libevent_short})..."
-    wget -q "${libevent_download}"
-    unzip -q "${libevent_short}.zip"
-    cd "libevent-${libevent_commit}"
+    info "Downloading ${libevent_name}..."
+    wget -q --tries=3 "${libevent_download}" -O "${libevent_name}"
+    if [ "$(md5sum "${libevent_name}" | cut -d' ' -f1)" != "${libevent_md5}" ]; then
+        error "${libevent_name} md5sum does not match LIBEVENT_MD5SUM"
+        exit 1
+    fi
+    unzip -q "${libevent_name}"
+    cd "${libevent_source}"
 
     # Step 3: apply StarRocks patch
     info "Applying StarRocks libevent patch..."
@@ -357,7 +431,7 @@ rebuild_libevent() {
 }
 
 #####################################################################
-# libserdes: rebuild against the deep-bi mTLS branch tip
+# libserdes: rebuild from the deep-bi mTLS fork
 #####################################################################
 rebuild_libserdes() {
     require_files "${TP_DIR}/vars.sh" "${TP_DIR}/build-thirdparty.sh"
@@ -365,16 +439,24 @@ rebuild_libserdes() {
     # vars.sh pins TP_SOURCE_DIR/TP_INSTALL_DIR under thirdparty/; only the
     # SERDES_* download coordinates are needed here, so grab those and drop
     # the rest rather than adopting its directory layout.
-    local serdes_download serdes_name serdes_source patch_file
-    serdes_download=$(grep '^SERDES_DOWNLOAD=' "${TP_DIR}/vars.sh" | cut -d'"' -f2)
-    serdes_name=$(grep '^SERDES_NAME=' "${TP_DIR}/vars.sh" | cut -d'"' -f2)
-    serdes_source=$(grep '^SERDES_SOURCE=' "${TP_DIR}/vars.sh" | cut -d'"' -f2)
-    if [ -z "${serdes_download}" ] || [ -z "${serdes_name}" ] || [ -z "${serdes_source}" ]; then
-        error "Could not read SERDES_DOWNLOAD/SERDES_NAME/SERDES_SOURCE from ${TP_DIR}/vars.sh"
+    local serdes_download serdes_name serdes_source serdes_md5 patch_file
+    serdes_download=$(tp_var SERDES_DOWNLOAD)
+    serdes_name=$(tp_var SERDES_NAME)
+    serdes_source=$(tp_var SERDES_SOURCE)
+    serdes_md5=$(tp_var SERDES_MD5SUM)
+    if [ -z "${serdes_download}" ] || [ -z "${serdes_name}" ] || [ -z "${serdes_source}" ] || [ -z "${serdes_md5}" ]; then
+        error "Could not read SERDES_DOWNLOAD/SERDES_NAME/SERDES_SOURCE/SERDES_MD5SUM from ${TP_DIR}/vars.sh"
         exit 1
     fi
     patch_file="${TP_DIR}/patches/libserdes-7.3.1.patch"
     require_files "${patch_file}"
+
+    # openssl3 builds serdes from the same vars.sh, so after it ran (or on a
+    # second run) the mTLS build is already installed
+    if grep -q "serdes_conf_set_client_cert" "${SOURCE_TP}/installed/include/libserdes/serdes.h" 2>/dev/null; then
+        info "Installed libserdes already has mTLS support; nothing to do."
+        return 0
+    fi
 
     for lib in libjansson.a libavro.a librdkafka.a librdkafka++.a libssl.a libcrypto.a; do
         if [ ! -f "${SOURCE_TP}/installed/lib/${lib}" ] && [ ! -f "${SOURCE_TP}/installed/lib64/${lib}" ]; then
@@ -383,13 +465,19 @@ rebuild_libserdes() {
         fi
     done
 
-    # Step 1: download the branch tip source into a scratch dir
+    # Step 1: download the source into a fresh scratch dir. PIDs repeat in a
+    # new container, so a dir left by a failed run could otherwise be reused.
     local build_dir="/tmp/libserdes-rebuild-$$"
+    rm -rf "${build_dir}"
     mkdir -p "${build_dir}"
     cd "${build_dir}"
 
-    info "Downloading current libserdes (feature/mTLS-implementation)..."
-    wget --progress=dot:mega --tries=3 --no-check-certificate "${serdes_download}" -O "${serdes_name}"
+    info "Downloading ${serdes_name}..."
+    wget --progress=dot:mega --tries=3 "${serdes_download}" -O "${serdes_name}"
+    if [ "$(md5sum "${serdes_name}" | cut -d' ' -f1)" != "${serdes_md5}" ]; then
+        error "${serdes_name} md5sum does not match SERDES_MD5SUM"
+        exit 1
+    fi
 
     case "${serdes_name}" in
         *.tar.gz|*.tgz) tar xzf "${serdes_name}" ;;
@@ -397,15 +485,17 @@ rebuild_libserdes() {
         *) error "Don't know how to unpack ${serdes_name}"; exit 1 ;;
     esac
 
-    # GitHub branch tarballs unpack to <repo>-<branch-with-slashes-turned-to-dashes>,
-    # not to $serdes_source; find whatever single directory came out.
+    # tag tarballs unpack to $serdes_source already; branch tarballs unpack to
+    # <repo>-<branch-with-slashes-turned-to-dashes>, so rename whatever came out
     local extracted_dir
     extracted_dir=$(find . -mindepth 1 -maxdepth 1 -type d | head -1)
     if [ -z "${extracted_dir}" ]; then
         error "Nothing extracted from ${serdes_name}"
         exit 1
     fi
-    mv "${extracted_dir}" "${serdes_source}"
+    if [ "${extracted_dir#./}" != "${serdes_source}" ]; then
+        mv "${extracted_dir}" "${serdes_source}"
+    fi
 
     info "Applying StarRocks libserdes patch..."
     cd "${serdes_source}"
@@ -460,7 +550,7 @@ rebuild_libserdes() {
     fi
     if ! grep -q "serdes_conf_set_client_cert" "${TP_INSTALL_DIR}/include/libserdes/serdes.h"; then
         error "serdes_conf_set_client_cert not found in installed serdes.h!"
-        error "The feature/mTLS-implementation branch may not have this symbol yet."
+        error "SERDES_DOWNLOAD in vars.sh must point at the deep-bi libserdes fork."
         exit 1
     fi
     info "serdes_conf_set_client_cert: found in ${TP_INSTALL_DIR}/include/libserdes/serdes.h"
@@ -478,17 +568,25 @@ rebuild_openssl_fips() {
     require_files "${TP_DIR}/vars.sh" "${TP_DIR}/build-thirdparty.sh"
 
     local fips_download fips_name fips_source fips_md5
-    fips_download=$(grep '^OPENSSL_FIPS_DOWNLOAD=' "${TP_DIR}/vars.sh" | cut -d'"' -f2)
-    fips_name=$(grep '^OPENSSL_FIPS_NAME=' "${TP_DIR}/vars.sh" | cut -d= -f2 | tr -d '"')
-    fips_source=$(grep '^OPENSSL_FIPS_SOURCE=' "${TP_DIR}/vars.sh" | cut -d= -f2 | tr -d '"')
-    fips_md5=$(grep '^OPENSSL_FIPS_MD5SUM=' "${TP_DIR}/vars.sh" | cut -d'"' -f2)
+    fips_download=$(tp_var OPENSSL_FIPS_DOWNLOAD)
+    fips_name=$(tp_var OPENSSL_FIPS_NAME)
+    fips_source=$(tp_var OPENSSL_FIPS_SOURCE)
+    fips_md5=$(tp_var OPENSSL_FIPS_MD5SUM)
     if [ -z "${fips_download}" ] || [ -z "${fips_name}" ] || [ -z "${fips_source}" ] || [ -z "${fips_md5}" ]; then
         error "Could not read OPENSSL_FIPS_* from ${TP_DIR}/vars.sh"
         exit 1
     fi
 
+    local dest="${SOURCE_TP}/installed/openssl-fips"
+    if [ -f "${dest}/lib/ossl-modules/fips.so" ] &&
+            LD_LIBRARY_PATH="${dest}/lib" "${dest}/bin/openssl" version 2>/dev/null | grep -q "^OpenSSL ${fips_source#openssl-} "; then
+        info "FIPS provider from ${fips_source} already installed; nothing to do."
+        return 0
+    fi
+
     # Step 1: download and check the exact tarball the security policy names
     local build_dir="/tmp/openssl-fips-rebuild-$$"
+    rm -rf "${build_dir}"
     mkdir -p "${build_dir}"
     cd "${build_dir}"
     info "Downloading ${fips_name}..."
@@ -522,7 +620,6 @@ rebuild_openssl_fips() {
 
     # Step 3: verify the module reports the validated version and passes its
     # self-tests; the throwaway fipsmodule.cnf is never shipped
-    local dest="${TP_INSTALL_DIR}/openssl-fips"
     info "Verifying installation..."
     local tmp_cnf="${build_dir}/fipsmodule.cnf"
     if ! LD_LIBRARY_PATH="${dest}/lib" "${dest}/bin/openssl" fipsinstall -module "${dest}/lib/ossl-modules/fips.so" \

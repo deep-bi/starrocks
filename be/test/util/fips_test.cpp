@@ -24,7 +24,7 @@
 namespace starrocks {
 
 // unit tests have no fips.so, so only the off path and the refusal paths are testable here; the on
-// path is covered by starting a packaged build (see FIPS_PLAN.md validation)
+// path is covered by starting a packaged build with enable_fips_mode = true
 TEST(FipsTest, disabled_by_default) {
     ASSERT_FALSE(is_fips_mode_enabled());
     ASSERT_EQ("disabled", fips_mode_description());

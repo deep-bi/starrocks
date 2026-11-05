@@ -87,6 +87,9 @@ else
     PARALLEL=$[$(nproc)/4+1]
 fi
 
+echo "Building libserdes ..."
+./thirdparty/build-libserdes.sh
+
 # Check args
 usage() {
   echo "
