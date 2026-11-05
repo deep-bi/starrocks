@@ -406,13 +406,12 @@ public class BackupJobMaterializedViewTest {
             Assertions.fail(e.getMessage());
         }
 
-        Assertions.assertNull(job.getBackupMeta());
-        Assertions.assertNull(job.getJobInfo());
-
         // 7. upload_info
         job.run();
         Assertions.assertEquals(Status.OK, job.getStatus());
         Assertions.assertEquals(BackupJobState.FINISHED, job.getState());
+        Assertions.assertNull(job.getBackupMeta());
+        Assertions.assertNull(job.getJobInfo());
 
         if (job.getLocalJobDirPath() != null) {
             pathsNeedToBeDeleted.add(job.getLocalJobDirPath());
