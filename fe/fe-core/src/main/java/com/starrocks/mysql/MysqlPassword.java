@@ -21,12 +21,10 @@ import com.google.common.base.Preconditions;
 import com.google.common.base.Strings;
 import com.starrocks.common.ErrorCode;
 import com.starrocks.common.ErrorReportException;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
+import com.starrocks.common.util.CryptoUtils;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
 import java.util.Arrays;
 
@@ -72,7 +70,6 @@ import java.util.Arrays;
 //
 //          this three steps are done in check_scramble()
 public class MysqlPassword {
-    private static final Logger LOG = LogManager.getLogger(MysqlPassword.class);
     public static final byte[] EMPTY_PASSWORD = new byte[0];
     public static final int SCRAMBLE_LENGTH = 20;
     public static final int SCRAMBLE_LENGTH_HEX_LENGTH = 2 * SCRAMBLE_LENGTH + 1;
@@ -81,7 +78,7 @@ public class MysqlPassword {
             '8', '9', 'A', 'B', 'C', 'D', 'E', 'F'};
 
     public static byte[] createRandomString() {
-        SecureRandom random = new SecureRandom();
+        SecureRandom random = CryptoUtils.secureRandom();
         byte[] bytes = new byte[SCRAMBLE_LENGTH];
         random.nextBytes(bytes);
         // NOTE: MySQL challenge string can't contain 0.
@@ -125,13 +122,7 @@ public class MysqlPassword {
     //   0  password is correct
     //   !0  password is invalid
     public static boolean checkScramble(byte[] scramble, byte[] message, byte[] hashStage2) {
-        MessageDigest md = null;
-        try {
-            md = MessageDigest.getInstance("SHA-1");
-        } catch (NoSuchAlgorithmException e) {
-            LOG.warn("No SHA-1 Algorithm when compute password.");
-            return false;
-        }
+        MessageDigest md = CryptoUtils.messageDigest("SHA-1");
         // compute result1: XOR(scramble, SHA-1 (public_seed + hashStage2))
         md.update(message);
         md.update(hashStage2);
@@ -148,40 +139,18 @@ public class MysqlPassword {
     // MySQL client use this function to form scramble password
     // password: plaintext password
     public static byte[] scramble(byte[] seed, String password) {
-        byte[] scramblePassword = null;
-        try {
-            byte[] passBytes = password.getBytes(StandardCharsets.UTF_8);
-            MessageDigest md = MessageDigest.getInstance("SHA-1");
-            byte[] hashStage1 = md.digest(passBytes);
-            md.reset();
-            byte[] hashStage2 = md.digest(hashStage1);
-            md.reset();
-            md.update(seed);
-            scramblePassword = xorCrypt(hashStage1, md.digest(hashStage2));
-        } catch (NoSuchAlgorithmException e) {
-            // No SHA-1 algorithm
-            LOG.warn("No SHA-1 Algorithm when compute password.");
-        }
-
-        return scramblePassword;
+        byte[] passBytes = password.getBytes(StandardCharsets.UTF_8);
+        MessageDigest md = CryptoUtils.messageDigest("SHA-1");
+        byte[] hashStage1 = md.digest(passBytes);
+        byte[] hashStage2 = md.digest(hashStage1);
+        md.update(seed);
+        return xorCrypt(hashStage1, md.digest(hashStage2));
     }
 
     // Convert password to hash code to set password
     private static byte[] twoStageHash(String password) {
-        try {
-            byte[] passBytes = password.getBytes(StandardCharsets.UTF_8);
-            MessageDigest md = MessageDigest.getInstance("SHA-1");
-            byte[] hashStage1 = md.digest(passBytes);
-            md.reset();
-            byte[] hashStage2 = md.digest(hashStage1);
-
-            return hashStage2;
-        } catch (NoSuchAlgorithmException e) {
-            // No SHA-1 algorithm
-            LOG.warn("No SHA-1 Algorithm when compute password.");
-        }
-
-        return null;
+        MessageDigest md = CryptoUtils.messageDigest("SHA-1");
+        return md.digest(md.digest(password.getBytes(StandardCharsets.UTF_8)));
     }
 
     // covert octet 'from' to hex 'to'

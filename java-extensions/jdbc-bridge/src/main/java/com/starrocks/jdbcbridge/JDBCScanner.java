@@ -14,8 +14,11 @@
 
 package com.starrocks.jdbcbridge;
 
+import com.starrocks.connector.share.security.FipsTlsCryptoProvider;
+import com.starrocks.connector.share.security.JdbcSecurityPolicy;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
+import com.zaxxer.hikari.util.DriverDataSource;
 
 import java.io.File;
 import java.lang.reflect.Array;
@@ -88,6 +91,7 @@ public class JDBCScanner {
     }
 
     public void open() throws Exception {
+        FipsTlsCryptoProvider.checkReady();
         String cacheKey = computeCacheKey(scanContext.getUser(), scanContext.getPassword(), scanContext.getJdbcURL());
         URL driverURL = new File(driverLocation).toURI().toURL();
         DataSourceCache.DataSourceCacheItem cacheItem = DataSourceCache.getInstance().getSource(cacheKey, () -> {
@@ -98,6 +102,9 @@ public class JDBCScanner {
             config.setJdbcUrl(scanContext.getJdbcURL());
             config.setUsername(scanContext.getUser());
             config.setPassword(scanContext.getPassword());
+            config.setDataSource(JdbcSecurityPolicy.guard(new DriverDataSource(config.getJdbcUrl(),
+                    scanContext.getDriverClassName(), config.getDataSourceProperties(),
+                    config.getUsername(), config.getPassword())));
             config.setMaximumPoolSize(scanContext.getConnectionPoolSize());
             config.setMinimumIdle(scanContext.getMinimumIdleConnections());
             config.setIdleTimeout(scanContext.getConnectionIdleTimeoutMs());

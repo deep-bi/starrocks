@@ -28,6 +28,8 @@ public class SimpleLDAPSecurityIntegration extends SecurityIntegration {
             = "authentication_ldap_simple_ssl_conn_trust_store_path";
     public static final String AUTHENTICATION_LDAP_SIMPLE_SSL_CONN_TRUST_STORE_PWD
             = "authentication_ldap_simple_ssl_conn_trust_store_pwd";
+    public static final String AUTHENTICATION_LDAP_SIMPLE_SSL_CONN_TRUST_STORE_TYPE
+            = "authentication_ldap_simple_ssl_conn_trust_store_type";
     public static final String AUTHENTICATION_LDAP_SIMPLE_BIND_ROOT_DN = "authentication_ldap_simple_bind_root_dn";
     public static final String AUTHENTICATION_LDAP_SIMPLE_BIND_ROOT_PWD = "authentication_ldap_simple_bind_root_pwd";
     public static final String AUTHENTICATION_LDAP_SIMPLE_BIND_BASE_DN = "authentication_ldap_simple_bind_base_dn";
@@ -85,7 +87,9 @@ public class SimpleLDAPSecurityIntegration extends SecurityIntegration {
                 null,
                 ldapBindDnPattern,
                 ldapGroupSource,
-                ldapMemberOfAttr);
+                ldapMemberOfAttr,
+                propertyMap.getOrDefault(AUTHENTICATION_LDAP_SIMPLE_SSL_CONN_TRUST_STORE_TYPE,
+                        Config.authentication_ldap_simple_ssl_conn_trust_store_type));
     }
 
     @Override

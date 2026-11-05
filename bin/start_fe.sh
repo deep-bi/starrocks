@@ -146,6 +146,9 @@ fi
 
 JAVA=$JAVA_HOME/bin/java
 
+python3 "$STARROCKS_HOME/security/check-java-fips.py" \
+    --home "$STARROCKS_HOME" --component fe --preflight >/dev/null || exit 1
+
 # check java version and choose correct JAVA_OPTS
 JAVA_VERSION=$(jdk_version)
 if [[ "$JAVA_VERSION" -lt $MIN_JDK_VERSION ]]; then
@@ -223,6 +226,10 @@ done
 # like org.apache.thrift.transport.layered.TFramedTransport).
 export CLASSPATH=${STARROCKS_HOME}/lib/fe-core-4.1.jar:${STARROCKS_HOME}/lib/starrocks-hadoop-ext.jar:${CLASSPATH}:${STARROCKS_HOME}/lib:${STARROCKS_HOME}/conf
 
+python3 "$STARROCKS_HOME/security/check-java-fips.py" \
+    --home "$STARROCKS_HOME" --component fe --options="$final_java_opt" || exit 1
+set -f
+
 pidfile=$PID_DIR/fe.pid
 
 if [ -f $pidfile ]; then
@@ -269,7 +276,7 @@ fi
 export SYS_LOG_TO_CONSOLE=${RUN_LOG_CONSOLE}
 
 echo "using java version $JAVA_VERSION"
-echo $final_java_opt
+echo "Java FIPS options validated against the packaged configuration"
 echo "start time: $(date), server uptime: $(uptime)"
 
 # StarRocksFE java process will write its process id into $pidfile

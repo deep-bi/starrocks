@@ -14,6 +14,7 @@
 
 package com.starrocks.connector.iceberg.jdbc;
 
+import com.starrocks.common.util.CryptoTestExtension;
 import com.starrocks.qe.ConnectContext;
 import mockit.Expectations;
 import mockit.Injectable;
@@ -25,10 +26,12 @@ import org.apache.iceberg.jdbc.JdbcCatalog;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 
 import java.util.HashMap;
 import java.util.Map;
 
+@ExtendWith(CryptoTestExtension.class)
 public class IcebergJdbcCatalogRegisterTableTest {
     @Mocked
     private JdbcCatalog jdbcCatalog;
@@ -42,7 +45,7 @@ public class IcebergJdbcCatalogRegisterTableTest {
     @BeforeEach
     public void setUp() {
         Map<String, String> properties = new HashMap<>();
-        properties.put("iceberg.catalog.uri", "jdbc:postgresql://localhost:5432/iceberg_catalog");
+        properties.put("iceberg.catalog.uri", "jdbc:postgresql://localhost:5432/iceberg_catalog?sslmode=disable");
         properties.put("iceberg.catalog.jdbc.user", "iceberg");
         properties.put("iceberg.catalog.jdbc.password", "password");
         properties.put("iceberg.catalog.warehouse", "s3://my_bucket/warehouse_location");

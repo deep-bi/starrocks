@@ -16,20 +16,17 @@ package com.starrocks.mysql.ssl;
 
 import com.google.common.base.Strings;
 import com.starrocks.common.Config;
+import com.starrocks.common.util.CryptoUtils;
+import com.starrocks.common.util.TlsUtils;
 import com.starrocks.http.SslUtil;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
-import java.io.FileInputStream;
-import java.io.InputStream;
-import java.security.KeyStore;
-import java.security.SecureRandom;
 import javax.net.ssl.KeyManagerFactory;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLEngine;
 import javax.net.ssl.SSLParameters;
 import javax.net.ssl.TrustManager;
-import javax.net.ssl.TrustManagerFactory;
 
 public class SSLContextLoader {
     private static final Logger LOG = LogManager.getLogger(SSLContextLoader.class);
@@ -38,9 +35,15 @@ public class SSLContextLoader {
     private static volatile String[] filteredCiphers;
 
     public static void load() throws Exception {
+        sslContext = null;
+        filteredCiphers = null;
+        if (Config.ssl_force_secure_transport && Strings.isNullOrEmpty(Config.ssl_keystore_location)) {
+            throw new IllegalArgumentException("MySQL secure transport requires ssl_keystore_location");
+        }
         if (!Strings.isNullOrEmpty(Config.ssl_keystore_location)) {
-            sslContext = createSSLContext();
-            filteredCiphers = filterCiphers(sslContext);
+            SSLContext candidate = createSSLContext();
+            filteredCiphers = filterCiphers(candidate);
+            sslContext = candidate;
         }
     }
 
@@ -50,42 +53,36 @@ public class SSLContextLoader {
 
     public static SSLEngine newServerEngine() {
         SSLEngine engine = sslContext.createSSLEngine();
-        SSLParameters parameters = sslContext.getSupportedSSLParameters();
+        SSLParameters parameters = sslContext.getDefaultSSLParameters();
         parameters.setCipherSuites(filteredCiphers);
         engine.setSSLParameters(parameters);
+        engine.setEnabledProtocols(new String[] {"TLSv1.2", "TLSv1.3"});
         return engine;
     }
 
     private static SSLContext createSSLContext() throws Exception {
-        KeyStore keyStore = KeyStore.getInstance("JKS");
-        try (InputStream keyStoreIS = new FileInputStream(Config.ssl_keystore_location)) {
-            keyStore.load(keyStoreIS, Config.ssl_keystore_password.toCharArray());
-        }
-        KeyManagerFactory kmf = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm());
-        kmf.init(keyStore, Config.ssl_key_password.toCharArray());
-
-        SSLContext sslContext = SSLContext.getInstance("TLSv1.2");
+        KeyManagerFactory kmf = TlsUtils.keyManagers(Config.ssl_keystore_location, Config.ssl_keystore_type,
+                Config.ssl_keystore_password, Config.ssl_key_password);
+        SSLContext sslContext = CryptoUtils.sslContext("TLSv1.2");
         TrustManager[] trustManagers = null;
         if (!Strings.isNullOrEmpty(Config.ssl_truststore_location)) {
             trustManagers = createTrustManagers(Config.ssl_truststore_location, Config.ssl_truststore_password);
         }
-        sslContext.init(kmf.getKeyManagers(), trustManagers, new SecureRandom());
+        if (trustManagers == null) {
+            trustManagers = TlsUtils.trustManagers(null).getTrustManagers();
+        }
+        sslContext.init(kmf.getKeyManagers(), trustManagers, CryptoUtils.secureRandom());
 
         return sslContext;
     }
 
     private static String[] filterCiphers(SSLContext context) {
-        String[] supportedCiphers = context.getSupportedSSLParameters().getCipherSuites();
+        String[] supportedCiphers = context.getDefaultSSLParameters().getCipherSuites();
         return SslUtil.filterCipherSuites(supportedCiphers);
     }
 
     private static TrustManager[] createTrustManagers(String filepath, String keystorePassword) throws Exception {
-        KeyStore trustStore = KeyStore.getInstance("JKS");
-        try (InputStream trustStoreIS = new FileInputStream(filepath)) {
-            trustStore.load(trustStoreIS, keystorePassword.toCharArray());
-        }
-        TrustManagerFactory trustFactory = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
-        trustFactory.init(trustStore);
-        return trustFactory.getTrustManagers();
+        return TlsUtils.trustManagers(TlsUtils.trustStore(filepath, Config.ssl_truststore_type, keystorePassword))
+                .getTrustManagers();
     }
 }

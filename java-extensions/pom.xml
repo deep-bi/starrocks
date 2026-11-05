@@ -66,26 +66,53 @@
         <lz4-java.version>1.11.4</lz4-java.version>
         <httpclient5.version>5.6.4</httpclient5.version>
         <httpcore5.version>5.4.3</httpcore5.version>
-        <bouncycastle.version>1.86</bouncycastle.version>
         <thrift.version>0.24.0</thrift.version>
     </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>org.bouncycastle</groupId>
+            <artifactId>bc-fips</artifactId>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.bouncycastle</groupId>
+            <artifactId>bcutil-fips</artifactId>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.bouncycastle</groupId>
+            <artifactId>bctls-fips</artifactId>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.bouncycastle</groupId>
+            <artifactId>bcpkix-fips</artifactId>
+            <scope>provided</scope>
+        </dependency>
+    </dependencies>
 
     <dependencyManagement>
         <dependencies>
             <dependency>
                 <groupId>org.bouncycastle</groupId>
-                <artifactId>bcprov-jdk18on</artifactId>
-                <version>${bouncycastle.version}</version>
+                <artifactId>bc-fips</artifactId>
+                <version>2.1.1</version>
             </dependency>
             <dependency>
                 <groupId>org.bouncycastle</groupId>
-                <artifactId>bcpkix-jdk18on</artifactId>
-                <version>${bouncycastle.version}</version>
+                <artifactId>bcutil-fips</artifactId>
+                <version>2.1.8</version>
             </dependency>
             <dependency>
                 <groupId>org.bouncycastle</groupId>
-                <artifactId>bcutil-jdk18on</artifactId>
-                <version>${bouncycastle.version}</version>
+                <artifactId>bctls-fips</artifactId>
+                <version>2.1.25</version>
+            </dependency>
+            <dependency>
+                <groupId>org.bouncycastle</groupId>
+                <artifactId>bcpkix-fips</artifactId>
+                <version>2.1.13</version>
             </dependency>
 
             <!-- jni connector -->
@@ -175,6 +202,10 @@
                 <version>${hadoop.version}</version>
                 <exclusions>
                     <exclusion>
+                        <groupId>org.bouncycastle</groupId>
+                        <artifactId>*</artifactId>
+                    </exclusion>
+                    <exclusion>
                         <groupId>org.apache.zookeeper</groupId>
                         <artifactId>zookeeper</artifactId>
                     </exclusion>
@@ -204,8 +235,7 @@
                         <groupId>io.netty</groupId>
                         <artifactId>netty-handler</artifactId>
                     </exclusion>
-                    <!-- https://github.com/StarRocks/starrocks/issues/71898 -->
-                    <!-- FIXME: add it back when the openssl in thirdparty upgraded to 3.x -->
+                    <!-- Hadoop TLS must use BCJSSE, including ABFS's default mode. -->
                     <exclusion>
                         <groupId>org.wildfly.openssl</groupId>
                         <artifactId>wildfly-openssl</artifactId>
@@ -244,7 +274,7 @@
                         <groupId>org.apache.hadoop</groupId>
                         <artifactId>hadoop-common</artifactId>
                     </exclusion>
-                    <!-- FIXME: add it back when the openssl in thirdparty upgraded to 3.x -->
+                    <!-- Keep Hadoop TLS inside the selected Java provider. -->
                     <exclusion>
                         <groupId>org.wildfly.openssl</groupId>
                         <artifactId>wildfly-openssl</artifactId>
@@ -370,7 +400,7 @@
                 <artifactId>hadoop-azure</artifactId>
                 <version>${hadoop.version}</version>
                 <exclusions>
-                    <!-- FIXME: add it back when the openssl in thirdparty upgraded to 3.x -->
+                    <!-- Keep Hadoop TLS inside the selected Java provider. -->
                     <exclusion>
                         <groupId>org.wildfly.openssl</groupId>
                         <artifactId>wildfly-openssl</artifactId>
@@ -383,7 +413,7 @@
                 <artifactId>hadoop-azure-datalake</artifactId>
                 <version>${hadoop.version}</version>
                 <exclusions>
-                    <!-- FIXME: add it back when the openssl in thirdparty upgraded to 3.x -->
+                    <!-- Keep Hadoop TLS inside the selected Java provider. -->
                     <exclusion>
                         <groupId>org.wildfly.openssl</groupId>
                         <artifactId>wildfly-openssl</artifactId>
@@ -681,9 +711,42 @@
         <plugins>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-dependency-plugin</artifactId>
+                <configuration>
+                    <!-- Readers use the provider copies on the parent service classpath -->
+                    <includeScope>runtime</includeScope>
+                </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-enforcer-plugin</artifactId>
                 <version>3.5.0</version>
                 <executions>
+                    <execution>
+                        <id>ban-ordinary-bouncycastle</id>
+                        <goals>
+                            <goal>enforce</goal>
+                        </goals>
+                        <configuration>
+                            <rules>
+                                <bannedDependencies>
+                                    <excludes>
+                                        <exclude>org.bouncycastle:*</exclude>
+                                        <exclude>org.wildfly.openssl:*</exclude>
+                                        <exclude>com.qcloud.cos:*</exclude>
+                                        <exclude>com.qcloud:*</exclude>
+                                        <exclude>com.tencentcloudapi:*</exclude>
+                                    </excludes>
+                                    <includes>
+                                        <include>org.bouncycastle:bc-fips:[2.1.1]</include>
+                                        <include>org.bouncycastle:bcutil-fips:[2.1.8]</include>
+                                        <include>org.bouncycastle:bctls-fips:[2.1.25]</include>
+                                        <include>org.bouncycastle:bcpkix-fips:[2.1.13]</include>
+                                    </includes>
+                                </bannedDependencies>
+                            </rules>
+                        </configuration>
+                    </execution>
                     <execution>
                         <id>ban-vulnerable-dependencies</id>
                         <goals>
@@ -693,7 +756,7 @@
                             <rules>
                                 <bannedDependencies>
                                     <excludes>
-                                        <!-- superseded by bcprov-jdk18on; 1.70 carries multiple open CVEs -->
+                                        <!-- Ordinary BC conflicts with the selected FIPS provider -->
                                         <exclude>org.bouncycastle:bcprov-jdk15on</exclude>
                                         <!-- junit must never leak into runtime libs (CVE-2020-15250);
                                              test scope stays allowed -->

@@ -15,8 +15,12 @@
 package com.starrocks.http;
 
 
+import com.starrocks.common.util.TlsUtils;
+import com.starrocks.connector.share.security.HttpAuthenticationPolicy;
+import org.apache.http.HttpRequest;
+import org.apache.http.HttpResponse;
 import org.apache.http.HttpStatus;
-import org.apache.http.client.config.AuthSchemes;
+import org.apache.http.ProtocolException;
 import org.apache.http.client.config.CookieSpecs;
 import org.apache.http.client.config.RequestConfig;
 import org.apache.http.client.methods.CloseableHttpResponse;
@@ -24,29 +28,25 @@ import org.apache.http.client.methods.HttpGet;
 import org.apache.http.client.methods.HttpPost;
 import org.apache.http.client.methods.HttpRequestBase;
 import org.apache.http.client.methods.HttpUriRequest;
+import org.apache.http.client.protocol.HttpClientContext;
 import org.apache.http.config.Registry;
 import org.apache.http.config.RegistryBuilder;
 import org.apache.http.conn.socket.ConnectionSocketFactory;
 import org.apache.http.conn.socket.PlainConnectionSocketFactory;
-import org.apache.http.conn.ssl.NoopHostnameVerifier;
 import org.apache.http.conn.ssl.SSLConnectionSocketFactory;
-import org.apache.http.conn.ssl.TrustSelfSignedStrategy;
 import org.apache.http.entity.AbstractHttpEntity;
 import org.apache.http.impl.client.CloseableHttpClient;
 import org.apache.http.impl.client.DefaultHttpRequestRetryHandler;
-import org.apache.http.impl.client.HttpClients;
+import org.apache.http.impl.client.DefaultRedirectStrategy;
 import org.apache.http.impl.conn.PoolingHttpClientConnectionManager;
-import org.apache.http.ssl.SSLContextBuilder;
+import org.apache.http.protocol.HttpContext;
 import org.apache.http.util.EntityUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
-import java.security.KeyManagementException;
-import java.security.KeyStoreException;
-import java.security.NoSuchAlgorithmException;
-import java.util.Arrays;
+import java.security.GeneralSecurityException;
 import java.util.Map;
 import java.util.Objects;
 import javax.net.ssl.SSLContext;
@@ -71,28 +71,38 @@ public class HttpUtils {
 
         RequestConfig  requestConfig = RequestConfig.custom().setCookieSpec(CookieSpecs.IGNORE_COOKIES)
                 .setExpectContinueEnabled(Boolean.TRUE)
-                .setTargetPreferredAuthSchemes(Arrays.asList(AuthSchemes.NTLM, AuthSchemes.DIGEST, AuthSchemes.SPNEGO))
-                .setProxyPreferredAuthSchemes(Arrays.asList(AuthSchemes.BASIC, AuthSchemes.SPNEGO))
                 .setConnectTimeout(5000)
                 .setSocketTimeout(5000)
                 .setConnectionRequestTimeout(5000)
                 .setRedirectsEnabled(true)
                 .build();
 
-        return HttpClients.custom()
+        return HttpAuthenticationPolicy.clientBuilder()
                 .setConnectionManager(CLIENT_CONNECTION_MANAGER)
                 .setDefaultRequestConfig(requestConfig)
+                .setRedirectStrategy(new DefaultRedirectStrategy() {
+                    @Override
+                    public HttpUriRequest getRedirect(HttpRequest request, HttpResponse response, HttpContext context)
+                            throws ProtocolException {
+                        HttpUriRequest redirect = super.getRedirect(request, response, context);
+                        if ("https".equalsIgnoreCase(HttpClientContext.adapt(context).getTargetHost().getSchemeName())
+                                && !"https".equalsIgnoreCase(redirect.getURI().getScheme())) {
+                            throw new ProtocolException("HTTPS requests must not downgrade to HTTP");
+                        }
+                        return redirect;
+                    }
+                })
                 .setRetryHandler(new DefaultHttpRequestRetryHandler(5, false))
                 .build();
     }
 
     static {
-        PoolingHttpClientConnectionManager poolingHttpClientConnectionManager = null;
+        PoolingHttpClientConnectionManager poolingHttpClientConnectionManager;
         try {
-            SSLContextBuilder builder = new SSLContextBuilder();
-            builder.loadTrustMaterial(null, new TrustSelfSignedStrategy());
-            SSLContext sslContext = builder.build();
-            SSLConnectionSocketFactory socketFactory = new SSLConnectionSocketFactory(sslContext, NoopHostnameVerifier.INSTANCE);
+            SSLContext sslContext = TlsUtils.clientContext();
+            SSLConnectionSocketFactory socketFactory = new SSLConnectionSocketFactory(sslContext,
+                    new String[] {"TLSv1.2", "TLSv1.3"}, null,
+                    SSLConnectionSocketFactory.getDefaultHostnameVerifier());
             Registry<ConnectionSocketFactory> socketFactoryRegistry =
                     RegistryBuilder.<ConnectionSocketFactory>create()
                             .register("http", PlainConnectionSocketFactory.getSocketFactory())
@@ -102,12 +112,8 @@ public class HttpUtils {
             poolingHttpClientConnectionManager.setDefaultMaxPerRoute(50);
             poolingHttpClientConnectionManager.setMaxTotal(100);
 
-        } catch (NoSuchAlgorithmException e) {
-            LOG.error("Got NoSuchAlgorithmException when SSLContext init", e);
-        } catch (KeyManagementException e) {
-            LOG.error("Got KeyManagementException when SSLContext init", e);
-        } catch (KeyStoreException e) {
-            LOG.error("Got KeyStoreException when SSLContext init", e);
+        } catch (GeneralSecurityException | IOException e) {
+            throw new ExceptionInInitializerError(e);
         }
         CLIENT_CONNECTION_MANAGER = poolingHttpClientConnectionManager;
         LOG.info(" initial http client successfully");
