@@ -1,9 +1,9 @@
 #!/bin/bash
 # Rebuilds a single thirdparty library against the pre-built thirdparty that
-# ships in the starrocks/dev-env-centos7:3.5.11 image, without re-running the
+# ships in the StarRocks 4.0 dev-env image, without re-running the
 # full thirdparty/build-thirdparty.sh (which builds everything from scratch).
 #
-# Usage (inside the starrocks/dev-env-centos7:3.5.11 container):
+# Usage (inside a StarRocks 4.0 dev-env container):
 #   ./rebuild-thirdparty.sh [target]
 #   ./build.sh --be -j$(nproc)
 #
@@ -37,7 +37,7 @@ error() { echo -e "${RED}[ERROR]${NC} $1"; }
 # place, or that target's output would be wiped out by libevent's swap.
 TARGET_DESCRIPTIONS=(
     "libevent:Rebuild libevent with OpenSSL support (needed for BE/CN HTTPS)"
-    "libserdes:Rebuild libserdes against the deep-bi mTLS branch tip"
+    "libserdes:Rebuild libserdes from the deep-bi tag pinned in thirdparty/vars.sh"
 )
 
 usage() {
@@ -229,7 +229,7 @@ rebuild_libevent() {
 }
 
 #####################################################################
-# libserdes: rebuild against the deep-bi mTLS branch tip
+# libserdes: rebuild from the deep-bi tag pinned in thirdparty/vars.sh
 #####################################################################
 rebuild_libserdes() {
     require_files "${TP_DIR}/vars.sh" "${TP_DIR}/build-thirdparty.sh"
@@ -255,12 +255,12 @@ rebuild_libserdes() {
         fi
     done
 
-    # Step 1: download the branch tip source into a scratch dir
+    # Step 1: download the pinned source into a scratch dir
     local build_dir="/tmp/libserdes-rebuild-$$"
     mkdir -p "${build_dir}"
     cd "${build_dir}"
 
-    info "Downloading current libserdes (feature/mTLS-implementation)..."
+    info "Downloading ${serdes_name}..."
     wget --progress=dot:mega --tries=3 --no-check-certificate "${serdes_download}" -O "${serdes_name}"
 
     case "${serdes_name}" in
@@ -269,15 +269,19 @@ rebuild_libserdes() {
         *) error "Don't know how to unpack ${serdes_name}"; exit 1 ;;
     esac
 
-    # GitHub branch tarballs unpack to <repo>-<branch-with-slashes-turned-to-dashes>,
-    # not to $serdes_source; find whatever single directory came out.
+    # GitHub archives unpack to <repo>-<ref>: branch slashes become dashes and a
+    # leading "v" is dropped from tags, so the v7.3.1-deepbi1 tag already unpacks
+    # to $serdes_source. Find whatever single directory came out and rename it
+    # only when it differs (mv onto its own name fails).
     local extracted_dir
     extracted_dir=$(find . -mindepth 1 -maxdepth 1 -type d | head -1)
     if [ -z "${extracted_dir}" ]; then
         error "Nothing extracted from ${serdes_name}"
         exit 1
     fi
-    mv "${extracted_dir}" "${serdes_source}"
+    if [ "${extracted_dir}" != "./${serdes_source}" ]; then
+        mv "${extracted_dir}" "${serdes_source}"
+    fi
 
     info "Applying StarRocks libserdes patch..."
     cd "${serdes_source}"
@@ -317,8 +321,8 @@ rebuild_libserdes() {
     # build-thirdparty.sh itself uses so a standalone serdes rebuild leaves the
     # shell in the same state a full thirdparty build would.
     local file_prefix_map_option="-ffile-prefix-map=${TP_SOURCE_DIR}=. -ffile-prefix-map=${TP_INSTALL_DIR}=."
-    export GLOBAL_CPPFLAGS="-I ${TP_INCLUDE_DIR}"
-    export GLOBAL_CFLAGS="-O3 -fno-omit-frame-pointer -std=c99 -fPIC -g -D_POSIX_C_SOURCE=200112L -gz=zlib ${file_prefix_map_option}"
+    export GLOBAL_CPPFLAGS="-I${TP_INCLUDE_DIR} "
+    export GLOBAL_CFLAGS="-O3 -fno-omit-frame-pointer -std=gnu17 -fPIC -g -gz=zlib ${file_prefix_map_option}"
     export GLOBAL_CXXFLAGS="-O3 -fno-omit-frame-pointer -Wno-class-memaccess -fPIC -g -gz=zlib ${file_prefix_map_option}"
 
     info "Building libserdes..."
@@ -332,7 +336,7 @@ rebuild_libserdes() {
     fi
     if ! grep -q "serdes_conf_set_client_cert" "${TP_INSTALL_DIR}/include/libserdes/serdes.h"; then
         error "serdes_conf_set_client_cert not found in installed serdes.h!"
-        error "The feature/mTLS-implementation branch may not have this symbol yet."
+        error "${serdes_name} does not contain the deep-bi mTLS changes."
         exit 1
     fi
     info "serdes_conf_set_client_cert: found in ${TP_INSTALL_DIR}/include/libserdes/serdes.h"
