@@ -90,7 +90,9 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -681,6 +683,58 @@ public class ConnectProcessorTest extends DDLTestBase {
             Assertions.assertEquals(Arrays.asList(qualifiedRelationName("testDb1", "testTable1")),
                     result.getQueried_relations());
         }
+    }
+
+    // The leader authorizes a forwarded statement with the groups the follower resolved at login, so the roles
+    // granted with GRANT ... TO EXTERNAL GROUP apply there too. A request from an older follower carries no groups.
+    @Test
+    public void testProxyExecuteRestoresForwardedUserGroups() throws Exception {
+        Assertions.assertEquals(Set.of("analysts", "etl"),
+                groupsSeenByForwardedStatement(Arrays.asList("analysts", "etl")));
+        Assertions.assertEquals(Set.of(), groupsSeenByForwardedStatement(null));
+    }
+
+    private Set<String> groupsSeenByForwardedStatement(List<String> userGroups) throws Exception {
+        StatementBase analyzed = UtFrameUtils.parseStmtWithNewParser("select v1 from testTable1", ctx);
+
+        TMasterOpRequest request = new TMasterOpRequest();
+        request.setCatalog("default");
+        request.setDb("testDb1");
+        request.setUser("root");
+        request.setSql("select v1 from testTable1");
+        request.setIsInternalStmt(true);
+        request.setCurrent_user_ident(new TUserIdentity().setUsername("root").setHost("127.0.0.1"));
+        request.setQueryId(UUIDUtil.genTUniqueId());
+        request.setSession_id(UUID.randomUUID().toString());
+        request.setIsLastStmt(true);
+        if (userGroups != null) {
+            request.setUser_groups(userGroups);
+        }
+
+        ConnectContext context = UtFrameUtils.initCtxForNewPrivilege(UserIdentity.ROOT);
+        context.setCurrentCatalog("default");
+        context.setDatabase("testDb1");
+        context.setQualifiedUser("root");
+        context.setGlobalStateMgr(GlobalStateMgr.getCurrentState());
+        context.setCurrentUserIdentity(UserIdentity.ROOT);
+        context.setCurrentRoleIds(UserIdentity.ROOT);
+        context.setSessionId(UUID.randomUUID());
+        context.setThreadLocalInfo();
+
+        AtomicReference<Set<String>> groupsAtExecute = new AtomicReference<>();
+        ConnectProcessor processor = new ConnectProcessor(context);
+        try (MockedConstruction<StmtExecutor> ignored = Mockito.mockConstruction(StmtExecutor.class,
+                (mock, mockCtx) -> {
+                    Mockito.doAnswer(invocation -> {
+                        groupsAtExecute.set(new HashSet<>(context.getGroups()));
+                        return null;
+                    }).when(mock).execute();
+                    Mockito.when(mock.getQueryStatisticsForAuditLog()).thenReturn(null);
+                    Mockito.when(mock.getParsedStmt()).thenReturn(analyzed);
+                })) {
+            processor.proxyExecute(request, null);
+        }
+        return groupsAtExecute.get();
     }
 
     // queried_relations is populated in the shared proxyExecute(), so every forward path is covered,

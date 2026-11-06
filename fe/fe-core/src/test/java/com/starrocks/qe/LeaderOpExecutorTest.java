@@ -41,6 +41,9 @@ import org.junit.jupiter.api.Test;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
 
+import java.util.HashSet;
+import java.util.Set;
+
 public class LeaderOpExecutorTest {
     private static ConnectContext connectContext;
     private static StarRocksAssert starRocksAssert;
@@ -159,6 +162,25 @@ public class LeaderOpExecutorTest {
         TMasterOpRequest request = executor.createTMasterOpRequest(connectContext, 1);
         Assertions.assertEquals(catalog, request.getCatalog());
         Assertions.assertEquals(database, request.getDb());
+    }
+
+    // The leader does not look the groups up again for a forwarded statement, so the follower must send the
+    // session's external groups; without them the roles granted with GRANT ... TO EXTERNAL GROUP are lost there.
+    @Test
+    public void testCreateTMasterOpRequestForwardsUserGroups() {
+        ConnectContext connectContext = new ConnectContext();
+        connectContext.setGlobalStateMgr(GlobalStateMgr.getServingState());
+        connectContext.setCurrentUserIdentity(UserIdentity.ROOT);
+        connectContext.setCurrentRoleIds(UserIdentity.ROOT);
+        connectContext.setQueryId(UUIDUtil.genUUID());
+        connectContext.setThreadLocalInfo();
+        connectContext.setGroups(Set.of("analysts", "etl"));
+
+        LeaderOpExecutor executor = new LeaderOpExecutor(new OriginStatement(""),
+                connectContext, RedirectStatus.FORWARD_NO_SYNC);
+        TMasterOpRequest request = executor.createTMasterOpRequest(connectContext, 1);
+        Assertions.assertTrue(request.isSetUser_groups());
+        Assertions.assertEquals(Set.of("analysts", "etl"), new HashSet<>(request.getUser_groups()));
     }
 
     @Test
