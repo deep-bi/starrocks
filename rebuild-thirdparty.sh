@@ -647,5 +647,5 @@ fi
 echo ""
 info "Done. Rebuild StarRocks BE with:"
 echo ""
-echo "  ./build.sh --be -j\$(nproc)"
+echo "  ./build.sh --be --enable-shared-data -j\$(nproc)"
 echo ""
