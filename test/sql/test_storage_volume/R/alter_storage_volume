@@ -1,4 +1,4 @@
--- name: testAlterStorageVolume
+-- name: testAlterStorageVolume @sequential
 ADMIN SET FRONTEND CONFIG ("enable_storage_volume_access_check" = "false");
 -- result:
 -- !result
@@ -29,7 +29,12 @@ SHOW STORAGE VOLUMES LIKE 'storage_volume_alter';
 ADMIN SET FRONTEND CONFIG ("enable_storage_volume_access_check" = "true");
 -- result:
 -- !result
--- name: test_alter_storage_volume_immutable_properties @cloud
+
+CLEANUP {
+ADMIN SET FRONTEND CONFIG ("enable_storage_volume_access_check" = "true");
+} END CLEANUP
+
+-- name: test_alter_storage_volume_immutable_properties @cloud @sequential
 ADMIN SET FRONTEND CONFIG ("enable_storage_volume_access_check" = "false");
 -- result:
 -- !result
@@ -50,6 +55,11 @@ DROP STORAGE VOLUME IF EXISTS storage_volume_immutable;
 ADMIN SET FRONTEND CONFIG ("enable_storage_volume_access_check" = "true");
 -- result:
 -- !result
+
+CLEANUP {
+ADMIN SET FRONTEND CONFIG ("enable_storage_volume_access_check" = "true");
+} END CLEANUP
+
 -- name: test_alter_storage_volume_if_not_exists @cloud
 ALTER STORAGE VOLUME IF EXISTS storage_volume_not_exists SET ("aws.s3.region"="us-west-1", "aws.s3.endpoint"="endpoint1", "enabled"="true");
 -- result:

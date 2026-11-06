@@ -1,0 +1,186 @@
+name: DeepBI BE Unit Tests
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deepbi-tests
+  queue: max
+  cancel-in-progress: false
+
+jobs:
+  ci-checks:
+    uses: ./.github/workflows/deepbi-ci-checks.yml
+
+  cpp-format:
+    needs: ci-checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Check C++ formatting
+        shell: bash
+        run: |
+          python3 -m pip install --no-cache-dir clang-format==11.1.0
+          clang-format --version
+          export CLANG_FORMAT_BINARY
+          CLANG_FORMAT_BINARY=$(command -v clang-format)
+          bash build-support/check-format.sh
+
+  be-ut:
+    needs: [ci-checks, cpp-format]
+    # Run unit tests even if formatting fails
+    if: ${{ !cancelled() && needs.ci-checks.result == 'success' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    defaults:
+      run:
+        shell: bash
+    env:
+      # Keep the native dependency image aligned with this release branch
+      BUILD_IMAGE: starrocks/dev-env-ubuntu:4.1.6@sha256:4ab869d18d1385d29514753b5055177b8a752cf37247cc9cb2241f4ef286ad61
+      S3_IMAGE: rustfs/rustfs:1.0.0@sha256:ba0a1b53e36f321c0d46f3867104abef169f7bc59c467c664ddac87e7ddc9a8b
+      BE_CONTAINER: be-ut-${{ github.run_id }}-${{ github.run_attempt }}
+      S3_CONTAINER: be-ut-s3-${{ github.run_id }}-${{ github.run_attempt }}
+      UT_NETWORK: be-ut-${{ github.run_id }}-${{ github.run_attempt }}
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Free runner disk for the native build
+        run: |
+          # Remove preinstalled SDKs unused by BE to free build space
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc
+          sudo apt-get clean
+          df -h .
+          free -h
+
+      - name: Cache Maven dependencies
+        uses: actions/cache@v5
+        with:
+          path: ~/.m2/repository
+          key: ut-maven-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('fe/**/pom.xml', 'java-extensions/**/pom.xml') }}
+          restore-keys: |
+            ut-maven-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Pull BE build environment
+        run: docker pull "$BUILD_IMAGE"
+
+      - name: Start S3 test service
+        env:
+          AWS_ACCESS_KEY_ID: starrocks
+          AWS_SECRET_ACCESS_KEY: starrocks-test-secret
+          AWS_DEFAULT_REGION: us-east-1
+          AWS_EC2_METADATA_DISABLED: 'true'
+        run: |
+          docker network create "$UT_NETWORK"
+          # Use disposable credentials and expose the fixture only on loopback
+          docker run --detach --name "$S3_CONTAINER" \
+            --network "$UT_NETWORK" --network-alias s3 \
+            --publish 127.0.0.1::9000 \
+            --env RUSTFS_ACCESS_KEY=starrocks \
+            --env RUSTFS_SECRET_KEY=starrocks-test-secret \
+            --env RUSTFS_CONSOLE_ENABLE=false \
+            "$S3_IMAGE" /data
+          port=$(docker port "$S3_CONTAINER" 9000/tcp | cut -d: -f2)
+          endpoint="http://127.0.0.1:$port"
+          curl --fail --silent --show-error --retry 30 --retry-delay 2 \
+            --retry-all-errors --connect-timeout 2 --max-time 5 "$endpoint/health"
+          # AWS CLI is preinstalled on the hosted Ubuntu runner
+          aws --endpoint-url "$endpoint" s3api create-bucket --bucket starrocks-fs-s3-ut
+
+      - name: Build and run BE unit tests
+        id: be-tests
+        timeout-minutes: 330
+        run: |
+          mkdir -p "$HOME/.m2/repository" ut-reports/be
+          docker run --rm --init --name "$BE_CONTAINER" \
+            --network "container:$S3_CONTAINER" \
+            --volume "$GITHUB_WORKSPACE:/workspace" \
+            --volume "$HOME/.m2:/root/.m2" \
+            --workdir /workspace \
+            --env STARROCKS_HOME=/workspace \
+            --env PYTHON=python3 \
+            --env BUILD_TYPE=Debug \
+            --env CCACHE_DISABLE=1 \
+            --env MAVEN_OPTS=-Xmx2g \
+            --env GTEST_PARALLEL= \
+            --env GTEST_OPTIONS= \
+            --env RUN_FILE= \
+            --env GTEST_OUTPUT=xml:/workspace/ut-reports/be/ \
+            "$BUILD_IMAGE" bash -eo pipefail -c '
+              git config --global --add safe.directory /workspace
+              source ./env.sh
+              expected=$(python3 -c '\''import xml.etree.ElementTree as E; print(E.parse("fe/pom.xml").findtext("{*}properties/{*}thrift.version"))'\'')
+              actual=$("$STARROCKS_THIRDPARTY/installed/bin/thrift" --version)
+              if [[ "$actual" != "Thrift version $expected" ]]; then
+                echo "::error::Builder has $actual; this branch requires Thrift $expected. Update BUILD_IMAGE."
+                exit 1
+              fi
+              gcc --version
+              java -version
+              # Use the upstream CI linker for the large native test binaries
+              update-alternatives --install /usr/bin/ld ld /usr/bin/lld 1000
+              ld --version
+              # Require the S3 fixture before running tests
+              curl --fail --silent --show-error --retry 30 --retry-delay 2 \
+                --retry-all-errors --connect-timeout 2 --max-time 5 \
+                http://127.0.0.1:9000/health
+              cat >> conf/be_test.conf <<EOF
+          object_storage_access_key_id = starrocks
+          object_storage_secret_access_key = starrocks-test-secret
+          object_storage_endpoint = http://127.0.0.1:9000
+          object_storage_bucket = starrocks-fs-s3-ut
+          object_storage_region = us-east-1
+          object_storage_endpoint_use_https = false
+          object_storage_endpoint_path_style_access = true
+          EOF
+              # run-be-ut.sh expects generated C++ sources to exist already
+              make -C gensrc
+              ./run-be-ut.sh -j 2 --enable-shared-data --with-aws \
+                --keep-going --without-debug-symbol-split
+            '
+
+      - name: Clean up container and restore file ownership
+        if: always()
+        run: |
+          docker rm --force "$BE_CONTAINER" >/dev/null 2>&1 || true
+          docker logs "$S3_CONTAINER" > "$RUNNER_TEMP/be-ut-s3.log" 2>&1 || true
+          docker rm --force --volumes "$S3_CONTAINER" >/dev/null 2>&1 || true
+          docker network rm "$UT_NETWORK" >/dev/null 2>&1 || true
+          for directory in "$HOME/.m2" "$GITHUB_WORKSPACE/ut-reports"; do
+            if [[ -d "$directory" ]]; then
+              sudo chown -R "$(id -u):$(id -g)" "$directory"
+            fi
+          done
+          df -h .
+
+      - name: Validate BE test reports
+        if: ${{ !cancelled() && steps.be-tests.outcome != 'skipped' }}
+        run: |
+          python3 .github/scripts/check_ut_reports.py --label BE --pattern 'ut-reports/be/*.xml' \
+            --output ut-reports/be-summary.json
+
+      - name: Upload BE test reports
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: be-ut-reports-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ut-reports/be/*.xml
+            ut-reports/be-summary.json
+            ${{ runner.temp }}/be-ut-s3.log
+          if-no-files-found: warn
+          retention-days: 3
+          compression-level: 9

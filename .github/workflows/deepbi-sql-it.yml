@@ -1,0 +1,159 @@
+name: DeepBI SQL Integration Tests
+
+on:
+  workflow_dispatch:
+    inputs:
+      rc_version:
+        description: 'RC version in packages.deep.bi (for example 4.1.6-deepbi2)'
+        required: true
+        type: string
+      platform:
+        description: 'RC package and native runner architecture'
+        required: true
+        type: choice
+        default: centos-amd64
+        options:
+          - centos-amd64
+          - rhel9-arm64
+      cluster_mode:
+        description: 'Run one cluster mode per dispatch'
+        required: true
+        type: choice
+        default: shared_nothing
+        options:
+          - shared_nothing
+          - shared_data
+      exclude_components:
+        description: 'Excluded services, comma-separated. Add mysql to disable its local fixture.'
+        type: string
+        default: 'aws,oss,hdfs,hive,kafka,trino-client,spark-client,hive-client'
+      exclude_datasets:
+        description: 'Excluded datasets, comma-separated (not bundled with this repository)'
+        type: string
+        default: 'ssb,tpch,tpcds'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deepbi-tests
+  queue: max
+  cancel-in-progress: false
+
+jobs:
+  ci-checks:
+    uses: ./.github/workflows/deepbi-ci-checks.yml
+
+  sql-it:
+    needs: ci-checks
+    runs-on: ${{ inputs.platform == 'rhel9-arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+    timeout-minutes: 360
+    defaults:
+      run:
+        shell: bash
+    env:
+      RC_VERSION: ${{ inputs.rc_version }}
+      RC_PLATFORM: ${{ inputs.platform }}
+      SQL_IT_MODE: ${{ inputs.cluster_mode }}
+      EXCLUDE_COMPONENTS: ${{ inputs.exclude_components }}
+      EXCLUDE_DATASETS: ${{ inputs.exclude_datasets }}
+      SQL_IT_PREFIX: sr-it-${{ github.run_id }}-${{ github.run_attempt }}
+      SQL_IT_IMAGE: starrocks-sql-it-runtime:${{ github.run_id }}-${{ github.run_attempt }}
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Validate RC selection
+        run: |
+          SQL_IT_STATE="$RUNNER_TEMP/sql-it"
+          SQL_IT_REPORTS="$RUNNER_TEMP/sql-it-reports"
+          echo "SQL_IT_STATE=$SQL_IT_STATE" >> "$GITHUB_ENV"
+          echo "SQL_IT_REPORTS=$SQL_IT_REPORTS" >> "$GITHUB_ENV"
+          mkdir -p "$SQL_IT_STATE" "$SQL_IT_REPORTS"
+          [[ "$RC_VERSION" =~ ^[0-9][a-zA-Z0-9._-]*$ ]] || { echo 'Invalid RC version' >&2; exit 1; }
+          [[ "$RC_PLATFORM" == centos-amd64 || "$RC_PLATFORM" == rhel9-arm64 ]] || exit 1
+          [[ "$SQL_IT_MODE" == shared_nothing || "$SQL_IT_MODE" == shared_data ]] || exit 1
+          {
+            echo "RC: $RC_VERSION ($RC_PLATFORM)"
+            echo "Cluster mode: $SQL_IT_MODE"
+            echo "Test source commit: $GITHUB_SHA"
+            echo "Excluded services: $EXCLUDE_COMPONENTS"
+            echo "Excluded datasets: $EXCLUDE_DATASETS"
+          } | tee "$SQL_IT_REPORTS/run-info.txt" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Free runner disk
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc
+          sudo apt-get clean
+          df -h "$RUNNER_TEMP"
+          free -h
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install SQL-tester dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y default-mysql-client
+          python3 -m pip install --no-cache-dir -r test/requirements.txt
+
+      - name: Check selected test dependencies
+        run: |
+          mysql_host=127.0.0.1
+          [[ ",${EXCLUDE_COMPONENTS// /}," != *,mysql,* ]] || mysql_host=''
+          python3 .github/scripts/sql_it.py configure --host 127.0.0.1 --mysql-host "$mysql_host"
+          python3 .github/scripts/sql_it.py collect --phase concurrent 2>&1 | tee "$SQL_IT_REPORTS/concurrent-collection.log"
+          python3 .github/scripts/sql_it.py collect --phase sequential 2>&1 | tee "$SQL_IT_REPORTS/sequential-collection.log"
+
+      - name: Download and verify release candidate
+        timeout-minutes: 30
+        run: |
+          name="StarRocks-$RC_VERSION-$RC_PLATFORM"
+          base="https://packages.deep.bi/StarRocks/release-candidates/$RC_VERSION/$name"
+          archive="$RUNNER_TEMP/$name.tar.gz"
+          curl --fail --location --retry 3 --connect-timeout 20 "$base.sha256" --output "$archive.sha256"
+          curl --fail --location --retry 3 --connect-timeout 20 "$base.tar.gz" --output "$archive"
+          package=$(python3 .github/scripts/rc_archive.py --archive "$archive" --checksum "$archive.sha256" \
+            --destination "$RUNNER_TEMP/rc-package" --architecture "${RC_PLATFORM##*-}" \
+            --metadata "$SQL_IT_REPORTS/rc.json")
+          echo "RC_PACKAGE=$package" >> "$GITHUB_ENV"
+          rm -- "$archive"
+          df -h "$RUNNER_TEMP"
+
+      - name: Prepare runtime image
+        run: docker build --tag "$SQL_IT_IMAGE" --file .github/scripts/sql-it.Dockerfile .github/scripts
+
+      - name: Start FE, three BEs or CNs, and selected services
+        id: cluster
+        timeout-minutes: 15
+        run: bash .github/scripts/sql-it-cluster.sh start
+
+      - name: Run concurrent SQL cases
+        id: concurrent
+        timeout-minutes: 150
+        run: bash .github/scripts/run-sql-it.sh concurrent
+
+      - name: Run sequential SQL cases
+        if: ${{ !cancelled() && steps.cluster.outcome == 'success' }}
+        timeout-minutes: 150
+        run: bash .github/scripts/run-sql-it.sh sequential
+
+      - name: Collect diagnostics and remove test containers
+        if: always()
+        run: |
+          bash .github/scripts/sql-it-cluster.sh stop
+          df -h "$RUNNER_TEMP" > "$SQL_IT_REPORTS/disk.txt"
+          free -h > "$SQL_IT_REPORTS/memory.txt"
+
+      - name: Upload reports and logs
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: sql-it-${{ inputs.cluster_mode }}-${{ inputs.platform }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/sql-it-reports/
+          if-no-files-found: warn
+          retention-days: 3
+          compression-level: 9

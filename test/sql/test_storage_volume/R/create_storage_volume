@@ -1,4 +1,4 @@
--- name: testCreateStorageVolume @cloud
+-- name: testCreateStorageVolume @cloud @sequential
 ADMIN SET FRONTEND CONFIG ("enable_storage_volume_access_check" = "false");
 -- result:
 -- !result
@@ -33,7 +33,12 @@ SHOW STORAGE VOLUMES like 'storage_volume_create';
 ADMIN SET FRONTEND CONFIG ("enable_storage_volume_access_check" = "true");
 -- result:
 -- !result
--- name: test_create_s3_storage_volume_with_partitioned_prefix @cloud
+
+CLEANUP {
+ADMIN SET FRONTEND CONFIG ("enable_storage_volume_access_check" = "true");
+} END CLEANUP
+
+-- name: test_create_s3_storage_volume_with_partitioned_prefix @cloud @sequential
 ADMIN SET FRONTEND CONFIG ("enable_storage_volume_access_check" = "false");
 -- result:
 -- !result
@@ -58,3 +63,7 @@ DROP STORAGE VOLUME IF EXISTS storage_volume_partioned_prefix_success;
 ADMIN SET FRONTEND CONFIG ("enable_storage_volume_access_check" = "true");
 -- result:
 -- !result
+
+CLEANUP {
+ADMIN SET FRONTEND CONFIG ("enable_storage_volume_access_check" = "true");
+} END CLEANUP

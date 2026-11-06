@@ -61,6 +61,9 @@ python run.py [-d dirname/file] [-r] [-l] [-c ${concurrency}] [-t ${time}] [-a $
               --run_info           Extra info
               --arrow              Only run the arrow protocol
               --check-status       Check cluster status before run cases
+              --require-all        Fail if cases need unavailable, non-excluded dependencies
+              --exclude-components Comma-separated component names to exclude explicitly
+              --exclude-datasets   Comma-separated dataset names to exclude explicitly
         """
     )
 
@@ -82,6 +85,9 @@ if __name__ == "__main__":
     keep_alive = False
     run_info = ""
     check_status = False
+    require_all = False
+    exclude_components = ""
+    exclude_datasets = ""
 
     args = "hld:rvc:t:x:y:pa:C:"
     detail_args = [
@@ -104,6 +110,9 @@ if __name__ == "__main__":
         "log_filtered",
         "arrow",
         "check-status",
+        "require-all",
+        "exclude-components=",
+        "exclude-datasets=",
     ]
 
     case_dir = None
@@ -184,6 +193,15 @@ if __name__ == "__main__":
         if opt == "--check-status":
             check_status = True
 
+        if opt == "--require-all":
+            require_all = True
+
+        if opt == "--exclude-components":
+            exclude_components = arg
+
+        if opt == "--exclude-datasets":
+            exclude_datasets = arg
+
     # merge cluster info to attr
     cluster_attr = "!cloud" if cluster == "native" else "!native"
     attr = f"{attr},{cluster_attr}".strip(",")
@@ -228,6 +246,9 @@ if __name__ == "__main__":
             "run_info": run_info,
             "log_filtered": str(log_filtered),
             "check_status": str(check_status),
+            "require_all": str(require_all),
+            "exclude_components": exclude_components,
+            "exclude_datasets": exclude_datasets,
             "case_timeout": str(timeout),
             "arrow_mode": "true" if arrow_mode else "false",
         }
@@ -273,10 +294,19 @@ if __name__ == "__main__":
     if collect:
         argv += ["--collect-only"]
 
+    if require_all:
+        # Check dependencies before Nose can count an import failure as a collected test
+        from lib.choose_cases import choose_cases
+        if not choose_cases(record).case_list:
+            self_print("No SQL cases selected", ColorEnum.RED)
+            sys.exit(1)
+
     self_print("Test cmd: %s" % " ".join(argv), ColorEnum.GREEN)
 
-    nose.run(argv=argv)
+    success = nose.run(argv=argv)
 
     # record mode
     if record and not collect:
         sr_sql_lib.StarrocksSQLApiLib().save_r_into_file(part)
+
+    sys.exit(0 if success else 1)

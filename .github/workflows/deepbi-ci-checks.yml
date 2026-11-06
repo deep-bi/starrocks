@@ -1,0 +1,45 @@
+name: DeepBI CI Checks
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ci-checks:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Check workflow syntax
+        run: |
+          archive="$RUNNER_TEMP/actionlint.tar.gz"
+          curl --fail --location --retry 3 \
+            https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz \
+            --output "$archive"
+          echo "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  $archive" | sha256sum --check
+          tar -xzf "$archive" -C "$RUNNER_TEMP" actionlint
+          shopt -s nullglob
+          # actionlint 1.7.12 does not recognize GitHub's concurrency queue key
+          "$RUNNER_TEMP/actionlint" -shellcheck='' \
+            -ignore '^unexpected key "queue" for "concurrency" section\.' \
+            .github/workflows/*.yml .github/workflows/*.yaml
+      - name: Check CI shell syntax
+        run: |
+          for script in .github/scripts/*.sh; do
+            bash -n "$script"
+          done
+      - name: Test CI helpers
+        run: |
+          python3 -m pip install --no-cache-dir -r test/requirements.txt
+          python3 -m unittest discover -s .github/scripts -p 'test_*.py'

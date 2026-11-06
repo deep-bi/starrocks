@@ -1,4 +1,4 @@
--- name: testDropStorageVolume
+-- name: testDropStorageVolume @sequential
 ADMIN SET FRONTEND CONFIG ("enable_storage_volume_access_check" = "false");
 -- result:
 -- !result
@@ -25,3 +25,7 @@ SHOW STORAGE VOLUMES like 'storage_volume_drop';
 ADMIN SET FRONTEND CONFIG ("enable_storage_volume_access_check" = "true");
 -- result:
 -- !result
+
+CLEANUP {
+ADMIN SET FRONTEND CONFIG ("enable_storage_volume_access_check" = "true");
+} END CLEANUP

@@ -100,11 +100,34 @@ class ChooseCase(object):
         self.r: List[str] = []
         self.e: List[str] = []
         self.case_list: List[ChooseCase.CaseTR] = []
+        self.unavailable_cases = {}
+        self.excluded_components = {s.strip() for s in os.environ.get("exclude_components", "").split(",") if s.strip()}
+        self.excluded_datasets = {s.strip() for s in os.environ.get("exclude_datasets", "").split(",") if s.strip()}
+        unknown = self.excluded_components - self.sr_lib_obj.component_status.keys()
+        unknown.update(self.excluded_datasets - {"ssb", "tpch", "tpcds"})
+        if unknown:
+            raise ValueError("Unknown excluded dependencies: " + ", ".join(sorted(unknown)))
 
         self.list_t_r_files(file_regex)
         self.get_cases(record_mode, case_regex)
         self.filter_cases_by_component_status()
         self.filter_cases_by_data_status()
+
+        allowed = {"component " + name for name in self.excluded_components}
+        allowed.update("dataset " + name for name in self.excluded_datasets)
+        blocked = {reason: cases for reason, cases in self.unavailable_cases.items() if reason not in allowed}
+        manifest = os.environ.get("SQL_IT_CASE_MANIFEST")
+        if manifest:
+            with open(manifest, "w") as out:
+                json.dump({"selected": [case.file + ":" + case.name for case in self.case_list],
+                           "filtered": self.unavailable_cases, "missing_dependencies": blocked,
+                           "excluded_components": sorted(self.excluded_components),
+                           "excluded_datasets": sorted(self.excluded_datasets),
+                           "ignored_files": sorted(skip.skip_files)}, out, indent=2)
+        if os.environ.get("require_all") == "True" and blocked:
+            counts = ", ".join(f"{reason}: {len(cases)}" for reason, cases in blocked.items())
+            raise RuntimeError("Required SQL cases cannot run (" + counts + "). Configure their services/data; "
+                               "use --log_filtered to list the affected cases.")
 
         # sort
         self.case_list.sort()
@@ -200,7 +223,7 @@ class ChooseCase(object):
                         is_pass = False
                         break
 
-                    if not self.sr_lib_obj.component_status[client_name]["status"]:
+                    if client_name in self.excluded_components or not self.sr_lib_obj.component_status[client_name]["status"]:
                         filtered_cases_dict.setdefault(client_name, []).append(each_case.name)
                         is_pass = False
                         break
@@ -211,6 +234,13 @@ class ChooseCase(object):
 
             # check ${} contains component info
             _case_sqls = " ".join(_case_sqls)
+            # This helper reads Hive/OSS settings without explicit variables in the SQL case
+            if "create_iceberg_catalog(" in _case_sqls and getattr(self.sr_lib_obj, "iceberg_sql_test_catalog_type", "hive") == "hive":
+                for component in ("hive", "oss"):
+                    if component in self.excluded_components or not self.sr_lib_obj.component_status[component]["status"]:
+                        filtered_cases_dict.setdefault(component, []).append(each_case.name)
+                        is_pass = False
+                        break
             _vars = re.findall(r"\${([a-zA-Z0-9._-]+)}", _case_sqls)
             for _var in _vars:
 
@@ -221,7 +251,8 @@ class ChooseCase(object):
                     continue
 
                 for each_component_name, each_component_info in self.sr_lib_obj.component_status.items():
-                    if _var in each_component_info["keys"] and not each_component_info["status"]:
+                    if _var in each_component_info["keys"] and (each_component_name in self.excluded_components
+                                                               or not each_component_info["status"]):
                         filtered_cases_dict.setdefault(each_component_name, []).append(each_case.name)
                         is_pass = False
                         break
@@ -230,6 +261,7 @@ class ChooseCase(object):
                 new_case_list.append(each_case)
 
         if filtered_cases_dict:
+            self.unavailable_cases.update({"component " + key: cases for key, cases in filtered_cases_dict.items()})
             if os.environ.get("log_filtered") == "True":
                 sr_sql_lib.self_print(f"\n{'-' * 60}\n[Component filter]\n{'-' * 60}", color=ColorEnum.BLUE,
                                       logout=True, bold=True)
@@ -279,7 +311,7 @@ class ChooseCase(object):
                 data_source_names = re.findall(r"prepare_data\(['|\"]([a-zA-Z_-]+)['|\"]", func_stat)
                 for data_source in data_source_names:
 
-                    if self.sr_lib_obj.data_status.get(data_source, False) is False:
+                    if data_source in self.excluded_datasets or self.sr_lib_obj.data_status.get(data_source, False) is False:
                         filtered_cases_dict.setdefault(data_source, []).append(each_case.name)
                         is_pass = False
                         break
@@ -288,6 +320,7 @@ class ChooseCase(object):
                 new_case_list.append(each_case)
 
         if filtered_cases_dict:
+            self.unavailable_cases.update({"dataset " + key: cases for key, cases in filtered_cases_dict.items()})
             if os.environ.get("log_filtered") == "True":
                 sr_sql_lib.self_print(f"\n{'-' * 60}\n[Data filter]\n{'-' * 60}", color=ColorEnum.BLUE, logout=True, bold=True)
                 for k in list(sorted(filtered_cases_dict.keys())):

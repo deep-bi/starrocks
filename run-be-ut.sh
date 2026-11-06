@@ -35,6 +35,7 @@ Usage: $0 <options>
      --test TEST_NAME               run specific test
      --gtest_filter GTEST_FILTER    run test cases with gtest filters
      --dry-run                      dry-run unit tests
+     --keep-going                   run remaining test binaries after a failure
      --clean                        clean old unit tests before run
      --with-gcov                    enable to build with gcov
      --with-dynamic                 enable to build with dynamic libs
@@ -83,6 +84,7 @@ OPTS=$(getopt \
   -o '' \
   -l 'test:' \
   -l 'dry-run' \
+  -l 'keep-going' \
   -l 'clean' \
   -l 'with-gcov' \
   -l 'with-dynamic' \
@@ -110,6 +112,7 @@ eval set -- "$OPTS"
 
 CLEAN=0
 DRY_RUN=0
+KEEP_GOING=0
 TEST_NAME=*
 TEST_MODULE=".*"
 EXCLUDING_TEST_SUIT=
@@ -127,6 +130,7 @@ while true; do
     case "$1" in
         --clean) CLEAN=1 ; shift ;;
         --dry-run) DRY_RUN=1 ; shift ;;
+        --keep-going) KEEP_GOING=1 ; shift ;;
         --run) shift ;; # Option only for compatibility
         --test) TEST_NAME=${2}* ; shift 2;;
         --gtest_filter) TEST_NAME=$2 ; shift 2;;
@@ -356,6 +360,18 @@ test_files=`find ${STARROCKS_TEST_BINARY_DIR} -type f -perm -111 -name "*test" \
 
 echo "[INFO] gtest_filter: $TEST_NAME"
 
+TEST_EXIT_STATUS=0
+run_test_command() {
+    local result=0
+    "$@" || result=$?
+    if [ "$result" -ne 0 ]; then
+        TEST_EXIT_STATUS=1
+        if [ "$KEEP_GOING" -eq 0 ]; then
+            exit "$result"
+        fi
+    fi
+}
+
 run_test_module() {
     TARGET=$1
     # run cases in gunit test in parallel if has gtest-parallel script.
@@ -364,11 +380,11 @@ run_test_module() {
         echo "Run test: ${STARROCKS_TEST_BINARY_DIR}/$TARGET"
         if [ ${DRY_RUN} -eq 0 ]; then
             if [ -x "${GTEST_PARALLEL}" ]; then
-                ${GTEST_PARALLEL} ${STARROCKS_TEST_BINARY_DIR}/$TARGET \
+                run_test_command ${GTEST_PARALLEL} ${STARROCKS_TEST_BINARY_DIR}/$TARGET \
                     --gtest_filter=${TEST_NAME} \
                     --serialize_test_cases ${GTEST_PARALLEL_OPTIONS}
             else
-                ${STARROCKS_TEST_BINARY_DIR}/$TARGET $GTEST_OPTIONS --gtest_filter=${TEST_NAME}
+                run_test_command ${STARROCKS_TEST_BINARY_DIR}/$TARGET $GTEST_OPTIONS --gtest_filter=${TEST_NAME}
             fi
         fi
     fi
@@ -383,7 +399,9 @@ do
     if [ ${DRY_RUN} -eq 0 ]; then
         file_name=${test_bin##*/}
         if [ -z $RUN_FILE ] || [ $file_name == $RUN_FILE ]; then
-            $test_bin $GTEST_OPTIONS --gtest_filter=${TEST_NAME}
+            run_test_command $test_bin $GTEST_OPTIONS --gtest_filter=${TEST_NAME}
         fi
     fi
 done
+
+exit "$TEST_EXIT_STATUS"

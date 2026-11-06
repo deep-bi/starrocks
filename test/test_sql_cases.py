@@ -66,7 +66,8 @@ def doc_func(_, num, param):
 
 def name_func(testcase_func, param_num, param):
     """name func"""
-    return parameterized.to_safe_name(param.args[0].name)
+    # Include the case index so repeated names across SQL files remain separate tests
+    return parameterized.to_safe_name(param.args[0].name) + "_" + str(param_num)
 
 
 class TestSQLCases(sr_sql_lib.StarrocksSQLApiLib):

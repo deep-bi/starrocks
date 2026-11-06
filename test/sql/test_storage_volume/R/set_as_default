@@ -1,4 +1,4 @@
--- name: testSetAsDefault @cloud
+-- name: testSetAsDefault @cloud @sequential
 ADMIN SET FRONTEND CONFIG ("enable_storage_volume_access_check" = "false");
 -- result:
 -- !result
@@ -65,3 +65,10 @@ SET builtin_storage_volume AS DEFAULT STORAGE VOLUME;
 ADMIN SET FRONTEND CONFIG ("enable_storage_volume_access_check" = "true");
 -- result:
 -- !result
+
+CLEANUP {
+SET builtin_storage_volume AS DEFAULT STORAGE VOLUME;
+DROP STORAGE VOLUME IF EXISTS storage_volume_default_1;
+DROP STORAGE VOLUME IF EXISTS storage_volume_default_2;
+ADMIN SET FRONTEND CONFIG ("enable_storage_volume_access_check" = "true");
+} END CLEANUP

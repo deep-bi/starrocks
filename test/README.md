@@ -120,6 +120,25 @@ The format of the value is a regular expression, and only test cases whose names
 **`--skip_reruns` [Optional]**
 By default, all cases will run 3 times and passed 3 times, if this parameter provided, all case will be run exactly only once, default False.
 
+**`--require-all` [Optional]**
+Fail if selected cases need unavailable components or datasets, or if no cases
+are selected
+
+**`--exclude-components=` / `--exclude-datasets=` [Optional]**
+Comma-separated dependency names to exclude explicitly, even when configured
+
+Component names are the subsection names under `[env]` and `[client]` in
+`conf/sr.conf`, such as `mysql`, `oss`, and `hive-client`
+
+Dataset names are `ssb`, `tpch`, and `tpcds`
+
+These exclusions are allowed with `--require-all`
+Other missing dependencies and unknown names cause a failure
+File and tag exclusions still apply
+
+See [CI test exclusions](../.github/workflows/README.md#test-exclusions) for
+excluded groups, enablement steps, and blockers
+
 # Grammar
 This describes the grammar of SQL-tester framework, and how to add your cases.
 
