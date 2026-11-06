@@ -12,26 +12,6 @@ name: PR RECORD
 # safe here.
 
 on:
-  pull_request_target:
-    types: [opened, reopened, synchronize, closed, edited, labeled, unlabeled, ready_for_review, converted_to_draft, assigned, unassigned]
-  issue_comment:
-    types: [created, edited, deleted]
-  # These workflows set labels with GITHUB_TOKEN, which emits no labeled event, so the PR is
-  # recorded again once they finish: ERROR / conflict / automerge (sync pipeline), version and
-  # behavior labels (PR CHECKER), the doc label (CI DOC Checker), docs-maintainer (Translation
-  # Status Check, which runs after CI DOC Checker), version labels removed
-  # after the backport comment (MERGE PIPELINE), PAI-contributed on a backport (Contributed
-  # Backport Label).
-  workflow_run:
-    workflows: ["CD SYNC CI PIPELINE", "PR CHECKER", "CI DOC Checker", "Translation Status Check", "MERGE PIPELINE", "Contributed Backport Label"]
-    types: [completed]
-
-  # Every 2 hours, and by hand for a backfill: record again every open PR whose CI Metrics
-  # row disagrees with GitHub (a PR never recorded, a close or an edit no event reported, a
-  # run lost while the runners update) and report which ones to #jackie-test-channel, so
-  # each gap's cause is found. A run costs ~25 GraphQL points. See `reconcile`.
-  schedule:
-    - cron: '17 */2 * * *'  # :17 past every even hour (UTC)
   workflow_dispatch:
 
 permissions:

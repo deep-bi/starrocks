@@ -16,10 +16,6 @@ run-name: >-
   || format('RELEASE PUBLISH: {0}', github.event.head_commit.message) }}
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'docs/en/release_notes/release-*.md'
   workflow_dispatch:
     inputs:
       version:
@@ -34,6 +30,7 @@ on:
 # Releases are created as starrocks-bot (the author of the release-notes PRs), with a token
 # scoped to contents: write, which also lets the job see existing drafts. Unlike GITHUB_TOKEN,
 # a Release it publishes does trigger `release` workflows.
+
 permissions:
   contents: read
 

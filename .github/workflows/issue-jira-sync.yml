@@ -9,9 +9,7 @@ name: ISSUE JIRA SYNC
 # are doc-team reminders with their own workflow, not RD work for Jira.
 
 on:
-  issues:
-    types:
-      - opened
+  workflow_dispatch:
 
 permissions: {}
 

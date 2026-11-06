@@ -2,8 +2,6 @@ name: Check releasenote links
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: "00 42 * * SUN"
 
 jobs:
   linkChecker:

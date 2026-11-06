@@ -2,28 +2,6 @@ name: Nix Flake
 
 on:
   workflow_dispatch:
-  pull_request:
-    paths:
-      - ".envrc"
-      - ".github/workflows/nix-flake.yml"
-      - "be/cmake_modules/ThirdParty.cmake"
-      - "build-support/**"
-      - "flake.lock"
-      - "flake.nix"
-      - "nix/**"
-      - "thirdparty/**"
-  push:
-    branches:
-      - main
-    paths:
-      - ".envrc"
-      - ".github/workflows/nix-flake.yml"
-      - "be/cmake_modules/ThirdParty.cmake"
-      - "build-support/**"
-      - "flake.lock"
-      - "flake.nix"
-      - "nix/**"
-      - "thirdparty/**"
 
 permissions:
   contents: read

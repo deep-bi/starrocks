@@ -7,10 +7,7 @@ run-name: >-
   (parent #${{ github.event.workflow_run.id }})
 
 on:
-  workflow_run:
-    workflows: ["CI PIPELINE", "CI PIPELINE - BRANCH"]
-    types:
-      - completed
+  workflow_dispatch:
 
 permissions:
   checks: write

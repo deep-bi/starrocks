@@ -1,14 +1,7 @@
 name: AI SR SKILLS
 
 on:
-  pull_request_target:
-    branches:
-      - main
-    types:
-      - opened
-      - reopened
-      - synchronize          # re-brief on every push so the comment tracks the live diff
-      - ready_for_review     # brief when a draft is marked ready
+  workflow_dispatch:
 
 permissions:
   pull-requests: write

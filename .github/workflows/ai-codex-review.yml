@@ -38,8 +38,6 @@ name: AI CODEX REVIEW
 run-name: "AI Codex Review · PR #${{ github.event.issue.number || inputs.pr_number }}"
 
 on:
-  issue_comment:
-    types: [created]
   workflow_dispatch:
     inputs:
       pr_number:

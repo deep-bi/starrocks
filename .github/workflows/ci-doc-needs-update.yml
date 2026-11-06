@@ -11,11 +11,7 @@ name: CI Doc Needs Update
 #     diff that have no corresponding documentation entry
 
 on:
-  pull_request_target:
-    branches:
-      - main
-    types:
-      - closed
+  workflow_dispatch:
 
 permissions:
   issues: write

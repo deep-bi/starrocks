@@ -14,8 +14,7 @@ name: CD SCAN PENDING (ON MERGE)
 # keeps the `sync` label after desensitization — so the label is a sufficient discriminator.
 
 on:
-  pull_request_target:
-    types: [closed]
+  workflow_dispatch:
 
 permissions:
   actions: write

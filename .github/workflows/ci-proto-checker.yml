@@ -1,12 +1,7 @@
 name: CI PROTO Checker
 
 on:
-  pull_request_target:
-    types:
-      - opened
-      - synchronize
-    branches:
-      - main
+  workflow_dispatch:
 
 permissions:
   issues: write

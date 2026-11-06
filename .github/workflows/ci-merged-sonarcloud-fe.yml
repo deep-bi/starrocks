@@ -1,12 +1,7 @@
 name: MERGE SONARCLOUD FE
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - 'fe/**.java'
-      - 'fe/**.xml'
+  workflow_dispatch:
 
 jobs:
   sonarcloud-fe:

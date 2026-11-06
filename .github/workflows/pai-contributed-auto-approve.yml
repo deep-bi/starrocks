@@ -23,11 +23,7 @@ run-name: PAI Contributed Auto Approve(#${{ github.event.number }})
 # approval and it has to be re-submitted.
 
 on:
-  pull_request_target:
-    types: [opened, reopened, labeled, synchronize]
-    branches:
-      - main
-      - 'branch-*'
+  workflow_dispatch:
 
 permissions:
   contents: read

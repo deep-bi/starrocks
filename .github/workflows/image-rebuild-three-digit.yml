@@ -26,11 +26,7 @@ name: IMAGE REBUILD (three-digit branches)
 # are NOT matched — same convention as ci-merged.yml's two-digit pattern.
 
 on:
-  pull_request_target:
-    branches:
-      - "branch-[0-9]+.[0-9]+.[0-9]+"
-    types:
-      - closed
+  workflow_dispatch:
 
 permissions:
   pull-requests: write

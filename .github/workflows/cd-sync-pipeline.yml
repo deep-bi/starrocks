@@ -9,14 +9,7 @@ name: CD SYNC CI PIPELINE
 # the tiny [sync] pool is reserved for the executor + ci-sync trigger). Requires secret: PAT.
 
 on:
-  pull_request_target:
-    types:
-      - opened
-      - synchronize
-    branches:
-      - main
-      - branch-4.1
-      - branch-4.0
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.event.number }}-cd-sync-checker

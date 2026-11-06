@@ -1,13 +1,7 @@
 name: CI PIPELINE - BRANCH
 
 on:
-  pull_request:
-    types:
-      - opened
-      - synchronize
-
-    branches:
-      - "branch*"
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.event.number }}

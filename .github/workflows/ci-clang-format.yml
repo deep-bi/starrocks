@@ -15,12 +15,7 @@
 name: CI - Clang Format Auto Fix
 
 on:
-  pull_request_target:
-    types: [opened, ready_for_review, synchronize]
-    # Only trigger when backend C/C++ source files are touched.
-    paths:
-      - 'be/src/**'
-      - 'be/test/**'
+  workflow_dispatch:
 
 permissions:
   contents: write

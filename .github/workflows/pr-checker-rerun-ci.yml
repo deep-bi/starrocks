@@ -10,9 +10,7 @@ name: RERUN CI AFTER PR CHECKER
 # Logic: ci-tool scripts/rerun-ci-after-pr-checker.sh (marker set by wait-for-pr-checker.sh).
 
 on:
-  workflow_run:
-    workflows: [PR CHECKER]
-    types: [completed]
+  workflow_dispatch:
 
 permissions:
   actions: write

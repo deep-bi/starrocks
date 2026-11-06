@@ -1,13 +1,7 @@
 name: NOTIFICATION
 
 on:
-  pull_request:
-    types:
-      - opened
-
-  issues:
-    types:
-      - opened
+  workflow_dispatch:
 
 jobs:
   notification-checker:

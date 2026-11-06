@@ -1,0 +1,17 @@
+name: DeepBI CI Checks
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  select-test-branch:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 1
+    steps:
+      - name: File a complaint
+        run: |
+          echo "::error::Select the correct branch
+          exit 1

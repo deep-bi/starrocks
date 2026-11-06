@@ -7,14 +7,7 @@
 name: CI SQL-Tester Case Files
 
 on:
-  pull_request:
-    types:
-      - opened
-      - synchronize
-      - reopened
-    branches:
-      - main
-      - 'branch*'
+  workflow_dispatch:
 
 permissions:
   contents: read

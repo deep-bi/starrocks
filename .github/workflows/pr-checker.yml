@@ -1,16 +1,7 @@
 name: PR CHECKER
 
 on:
-  pull_request_target:
-    branches:
-      - main
-      - "branch*"
-
-    types:
-      - opened
-      - reopened
-      - edited
-      - synchronize
+  workflow_dispatch:
 
 concurrency:
   group: PR-CHECKER-${{ github.event.number }}

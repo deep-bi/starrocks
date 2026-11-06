@@ -1,10 +1,7 @@
 name: LABEL ACTION
 
 on:
-  pull_request_target:
-    types:
-      - labeled
-      - unlabeled
+  workflow_dispatch:
 
 permissions:
   checks: write

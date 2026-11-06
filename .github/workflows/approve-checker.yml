@@ -1,10 +1,7 @@
 name: REVIEW CHECKER
 
 on:
-
-  pull_request_review:
-    types:
-      - submitted
+  workflow_dispatch:
 
 permissions:
   checks: write

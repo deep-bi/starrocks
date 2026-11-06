@@ -14,13 +14,7 @@ run-name: Contributed Backport Label(#${{ github.event.number }})
 # Generic name reserves room for other `*-contributed` sources later.
 
 on:
-  pull_request_target:
-    types: [opened]
-    # All release branches (glob) — no need to update when a new branch is cut. `main`
-    # is not matched. Over-triggering is harmless: the job early-exits unless the PR is a
-    # backport whose source main PR carries the contributed marker.
-    branches:
-      - 'branch-*'
+  workflow_dispatch:
 
 permissions:
   contents: read

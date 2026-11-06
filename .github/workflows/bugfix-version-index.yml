@@ -37,21 +37,6 @@ run-name: Bugfix Version Index - ${{ github.event_name }} ${{ github.event.numbe
 #     (collection_type=task_summary) collections pre-created by an admin.
 
 on:
-  pull_request_target:
-    branches:
-      - main
-      # release lines. Use [0-9]+ (one-or-more), NOT bare [0-9] (single digit) — else multi-digit
-      # versions like branch-3.12, branch-3.5.20, branch-3.12.20 silently never match the filter.
-      - 'branch-[0-9]+.[0-9]+'
-      - 'branch-[0-9]+.[0-9]+.[0-9]+'
-    types:
-      - closed
-  push:
-    tags:
-      - '[0-9]+.[0-9]+.[0-9]+'
-  schedule:
-    - cron: '0 19 * * *'    # daily 19:00 UTC (03:00 Asia/Shanghai) → reconcile (pending-only)
-    - cron: '0 20 * * 0'    # weekly Sun 20:00 UTC (Mon 04:00 Asia/Shanghai) → reconcile-all (concrete too)
   workflow_dispatch:        # manual trigger — run a self-heal sweep on demand, don't only wait for cron
     inputs:
       mode:

@@ -6,8 +6,6 @@ name: CD SCAN PENDING PRS
 # 30-min cron and by cd-repo-sync.yml (workflow_dispatch after each executor run).
 
 on:
-  schedule:
-    - cron: "*/30 * * * *"
   workflow_dispatch:
 
 permissions:

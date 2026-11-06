@@ -5,8 +5,7 @@ name: Reader feedback
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: '0 18 * * SUN'  # once a week on Sunday
+
 permissions:
   contents: read
   issues: write
