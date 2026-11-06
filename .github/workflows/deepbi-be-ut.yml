@@ -13,5 +13,5 @@ jobs:
     steps:
       - name: File a complaint
         run: |
-          echo "::error::Select the correct branch
+          echo "::error::Select the correct branch"
           exit 1
