@@ -472,8 +472,9 @@ if [ ${BUILD_BE} -eq 1 ] || [ ${BUILD_FORMAT_LIB} -eq 1 ] ; then
 
     source ${STARROCKS_HOME}/bin/common.sh
 
-    # every package ships the fips provider, so one artefact serves both values of enable_fips_mode
-    if [ ! -f "${STARROCKS_THIRDPARTY}/installed/openssl-fips/lib/ossl-modules/fips.so" ]; then
+    # every package ships the fips provider, so one artefact serves both values of enable_fips_mode;
+    # --format-lib alone packages no BE and doesn't need it
+    if [ ${BUILD_BE} -eq 1 ] && [ ! -f "${STARROCKS_THIRDPARTY}/installed/openssl-fips/lib/ossl-modules/fips.so" ]; then
         echo "Backend packages need the OpenSSL FIPS provider in ${STARROCKS_THIRDPARTY}/installed/openssl-fips."
         echo "Build it with: ./rebuild-thirdparty.sh openssl_fips"
         exit 1

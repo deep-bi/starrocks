@@ -76,6 +76,7 @@ If step 3 is skipped after `fips.so` changed, the node refuses to start and the 
 - Same behaviour in both modes. SQL results and on-disk formats don't change when FIPS mode is on.
 - Startup checks. With FIPS mode on, the BE or CN refuses to start, and logs the reason to `be.out` or `cn.out`, when:
   - `fips.so` or the 3.1.2 `openssl` tool is missing, or `fips_module_dir` points elsewhere;
+  - `fips.so` is not OpenSSL FIPS Provider 3.1.2, even if it is another validated release;
   - `fips.so` fails its integrity check or self-tests;
   - `conf/fipsmodule.cnf` is missing or was generated for a different `fips.so`.
 

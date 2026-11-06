@@ -20,11 +20,17 @@
 #include <openssl/provider.h>
 
 #include <atomic>
+#include <string_view>
 
 #include "common/config.h"
 #include "fmt/format.h"
 
 namespace starrocks {
+
+// the module validated under CMVP #4985; any other fips.so, even another validated release, is not
+// covered by the claims in FIPS.md
+static constexpr std::string_view kFipsProviderName = "OpenSSL FIPS Provider";
+static constexpr std::string_view kFipsProviderVersion = "3.1.2";
 
 static std::atomic<bool> g_fips_enabled{false};
 static std::string g_fips_description = "disabled";
@@ -103,10 +109,16 @@ Status init_fips_mode() {
                            OSSL_PARAM_construct_int("status", &status), OSSL_PARAM_construct_end()};
     bool got_params = OSSL_PROVIDER_get_params(fips, params) == 1;
     std::string description = fmt::format("{} {}", name ? name : "unknown", version ? version : "unknown");
+    bool expected = got_params && name != nullptr && version != nullptr && kFipsProviderName == name &&
+                    kFipsProviderVersion == version;
     // drops only this reference; the provider stays active from the config
     OSSL_PROVIDER_unload(fips);
     if (!got_params || status != 1) {
         return fips_error("fips provider reports it is not running");
+    }
+    if (!expected) {
+        return Status::InternalError(fmt::format("FIPS mode: {} in {} is not {} {}", description,
+                                                 config::fips_module_dir, kFipsProviderName, kFipsProviderVersion));
     }
 
     g_fips_description = std::move(description);
