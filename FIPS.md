@@ -4,15 +4,14 @@ The StarRocks BE and CN can run in FIPS 140-3 mode using the OpenSSL FIPS Provid
 
 ## Build
 
-There is no FIPS build option. Every BE package contains the FIPS provider, so the same package serves FIPS and non-FIPS deployments. Deployments that must be FIPS compliant need an x86_64 package, because the certificate covers the module only on x86_64. The build host itself needs no FIPS setup: compliance depends on where `fips.so` runs, and on it being built exactly as the security policy describes, which `rebuild-thirdparty.sh openssl_fips` does.
+There is no FIPS build option. Every BE package contains the FIPS provider, so the same package serves FIPS and non-FIPS deployments. Deployments that must be FIPS compliant need an x86_64 package. The only Linux environments the certificate lists are Ubuntu 22.04.1 and Debian 11.5 on Intel x86_64 (security policy, Table 3). The build host itself needs no FIPS setup. Compliance depends on where `fips.so` runs, and on it being built exactly as the security policy describes, which `rebuild-thirdparty.sh` does.
 
 ```sh
-./rebuild-thirdparty.sh openssl3      # thirdparty libraries that use OpenSSL, rebuilt on OpenSSL 3.5.7
-./rebuild-thirdparty.sh openssl_fips  # the OpenSSL 3.1.2 FIPS provider
+./rebuild-thirdparty.sh                # rebuilds the changed thirdparty libraries and the 3.1.2 FIPS provider
 ./build.sh --be [--enable-shared-data]
 ```
 
-Run both thirdparty steps before the BE build. `build.sh` stops with an error if the FIPS provider is missing from thirdparty.
+`rebuild-thirdparty.sh` skips targets that are already built, so it is safe to re-run. `build.sh` stops with an error if the FIPS provider is missing from thirdparty.
 
 The package includes:
 
@@ -20,7 +19,7 @@ The package includes:
 |---|---|
 | `lib/ossl-modules/fips.so` | The validated FIPS provider |
 | `lib/openssl-fips/openssl`, `libcrypto.so.3`, `libssl.so.3` | The 3.1.2 `openssl` tool, used once per host to generate `conf/fipsmodule.cnf` |
-| `lib/openssl-fips/openssl-fips.cnf` | OpenSSL config that activates the FIPS provider and makes it the default |
+| `lib/openssl-fips/openssl-fips.cnf` | OpenSSL config that activates the FIPS provider and sets `default_properties = fips=yes` |
 
 All FIPS files ship under `lib/`, so an upgrade that replaces `bin/` and `lib/` brings everything FIPS mode needs. `conf/` holds only per-host files: `be.conf`, `cn.conf` and the generated `fipsmodule.cnf`.
 
@@ -44,6 +43,31 @@ To enable:
 4. Check that `be.out` or `cn.out` shows `FIPS mode enabled: OpenSSL FIPS Provider 3.1.2`.
 
 To disable, set `enable_fips_mode = false` or remove the line, then restart. `conf/fipsmodule.cnf` can stay; it is not used while FIPS mode is off.
+
+### Who generates `conf/fipsmodule.cnf`
+
+The file holds the HMAC-SHA2-256 reference value that `fips.so` checks itself against on every load. It also holds the settings that section 2.4 of the security policy requires for the approved mode. Section 11.1 makes installation a Cryptographic Officer task "on each platform where it is intended to be used". The start script generates the file only when it is missing, so either workflow works:
+
+- Default: the start script runs `openssl fipsinstall -pedantic` on the first start.
+- Security team: before the first start, they check the sha256 of `lib/ossl-modules/fips.so` against the published value, then generate the file themselves on each host:
+
+  ```sh
+  LD_LIBRARY_PATH=lib/openssl-fips lib/openssl-fips/openssl fipsinstall \
+      -module lib/ossl-modules/fips.so -out conf/fipsmodule.cnf -provider_name fips -pedantic
+  ```
+
+In both cases, the step that matters is confirming `fips.so` is the genuine module before the first start. Generating the file adds no assurance on its own.
+
+## Upgrade
+
+Upgrade BE and CN nodes before FE nodes, as for any StarRocks upgrade. On each node:
+
+1. Stop the node and record `sha256sum lib/ossl-modules/fips.so`.
+2. Replace `bin/` and `lib/` with the new package. Keep `conf/`.
+3. If the sha256 of the new `fips.so` is unchanged, keep `conf/fipsmodule.cnf`. If it changed, check it against the published value for the release, then delete `conf/fipsmodule.cnf`.
+4. Start the node and check `be.out` or `cn.out` for `FIPS mode enabled` before moving to the next node.
+
+If step 3 is skipped after `fips.so` changed, the node refuses to start and the start script logs that `fips.so` is newer than `conf/fipsmodule.cnf`.
 
 ## Supported
 
@@ -96,7 +120,14 @@ For MD5 and SM3, we are moderately confident this fits the FIPS 140-3 Implementa
 
 ## Requirements to stay compliant
 
-- Deploy on x86_64 Linux.
+- Deploy on x86_64 Linux. The certificate lists no OS other than Ubuntu 22.04.1 and Debian 11.5 for Linux. The customer's compliance owner decides whether another OS is acceptable.
+- The certificate lists gcc 11.2.0 for Ubuntu 22.04.1, and the dev-env image builds `fips.so` with a newer gcc. The security policy gives build steps but no required compiler version. Record the compiler used in the release notes in case an auditor asks.
 - Don't modify, strip or rebuild `lib/ossl-modules/fips.so`. It must stay byte-identical to the module built from the OpenSSL 3.1.2 source with `./Configure enable-fips` and no other options.
-- Let each host generate its own `conf/fipsmodule.cnf` on first start. Never copy it between hosts or mount it from a Kubernetes ConfigMap; `conf/` must stay writable.
+- Generate `conf/fipsmodule.cnf` on each host, as section 11.1 of the security policy and the OpenSSL 3.1.2 `README-FIPS.md` require, either on first start or by the security team. OpenSSL's explicit ban on copying the file applies to 3.0. A 3.0 file carries an `install-status` entry that skips the self-tests. The 3.1.2 file generated with `-pedantic` has none, so the self-tests run on every load. Whether copying the file or mounting it from a Kubernetes ConfigMap is acceptable is for the compliance owner to decide. With the default workflow, `conf/` must stay writable.
 - The start script never regenerates `conf/fipsmodule.cnf`, because that would give a modified `fips.so` a valid integrity MAC. After a deliberate upgrade of `fips.so`, delete `conf/fipsmodule.cnf` before starting.
+
+## References
+
+- [CMVP #4985 security policy](https://csrc.nist.gov/CSRC/media/projects/cryptographic-module-validation-program/documents/security-policies/140sp4985.pdf): sections 2.4, 5.1, 11.1 and Table 3
+- [OpenSSL 3.1.2 README-FIPS.md](https://github.com/openssl/openssl/blob/openssl-3.1.2/README-FIPS.md)
+- [openssl-fipsinstall(1)](https://docs.openssl.org/3.1/man1/openssl-fipsinstall/)
