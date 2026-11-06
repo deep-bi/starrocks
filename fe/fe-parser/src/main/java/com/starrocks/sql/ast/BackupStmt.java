@@ -26,6 +26,7 @@ public class BackupStmt extends AbstractBackupStmt {
     }
 
     private BackupType type = BackupType.FULL;
+    private String baseSnapshot;
 
     public BackupStmt(LabelName labelName,
                       String repoName,
@@ -48,8 +49,16 @@ public class BackupStmt extends AbstractBackupStmt {
         return type;
     }
 
+    public String getBaseSnapshot() {
+        return baseSnapshot;
+    }
+
     public void setTimeoutMs(long timeoutMs) {
         this.timeoutMs = timeoutMs;
+    }
+
+    public void setBaseSnapshot(String baseSnapshot) {
+        this.baseSnapshot = baseSnapshot;
     }
 
     public void setType(BackupType type) {

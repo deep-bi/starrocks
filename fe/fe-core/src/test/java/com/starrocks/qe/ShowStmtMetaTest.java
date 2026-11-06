@@ -604,7 +604,7 @@ public class ShowStmtMetaTest {
     public void testShowBackupStmt() {
         ShowBackupStmt stmt = new ShowBackupStmt("test_db");
         ShowResultSetMetaData metaData = new ShowResultMetaFactory().getMetadata(stmt);
-        Assertions.assertEquals(14, metaData.getColumnCount());
+        Assertions.assertEquals(16, metaData.getColumnCount());
         Assertions.assertEquals("JobId", metaData.getColumn(0).getName());
         Assertions.assertEquals("SnapshotName", metaData.getColumn(1).getName());
         Assertions.assertEquals("DbName", metaData.getColumn(2).getName());
@@ -619,6 +619,8 @@ public class ShowStmtMetaTest {
         Assertions.assertEquals("TaskErrMsg", metaData.getColumn(11).getName());
         Assertions.assertEquals("Status", metaData.getColumn(12).getName());
         Assertions.assertEquals("Timeout", metaData.getColumn(13).getName());
+        Assertions.assertEquals("Type", metaData.getColumn(14).getName());
+        Assertions.assertEquals("BaseSnapshot", metaData.getColumn(15).getName());
     }
 
     @Test

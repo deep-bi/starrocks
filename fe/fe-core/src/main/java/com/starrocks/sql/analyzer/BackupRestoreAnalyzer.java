@@ -65,6 +65,7 @@ public class BackupRestoreAnalyzer {
         private static final String PROP_TIMEOUT = "timeout";
         private static final long MIN_TIMEOUT_MS = 600_000L; // 10 min
         private static final String PROP_TYPE = "type";
+        private static final String PROP_BASE_SNAPSHOT = "base_snapshot";
         private static final String PROP_ALLOW_LOAD = "allow_load";
         private static final String PROP_REPLICATION_NUM = "replication_num";
         private static final String PROP_BACKUP_TIMESTAMP = "backup_timestamp";
@@ -225,6 +226,10 @@ public class BackupRestoreAnalyzer {
                         }
                         iterator.remove();
                         break;
+                    case PROP_BASE_SNAPSHOT:
+                        backupStmt.setBaseSnapshot(value);
+                        iterator.remove();
+                        break;
                     default:
                         copiedProperties.put(next.getKey(), value);
                         break;
@@ -235,6 +240,29 @@ public class BackupRestoreAnalyzer {
             if (!copiedProperties.isEmpty()) {
                 ErrorReport.reportSemanticException(ErrorCode.ERR_COMMON_ERROR,
                         "Unknown backup job properties: " + copiedProperties.keySet());
+            }
+
+            analyzeBaseSnapshot(backupStmt);
+        }
+
+        private void analyzeBaseSnapshot(BackupStmt backupStmt) {
+            String baseSnapshot = backupStmt.getBaseSnapshot();
+            if (backupStmt.getType() != BackupStmt.BackupType.INCREMENTAL) {
+                if (baseSnapshot != null) {
+                    ErrorReport.reportSemanticException(ErrorCode.ERR_COMMON_ERROR,
+                            "'base_snapshot' is only valid with \"type\" = \"incremental\"");
+                }
+                return;
+            }
+
+            if (backupStmt.containsExternalCatalog()) {
+                ErrorReport.reportSemanticException(ErrorCode.ERR_COMMON_ERROR,
+                        "Incremental backup is not supported for external catalogs");
+            }
+
+            if (baseSnapshot == null || baseSnapshot.isBlank()) {
+                ErrorReport.reportSemanticException(ErrorCode.ERR_COMMON_ERROR,
+                        "Incremental backup requires a non-empty 'base_snapshot' property");
             }
         }
 

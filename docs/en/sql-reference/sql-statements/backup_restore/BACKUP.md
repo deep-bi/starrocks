@@ -69,7 +69,7 @@ TO <repository_name>
 | repository_name | Repository name. You can create a repository using [CREATE REPOSITORY](./CREATE_REPOSITORY.md). |
 | ON              | Name of the tables to be backed up. The whole database is backed up if this parameter is not specified. |
 | PARTITION       | Name of the partitions to be backed up. The whole table is backed up if this parameter is not specified. |
-| PROPERTIES      | Properties of the data snapshot. Valid keys:<ul><li>`type`: Backup type. Currently, only full backup `FULL` is supported. Default: `FULL`.</li><li>`timeout`: Task timeout. Unit: second. Default: `86400`.</li></ul> |
+| PROPERTIES      | Properties of the data snapshot. Valid keys:<ul><li>`type`: Backup type. Valid values: `FULL` and `INCREMENTAL` (not case-sensitive). Default: `FULL`. See [Incremental backup](#incremental-backup).</li><li>`base_snapshot`: Name of the snapshot that an incremental backup is compared against. Required when `type` is `INCREMENTAL`, and not allowed otherwise.</li><li>`timeout`: Task timeout. Unit: second. Default: `86400`.</li></ul> |
 
 ## Syntax supported from v3.4.0 onwards
 
@@ -111,7 +111,32 @@ backup_object ::= [
 | view_name       | Name of the logical view(s) to be backed up.                 |
 | udf_name        | Name of the UDF(s) to be backed up.                          |
 | PARTITION       | Name of the partitions to be backed up. The whole table is backed up if this parameter is not specified. |
-| PROPERTIES      | Properties of the data snapshot. Valid keys:<ul><li>`type`: Backup type. Currently, only full backup `FULL` is supported. Default: `FULL`.</li><li>`timeout`: Task timeout. Unit: second. Default: `86400`.</li></ul> |
+| PROPERTIES      | Properties of the data snapshot. Valid keys:<ul><li>`type`: Backup type. Valid values: `FULL` and `INCREMENTAL` (not case-sensitive). Default: `FULL`. See [Incremental backup](#incremental-backup).</li><li>`base_snapshot`: Name of the snapshot that an incremental backup is compared against. Required when `type` is `INCREMENTAL`, and not allowed otherwise.</li><li>`timeout`: Task timeout. Unit: second. Default: `86400`.</li></ul> |
+
+## Incremental backup
+
+An incremental backup uploads only the data files that its base snapshot does not already have, and records where the other files are. The resulting snapshot still describes the complete state of its tables, so you restore it with a plain RESTORE and there is no chain of snapshots to apply.
+
+The base snapshot is named in the `base_snapshot` property, and it can be a full or an incremental snapshot. The statement is rejected if the base snapshot:
+
+- does not exist in the repository that the backup is sent to.
+- is not complete, for example because its backup is still running or was interrupted.
+- was taken from a database with a different name.
+- has a snapshot format version that the FE does not support.
+
+External catalog backups hold only metadata and cannot be incremental.
+
+What is uploaded depends on how each physical partition compares with the base snapshot:
+
+- If the partition has the same ID, visible version, and visible version time, and the schema of its table has not changed, it is unchanged. Nothing is uploaded for it.
+- Otherwise, the partition is changed. Its tablets are snapshotted, and only the files that the base snapshot does not have for the same tablet are uploaded.
+- Operations that replace a partition, such as TRUNCATE and INSERT OVERWRITE, create new tablets, so all their files are uploaded. The same applies to a new partition, a new table, and a table that was dropped and created again.
+
+The backup is accepted but uploads every file if the base snapshot was taken from a database with a different ID, or by an FE that does not support incremental backup. In the second case, later incremental backups based on the new snapshot reuse files as usual.
+
+:::warning
+An incremental snapshot needs the snapshots that hold its files, which may be older than its base snapshot. Do not delete a snapshot from the remote storage while other snapshots depend on it. The detailed output of [SHOW SNAPSHOT](./SHOW_SNAPSHOT.md) lists the dependent snapshots of a snapshot. If a snapshot that holds files disappears during an incremental backup, the job is cancelled.
+:::
 
 ## Examples
 
@@ -240,6 +265,14 @@ ON (FUNCTION sr_udf1, FUNCTION sr_udf2);
 BACKUP DATABASE sr_hub SNAPSHOT sr_udf3_backup
 TO test_repo
 ON (ALL FUNCTIONS);
+```
+
+Example 7: Backs up a database incrementally, based on the snapshot `sr_hub_backup`.
+
+```SQL
+BACKUP DATABASE sr_hub SNAPSHOT sr_hub_inc1
+TO test_repo
+PROPERTIES ("type" = "incremental", "base_snapshot" = "sr_hub_backup");
 ```
 
 ## Usage notes

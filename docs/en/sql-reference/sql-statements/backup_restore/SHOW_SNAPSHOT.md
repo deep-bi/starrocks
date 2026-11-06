@@ -30,7 +30,9 @@ SHOW SNAPSHOT ON <repo_name>
 | Timestamp  | Backup timestamp of the snapshot.                            |
 | Status     | Displays `OK` if the snapshot is okay. Displays error message if the snapshot is not okay. |
 | Database   | Name of the database that the snapshot belongs to.           |
-| Details    | JSON-formatted directory and structure of the snapshot.      |
+| Details    | JSON-formatted directory and structure of the snapshot. It also contains `type` (`full` or `incremental`), `base_snapshot` (incremental snapshots only), and `dependents`, the sorted names of the snapshots that hold pointers to files in this snapshot. |
+
+`Database` and `Details` are returned only when you specify both `SNAPSHOT` and `TIMESTAMP`. To build `dependents`, StarRocks reads the metadata of every snapshot in the repository.
 
 ## Example
 

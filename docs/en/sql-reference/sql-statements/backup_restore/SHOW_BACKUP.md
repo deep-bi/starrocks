@@ -41,6 +41,8 @@ SHOW BACKUP [FROM <db_name>]
 | TaskErrMsg           | Error messages.                                              |
 | Status               | Status information.                                          |
 | Timeout              | Task timeout. Unit: second.                                  |
+| Type                 | Backup type: `full` or `incremental`.                        |
+| BaseSnapshot         | Name of the base snapshot of an incremental backup. `NULL` for a full backup. |
 
 ## Examples
 

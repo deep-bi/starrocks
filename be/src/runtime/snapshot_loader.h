@@ -81,13 +81,23 @@ private:
 
     Status _get_existing_files_from_local(const std::string& local_path, std::vector<std::string>* local_files);
 
+    // files are keyed by name, or by <name>.<md5> when key_by_name_with_md5 is set, which keeps every copy of a name
+    // that was uploaded more than once with different contents
     Status _get_existing_files_from_remote(BrokerServiceConnection& client, const std::string& remote_path,
                                            const std::map<std::string, std::string>& broker_prop,
-                                           std::map<std::string, FileStat>* files);
+                                           std::map<std::string, FileStat>* files, bool key_by_name_with_md5 = false);
 
     Status _get_existing_files_from_remote_without_broker(const std::unique_ptr<FileSystem>& fs,
                                                           const std::string& remote_path,
-                                                          std::map<std::string, FileStat>* files);
+                                                          std::map<std::string, FileStat>* files,
+                                                          bool key_by_name_with_md5 = false);
+
+    // Incremental restore: the files of a tablet's manifest (<holder dir>/<name>.<md5>), keyed by name, and the
+    // directory each one is in. Lists each holder directory once, and fails naming the file and its directory if
+    // one is missing.
+    Status _get_manifest_files(BrokerServiceConnection* client, const std::unique_ptr<FileSystem>& fs,
+                               const TDownloadReq& download, const std::vector<std::string>& manifest,
+                               std::map<std::string, FileStat>* files, std::map<std::string, std::string>* dirs);
 
     Status _rename_remote_file(BrokerServiceConnection& client, const std::string& orig_name,
                                const std::string& new_name, const std::map<std::string, std::string>& broker_prop);

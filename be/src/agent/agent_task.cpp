@@ -771,7 +771,9 @@ void run_download_task(const std::shared_ptr<DownloadAgentTaskRequest>& agent_ta
     Status status = loader.download(download_request.src_dest_map, download_request, &downloaded_tablet_ids);
 
     if (!status.ok()) {
-        status_code = TStatusCode::RUNTIME_ERROR;
+        // An incremental restore is cancelled on NOT_FOUND (a manifest file missing from its holder) and retries
+        // every other error.
+        status_code = status.is_not_found() ? TStatusCode::NOT_FOUND : TStatusCode::RUNTIME_ERROR;
         LOG(WARNING) << "Fail to download job id=" << download_request.job_id << " msg=" << status.message();
         error_msgs.emplace_back(status.message());
     }

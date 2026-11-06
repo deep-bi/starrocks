@@ -136,9 +136,9 @@ After the repository is created, you can check the repository via [SHOW REPOSITO
 
 After the repository is created, you need to create a data snapshot and back up it in the remote repository. For detailed instructions, see [BACKUP](../../sql-reference/sql-statements/backup_restore/BACKUP.md). BACKUP is an asynchronous operation. You can check the status of a BACKUP job using [SHOW BACKUP](../../sql-reference/sql-statements/backup_restore/SHOW_BACKUP.md), or cancel a BACKUP job using [CANCEL BACKUP](../../sql-reference/sql-statements/backup_restore/CANCEL_BACKUP.md).
 
-StarRocks supports FULL backup on the granularity level of database, table, or partition.
+StarRocks supports FULL and INCREMENTAL backup on the granularity level of database, table, or partition. See [Back up incrementally](#back-up-incrementally).
 
-If you have stored a large amount of data in a table, we recommend that you back up and restore data by partition. This way, you can reduce the cost of retries in case of job failures. If you need to back up incremental data on a regular basis, you can configure a [partitioning plan](../../table_design/data_distribution/Data_distribution.md#partitioning) for your table, and back up only new partitions each time.
+If you have stored a large amount of data in a table, we recommend that you back up and restore data by partition. This way, you can reduce the cost of retries in case of job failures. If you need to back up incremental data on a regular basis, you can use incremental backup, or configure a [partitioning plan](../../table_design/data_distribution/Data_distribution.md#partitioning) for your table and back up only new partitions each time.
 
 ### Back up database
 
@@ -318,6 +318,25 @@ To cancel the BACKUP operation on external catalogs, execute the following state
 ```SQL
 CANCEL BACKUP FOR EXTERNAL CATALOG;
 ```
+
+### Back up incrementally
+
+An incremental backup uploads only the data files that its base snapshot does not already have. Unchanged partitions upload nothing. The resulting snapshot describes the complete state of its tables, and you restore it in the same way as a full snapshot.
+
+The following example takes a full backup of the database `sr_hub`, and then an incremental backup based on it.
+
+```SQL
+BACKUP DATABASE sr_hub SNAPSHOT sr_hub_backup
+TO test_repo;
+
+BACKUP DATABASE sr_hub SNAPSHOT sr_hub_inc1
+TO test_repo
+PROPERTIES ("type" = "incremental", "base_snapshot" = "sr_hub_backup");
+```
+
+The base snapshot must be complete, in the same repository, and taken from a database with the same name. It can itself be an incremental snapshot. For the rules on what is uploaded, see [BACKUP](../../sql-reference/sql-statements/backup_restore/BACKUP.md#incremental-backup).
+
+An incremental snapshot reads some of its files from older snapshots, so do not delete a snapshot from the remote storage while others depend on it. To check, run the detailed form of [SHOW SNAPSHOT](../../sql-reference/sql-statements/backup_restore/SHOW_SNAPSHOT.md) and read `dependents` in `Details`.
 
 ## Restore data
 
