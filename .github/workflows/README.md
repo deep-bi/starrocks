@@ -4,8 +4,9 @@
 
 | Workflow | Trigger | Runner |
 | --- | --- | --- |
-| `deepbi-fe-ut.yml` | PRs and manual | GitHub-hosted Ubuntu 24.04 |
-| `deepbi-be-ut.yml` | PRs and manual, includes C++ formatting | GitHub-hosted Ubuntu 24.04 |
+| `deepbi-ut.yml` | PRs and manual, runs FE and BE in parallel | GitHub-hosted Ubuntu 24.04 through the called workflows |
+| `deepbi-fe-ut.yml` | Manual and called by combined UT | GitHub-hosted Ubuntu 24.04 |
+| `deepbi-be-ut.yml` | Manual and called by combined UT, includes C++ formatting | GitHub-hosted Ubuntu 24.04 |
 | `deepbi-sql-it.yml` | Manual | GitHub-hosted Ubuntu 24.04, AMD64 or ARM64 |
 | `deepbi-ci-checks.yml` | Called by FE UT, BE UT, and SQL IT, also manual | GitHub-hosted Ubuntu 24.04 |
 | `ci-doc-checker.yml` | PRs to `main` and `branch*` | GitHub-hosted Ubuntu |
@@ -23,9 +24,16 @@ Local file changes do not cancel existing runs or delete run history
 
 ## Unit tests
 
-Select **DeepBI FE Unit Tests** or **DeepBI BE Unit Tests**, then **Run workflow**
-and the branch to test
-FE UT and BE UT also run when a pull request is opened, reopened, or updated with new commits
+Select **DeepBI Unit Tests** to run FE and Java-extension UT in parallel with
+BE UT and C++ formatting through the existing workflows
+Each suite runs independently, so a failure in one does not stop the other
+A failure in either called workflow fails the combined run
+
+Select **DeepBI FE Unit Tests** or **DeepBI BE Unit Tests** to run a single suite
+For any of these workflows, choose **Run workflow** and the branch to test
+The combined workflow also runs when a pull request is opened, reopened, or
+updated with new commits
+Each PR event starts one UT workflow, which calls FE and BE once each
 
 GitHub requires the workflow definition on the default branch for the manual
 trigger to appear in the UI
@@ -69,7 +77,8 @@ Update the FE compiler version and checksum together when changing `fe/pom.xml`
 
 ## C++ formatting
 
-The `cpp-format` job belongs to `deepbi-be-ut.yml` and runs on PRs and manual dispatch
+The `cpp-format` job belongs to `deepbi-be-ut.yml` and runs through combined UT on
+PRs, or through manual dispatch of BE UT or combined UT
 It uses clang-format 11.1.0 and `build-support/check-format.sh` to check `be/src`
 and `be/test`
 
@@ -222,10 +231,14 @@ They do not replace the product's UT or IT suites
 
 ## Resources and reports
 
-FE UT, BE UT including formatting, and SQL IT share the `deepbi-tests`
-concurrency group across branches
-Only one of those workflows executes at a time
-With `queue: max`, up to 100 runs can wait without replacing each other
+FE UT uses the `deepbi-fe-ut` concurrency group and BE UT including formatting
+uses `deepbi-be-ut` across branches
+One run of each suite can execute at a time, allowing FE and BE to run in parallel
+The combined UT workflow uses these limits through its called workflows
+
+SQL IT retains the `deepbi-tests` group, allowing one IT run at a time
+A manually started IT run can overlap with UT
+With `queue: max`, up to 100 runs can wait in each group without replacing each other
 Additional runs are cancelled if the queue is full
 See [GitHub concurrency queues](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#example-queueing-multiple-pending-runs)
 

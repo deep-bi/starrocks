@@ -1,0 +1,15 @@
+name: DeepBI Unit Tests
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fe-ut:
+    uses: ./.github/workflows/deepbi-fe-ut.yml
+
+  be-ut:
+    uses: ./.github/workflows/deepbi-be-ut.yml

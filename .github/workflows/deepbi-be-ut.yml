@@ -1,14 +1,14 @@
 name: DeepBI BE Unit Tests
 
 on:
-  pull_request:
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
 
 concurrency:
-  group: deepbi-tests
+  group: deepbi-be-ut
   queue: max
   cancel-in-progress: false
 
