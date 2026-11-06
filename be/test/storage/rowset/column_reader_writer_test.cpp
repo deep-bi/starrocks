@@ -773,6 +773,137 @@ TEST_F(ColumnReaderWriterTest, test_array_fetch_by_rowid_offsets_only) {
     }
 }
 
+// A damaged segment can hold a column with fewer values than the segment has rows. Reads past its last value must
+// fail with Corruption. Fetching the first missing row used to loop forever: the page that should hold it ends
+// before it, so the fetch never advanced. Range reads reaching it read that page with an empty range.
+TEST_F(ColumnReaderWriterTest, test_read_past_column_end) {
+    auto fs = std::make_shared<MemoryFileSystem>();
+    ASSERT_TRUE(fs->create_dir(TEST_DIR).ok());
+
+    constexpr rowid_t kNumValues = 19;
+    std::vector<std::string> values;
+    auto src = ChunkHelper::column_from_field_type(TYPE_VARCHAR, true);
+    for (rowid_t i = 0; i < kNumValues; i++) {
+        values.emplace_back("str_" + std::to_string(i));
+    }
+    for (const auto& v : values) {
+        src->append_datum(Datum(Slice(v)));
+    }
+
+    for (auto encoding : {PLAIN_ENCODING, DICT_ENCODING}) {
+        ColumnMetaPB meta;
+        const std::string fname = strings::Substitute("$0/test_read_past_column_end_$1.data", TEST_DIR, encoding);
+        auto segment = create_dummy_segment(fs, fname);
+        // write data
+        {
+            ASSIGN_OR_ABORT(auto wfile, fs->new_writable_file(fname));
+
+            ColumnWriterOptions writer_opts;
+            writer_opts.page_format = 2;
+            writer_opts.meta = &meta;
+            writer_opts.meta->set_column_id(0);
+            writer_opts.meta->set_unique_id(0);
+            writer_opts.meta->set_type(TYPE_VARCHAR);
+            writer_opts.meta->set_length(128);
+            writer_opts.meta->set_encoding(encoding);
+            writer_opts.meta->set_compression(starrocks::LZ4_FRAME);
+            writer_opts.meta->set_is_nullable(true);
+            writer_opts.need_zone_map = false;
+
+            TabletColumn column = create_varchar_key(1, true, 128);
+            ASSIGN_OR_ABORT(auto writer, ColumnWriter::create(writer_opts, &column, wfile.get()));
+            ASSERT_OK(writer->init());
+            ASSERT_OK(writer->append(*src));
+            ASSERT_OK(writer->finish());
+            ASSERT_OK(writer->write_data());
+            ASSERT_OK(writer->write_ordinal_index());
+            ASSERT_OK(wfile->close());
+        }
+        // the segment has two rows more than the column has values
+        segment->set_num_rows(kNumValues + 2);
+
+        ASSIGN_OR_ABORT(auto reader, ColumnReader::create(&meta, segment.get(), nullptr));
+        ASSIGN_OR_ABORT(auto read_file, fs->new_random_access_file(fname));
+        OlapReaderStatistics stats;
+        ColumnIteratorOptions iter_opts;
+        iter_opts.stats = &stats;
+        iter_opts.read_file = read_file.get();
+        iter_opts.check_dict_encoding = true;
+        auto new_iter = [&]() {
+            ASSIGN_OR_ABORT(auto iter, reader->new_iterator());
+            EXPECT_OK(iter->init(iter_opts));
+            return iter;
+        };
+
+        // the last value is still readable
+        {
+            auto iter = new_iter();
+            ColumnPtr dst = ChunkHelper::column_from_field_type(TYPE_VARCHAR, true);
+            rowid_t rowids[] = {kNumValues - 1};
+            ASSERT_OK(iter->fetch_values_by_rowid(rowids, 1, dst.get()));
+            ASSERT_EQ(1, dst->size());
+            ASSERT_EQ(values.back(), dst->get(0).get_slice().to_string());
+        }
+        // the first missing row is at the end of the last page
+        {
+            auto iter = new_iter();
+            ColumnPtr dst = ChunkHelper::column_from_field_type(TYPE_VARCHAR, true);
+            rowid_t rowids[] = {kNumValues - 1, kNumValues};
+            auto st = iter->fetch_values_by_rowid(rowids, 2, dst.get());
+            ASSERT_TRUE(st.is_corruption()) << encoding << ": " << st;
+        }
+        // a row further out is past the end of the last page
+        {
+            auto iter = new_iter();
+            ColumnPtr dst = ChunkHelper::column_from_field_type(TYPE_VARCHAR, true);
+            rowid_t rowids[] = {kNumValues + 1};
+            auto st = iter->fetch_values_by_rowid(rowids, 1, dst.get());
+            ASSERT_TRUE(st.is_corruption()) << encoding << ": " << st;
+            st = iter->seek_to_ordinal(kNumValues + 1);
+            ASSERT_TRUE(st.is_corruption()) << encoding << ": " << st;
+        }
+        // a sequential read stops at the last value, the caller checks the count
+        {
+            auto iter = new_iter();
+            ASSERT_OK(iter->seek_to_ordinal(kNumValues - 4));
+            ColumnPtr dst = ChunkHelper::column_from_field_type(TYPE_VARCHAR, true);
+            size_t n = 6;
+            ASSERT_OK(iter->next_batch(&n, dst.get()));
+            ASSERT_EQ(4, n);
+            ASSERT_EQ(4, dst->size());
+        }
+        // so does a range read that runs on from the last value
+        {
+            auto iter = new_iter();
+            ASSERT_OK(iter->seek_to_ordinal(kNumValues - 4));
+            ColumnPtr dst = ChunkHelper::column_from_field_type(TYPE_VARCHAR, true);
+            SparseRange<> range(kNumValues - 4, kNumValues + 1);
+            ASSERT_OK(iter->next_batch(range, dst.get()));
+            ASSERT_EQ(4, dst->size());
+        }
+        // a range read of disjoint ranges, the second one at the first missing row: the read of that row's page used
+        // to get an empty range
+        SparseRange<> disjoint;
+        disjoint.add(Range<>(0, 1));
+        disjoint.add(Range<>(kNumValues, kNumValues + 1));
+        {
+            auto iter = new_iter();
+            ASSERT_OK(iter->seek_to_ordinal(disjoint.begin()));
+            ColumnPtr dst = ChunkHelper::column_from_field_type(TYPE_VARCHAR, true);
+            auto st = iter->next_batch(disjoint, dst.get());
+            ASSERT_TRUE(st.is_corruption()) << encoding << ": " << st;
+        }
+        if (encoding == DICT_ENCODING) {
+            auto iter = new_iter();
+            ASSERT_TRUE(iter->all_page_dict_encoded());
+            ASSERT_OK(iter->seek_to_ordinal(disjoint.begin()));
+            auto codes = NullableColumn::create(Int32Column::create(), NullColumn::create());
+            auto st = iter->next_dict_codes(disjoint, codes.get());
+            ASSERT_TRUE(st.is_corruption()) << st;
+        }
+    }
+}
+
 TEST_F(ColumnReaderWriterTest, test_scalar_column_total_mem_footprint) {
     auto col = ChunkHelper::column_from_field_type(TYPE_INT, true);
     size_t count = 1024;
