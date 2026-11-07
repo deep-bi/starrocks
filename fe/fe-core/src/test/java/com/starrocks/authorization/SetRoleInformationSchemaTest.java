@@ -16,6 +16,8 @@ package com.starrocks.authorization;
 
 import com.starrocks.authentication.AuthenticationMgr;
 import com.starrocks.authentication.UserIdentityUtils;
+import com.starrocks.catalog.system.information.AnalyzeStatusSystemTable;
+import com.starrocks.catalog.system.information.ColumnStatsUsageSystemTable;
 import com.starrocks.qe.ConnectContext;
 import com.starrocks.qe.DDLStmtExecutor;
 import com.starrocks.qe.GlobalVariable;
@@ -27,6 +29,13 @@ import com.starrocks.sql.ast.GrantPrivilegeStmt;
 import com.starrocks.sql.ast.GrantRoleStmt;
 import com.starrocks.sql.ast.SetRoleStmt;
 import com.starrocks.sql.ast.UserIdentity;
+import com.starrocks.thrift.TAnalyzeStatusItem;
+import com.starrocks.thrift.TAnalyzeStatusReq;
+import com.starrocks.thrift.TAnalyzeStatusRes;
+import com.starrocks.thrift.TAuthInfo;
+import com.starrocks.thrift.TColumnStatsUsage;
+import com.starrocks.thrift.TColumnStatsUsageReq;
+import com.starrocks.thrift.TColumnStatsUsageRes;
 import com.starrocks.thrift.TDescribeTableParams;
 import com.starrocks.thrift.TDescribeTableResult;
 import com.starrocks.thrift.TGetDbsParams;
@@ -43,6 +52,8 @@ import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import org.mockito.MockedStatic;
+import org.mockito.Mockito;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -64,6 +75,8 @@ import java.util.stream.Collectors;
  * - FrontendServiceImpl.getTableNames() — table visibility
  * - FrontendServiceImpl.describeTable() — column visibility
  * - FrontendServiceImpl.listTableStatus() → ViewsSystemTable.query() — table listing
+ * - FrontendServiceImpl.getColumnStatsUsage() — column_stats_usage rows
+ * - FrontendServiceImpl.getAnalyzeStatus() — analyze_status rows
  */
 public class SetRoleInformationSchemaTest {
     private static ConnectContext ctx;
@@ -513,5 +526,90 @@ public class SetRoleInformationSchemaTest {
                 "SET ROLE ALL (both roles) should show at least as many databases as single role");
         Assertions.assertTrue(result2.getDbs().contains(DB_1) && result2.getDbs().contains(DB_2),
                 "With both roles, should see both databases");
+    }
+
+    // -----------------------------------------------------------------------
+    // Integration test: statistics tables filter rows by the forwarded roles
+    // -----------------------------------------------------------------------
+
+    private static TAuthInfo buildAuthInfo(TUserIdentity userIdent) {
+        TAuthInfo authInfo = new TAuthInfo();
+        authInfo.setCurrent_user_ident(userIdent);
+        return authInfo;
+    }
+
+    private static List<String> visibleColumnStatsUsageTables(TUserIdentity userIdent) throws Exception {
+        TColumnStatsUsageRes rows = new TColumnStatsUsageRes();
+        rows.setItems(new ArrayList<>());
+        for (List<String> dbAndTable : List.of(List.of(DB_1, TABLE_1), List.of(DB_2, TABLE_2))) {
+            TColumnStatsUsage row = new TColumnStatsUsage();
+            row.setTable_database(dbAndTable.get(0));
+            row.setTable_name(dbAndTable.get(1));
+            rows.addToItems(row);
+        }
+        TColumnStatsUsageReq request = new TColumnStatsUsageReq();
+        request.setAuth_info(buildAuthInfo(userIdent));
+
+        try (MockedStatic<ColumnStatsUsageSystemTable> systemTable =
+                Mockito.mockStatic(ColumnStatsUsageSystemTable.class)) {
+            systemTable.when(() -> ColumnStatsUsageSystemTable.query(Mockito.any())).thenReturn(rows);
+            return frontendService.getColumnStatsUsage(request).getItems().stream()
+                    .map(TColumnStatsUsage::getTable_name).collect(Collectors.toList());
+        }
+    }
+
+    private static List<String> visibleAnalyzeStatusTables(TUserIdentity userIdent) throws Exception {
+        TAnalyzeStatusRes rows = new TAnalyzeStatusRes();
+        rows.setItems(new ArrayList<>());
+        for (List<String> dbAndTable : List.of(List.of(DB_1, TABLE_1), List.of(DB_2, TABLE_2))) {
+            TAnalyzeStatusItem row = new TAnalyzeStatusItem();
+            row.setDatabase_name(dbAndTable.get(0));
+            row.setTable_name(dbAndTable.get(1));
+            rows.addToItems(row);
+        }
+        TAnalyzeStatusReq request = new TAnalyzeStatusReq();
+        request.setAuth_info(buildAuthInfo(userIdent));
+
+        try (MockedStatic<AnalyzeStatusSystemTable> systemTable =
+                Mockito.mockStatic(AnalyzeStatusSystemTable.class)) {
+            systemTable.when(() -> AnalyzeStatusSystemTable.query(Mockito.any())).thenReturn(rows);
+            return frontendService.getAnalyzeStatus(request).getItems().stream()
+                    .map(TAnalyzeStatusItem::getTable_name).collect(Collectors.toList());
+        }
+    }
+
+    @Test
+    public void testColumnStatsUsageFollowsActiveRole() throws Exception {
+        UserIdentity testUser = getTestUserIdentity();
+
+        Assertions.assertEquals(List.of(TABLE_1),
+                visibleColumnStatsUsageTables(buildUserIdentityWithRoles(testUser, Set.of(role1Id))));
+        Assertions.assertEquals(List.of(TABLE_2),
+                visibleColumnStatsUsageTables(buildUserIdentityWithRoles(testUser, Set.of(role2Id))));
+        Assertions.assertEquals(List.of(),
+                visibleColumnStatsUsageTables(buildUserIdentityWithRoles(testUser, Set.of())));
+    }
+
+    @Test
+    public void testAnalyzeStatusFollowsActiveRole() throws Exception {
+        UserIdentity testUser = getTestUserIdentity();
+
+        Assertions.assertEquals(List.of(TABLE_1),
+                visibleAnalyzeStatusTables(buildUserIdentityWithRoles(testUser, Set.of(role1Id))));
+        Assertions.assertEquals(List.of(TABLE_2),
+                visibleAnalyzeStatusTables(buildUserIdentityWithRoles(testUser, Set.of(role2Id))));
+        Assertions.assertEquals(List.of(),
+                visibleAnalyzeStatusTables(buildUserIdentityWithRoles(testUser, Set.of())));
+    }
+
+    // A security integration user is ephemeral and owns no stored roles, so its access exists only in the role ids
+    // forwarded with the request. Rebuilding the roles from the identity alone hid every row from it.
+    @Test
+    public void testStatisticsTablesUseForwardedRolesOfEphemeralUser() throws Exception {
+        UserIdentity ephemeralUser = UserIdentity.createEphemeralUserIdent("test_set_role_ldap_user", "%");
+        TUserIdentity userIdent = buildUserIdentityWithRoles(ephemeralUser, Set.of(role1Id));
+
+        Assertions.assertEquals(List.of(TABLE_1), visibleColumnStatsUsageTables(userIdent));
+        Assertions.assertEquals(List.of(TABLE_1), visibleAnalyzeStatusTables(userIdent));
     }
 }

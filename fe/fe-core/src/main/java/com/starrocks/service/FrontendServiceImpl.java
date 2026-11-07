@@ -678,14 +678,12 @@ public class FrontendServiceImpl implements FrontendService.Iface {
 
     @Override
     public TColumnStatsUsageRes getColumnStatsUsage(TColumnStatsUsageReq request) throws TException {
-        UserIdentity currentUser = UserIdentity.fromThrift(request.getAuth_info().getCurrent_user_ident());
+        ConnectContext context = new ConnectContext();
+        UserIdentityUtils.setAuthInfoFromThrift(context, request.getAuth_info());
 
         TColumnStatsUsageRes result = ColumnStatsUsageSystemTable.query(request);
         result.getItems().removeIf(item -> {
             try {
-                ConnectContext context = new ConnectContext();
-                context.setCurrentUserIdentity(currentUser);
-                context.setCurrentRoleIds(currentUser);
                 if (item.getTable_database() == null || item.getTable_name() == null) {
                     return true;
                 }
@@ -703,12 +701,11 @@ public class FrontendServiceImpl implements FrontendService.Iface {
     @Override
     public TAnalyzeStatusRes getAnalyzeStatus(TAnalyzeStatusReq request) throws TException {
         TAnalyzeStatusRes res = AnalyzeStatusSystemTable.query(request);
-        UserIdentity currentUser = UserIdentity.fromThrift(request.getAuth_info().getCurrent_user_ident());
+        ConnectContext context = new ConnectContext();
+        UserIdentityUtils.setAuthInfoFromThrift(context, request.getAuth_info());
+
         res.getItems().removeIf(item -> {
             try {
-                ConnectContext context = new ConnectContext();
-                context.setCurrentUserIdentity(currentUser);
-                context.setCurrentRoleIds(currentUser);
                 Authorizer.checkTableAction(context, item.getDatabase_name(), item.getTable_name(),
                         PrivilegeType.SELECT);
                 return false;
