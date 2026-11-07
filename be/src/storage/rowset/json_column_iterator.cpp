@@ -14,6 +14,9 @@
 
 #include "storage/rowset/json_column_iterator.h"
 
+#include <fmt/format.h>
+
+#include <algorithm>
 #include <memory>
 #include <utility>
 #include <vector>
@@ -53,16 +56,30 @@ JsonOutputColumns extract_json_output(Column* output) {
     return {down_cast<JsonColumn*>(output), nullptr};
 }
 
+// Log a failed flat JSON check and add the segment file to the error, so the damaged segment can be found.
+Status flat_json_read_error(const ColumnIteratorOptions& opts, const Status& st) {
+    const std::string file = opts.read_file != nullptr ? opts.read_file->filename() : "";
+    LOG(WARNING) << "Fail to read flat json, segment: " << file << ", " << st;
+    return st.clone_and_append(fmt::format("segment: {}", file));
+}
+
 // Read the segment's null stream into the output null column via `read_nulls`.
 // The segment's stored nullability and the output column's nullability can
 // legitimately differ after fast schema evolution, so mismatches must not crash:
 // a segment with a null stream cannot be read into a non-nullable output, fail
 // with InternalError instead.
+// The null stream must give `rows` flags, as the sub-columns must: a short one
+// stops without an error and would leave fewer null flags than JSON values.
 template <typename ReadNullsFn>
-Status read_json_null_stream(Column* output, NullColumn* null_column, ColumnIterator* null_iter,
-                             ReadNullsFn read_nulls) {
+Status read_json_null_stream(const ColumnIteratorOptions& opts, Column* output, NullColumn* null_column,
+                             ColumnIterator* null_iter, size_t rows, ReadNullsFn read_nulls) {
     if (null_iter != nullptr && null_column != nullptr) {
+        const size_t before = null_column->size();
         RETURN_IF_ERROR(read_nulls(null_column));
+        if (const size_t read = null_column->size() - before; UNLIKELY(read != rows)) {
+            auto st = Status::Corruption(fmt::format("flat json: null column has {} rows, expected {}", read, rows));
+            return flat_json_read_error(opts, st);
+        }
         down_cast<NullableColumn*>(output)->update_has_null();
     } else if (null_iter != nullptr && null_column == nullptr) {
         return Status::InternalError("flat json: segment has a JSON null stream but the output column is non-nullable");
@@ -133,7 +150,7 @@ public:
 
 private:
     template <typename FUNC>
-    Status _read(JsonColumn* json_column, FUNC fn);
+    Status _read(JsonColumn* json_column, size_t rows, FUNC fn);
 
 private:
     ColumnReader* _reader;
@@ -224,7 +241,7 @@ Status JsonFlatColumnIterator::init(const ColumnIteratorOptions& opts) {
 }
 
 template <typename FUNC>
-Status JsonFlatColumnIterator::_read(JsonColumn* json_column, FUNC read_fn) {
+Status JsonFlatColumnIterator::_read(JsonColumn* json_column, size_t rows, FUNC read_fn) {
     Columns columns;
     for (int i = 0; i < _source_column_modules.size(); i++) {
         columns.emplace_back(_source_column_modules[i]->clone_empty());
@@ -232,6 +249,10 @@ Status JsonFlatColumnIterator::_read(JsonColumn* json_column, FUNC read_fn) {
 
     for (int i = 0; i < _flat_iters.size(); i++) {
         RETURN_IF_ERROR(read_fn(_flat_iters[i].get(), columns[i].get()));
+    }
+    const bool has_remain = _source_paths.size() != _flat_iters.size();
+    if (auto st = check_flat_json_columns(_source_paths, has_remain, columns, rows); UNLIKELY(!st.ok())) {
+        return flat_json_read_error(_opts, st);
     }
 
     if (_is_direct) {
@@ -246,15 +267,18 @@ Status JsonFlatColumnIterator::_read(JsonColumn* json_column, FUNC read_fn) {
 
 Status JsonFlatColumnIterator::next_batch(size_t* n, Column* dst) {
     auto [json_column, null_column] = extract_json_output(dst);
+    // The null stream and every sub-iterator stop at the end of their own column and lower `n`, so a short column
+    // would shorten the reads after it too. Check against the rows left in the segment instead.
+    const size_t rows = std::min<size_t>(*n, num_rows() - get_current_ordinal());
 
     // 1. Read null column
-    RETURN_IF_ERROR(read_json_null_stream(dst, null_column, _null_iter.get(),
+    RETURN_IF_ERROR(read_json_null_stream(_opts, dst, null_column, _null_iter.get(), rows,
                                           [&](NullColumn* nulls) { return _null_iter->next_batch(n, nulls); }));
 
     // 2. Read flat column
     auto read = [&](ColumnIterator* iter, Column* column) { return iter->next_batch(n, column); };
     const size_t before = json_column->size();
-    auto ret = _read(json_column, read);
+    auto ret = _read(json_column, rows, read);
     if (ret.ok()) {
         finish_json_read(dst, json_column, null_column, _null_iter.get(), before);
     }
@@ -263,15 +287,16 @@ Status JsonFlatColumnIterator::next_batch(size_t* n, Column* dst) {
 
 Status JsonFlatColumnIterator::next_batch(const SparseRange<>& range, Column* dst) {
     auto [json_column, null_column] = extract_json_output(dst);
+    const size_t rows = range.span_size();
 
     // 1. Read null column
-    RETURN_IF_ERROR(read_json_null_stream(dst, null_column, _null_iter.get(),
+    RETURN_IF_ERROR(read_json_null_stream(_opts, dst, null_column, _null_iter.get(), rows,
                                           [&](NullColumn* nulls) { return _null_iter->next_batch(range, nulls); }));
 
     // 2. Read flat column
     auto read = [&](ColumnIterator* iter, Column* column) { return iter->next_batch(range, column); };
     const size_t before = json_column->size();
-    auto ret = _read(json_column, read);
+    auto ret = _read(json_column, rows, read);
     if (ret.ok()) {
         finish_json_read(dst, json_column, null_column, _null_iter.get(), before);
     }
@@ -282,14 +307,14 @@ Status JsonFlatColumnIterator::fetch_values_by_rowid(const rowid_t* rowids, size
     auto [json_column, null_column] = extract_json_output(values);
 
     // 1. Read null column
-    RETURN_IF_ERROR(read_json_null_stream(values, null_column, _null_iter.get(), [&](NullColumn* nulls) {
+    RETURN_IF_ERROR(read_json_null_stream(_opts, values, null_column, _null_iter.get(), size, [&](NullColumn* nulls) {
         return _null_iter->fetch_values_by_rowid(rowids, size, nulls);
     }));
 
     // 2. Read flat column
     auto read = [&](ColumnIterator* iter, Column* column) { return iter->fetch_values_by_rowid(rowids, size, column); };
     const size_t before = json_column->size();
-    auto ret = _read(json_column, read);
+    auto ret = _read(json_column, size, read);
     if (ret.ok()) {
         finish_json_read(values, json_column, null_column, _null_iter.get(), before);
     }
@@ -495,7 +520,7 @@ public:
 
 private:
     template <typename FUNC>
-    Status _merge(JsonColumn* dst, FUNC func);
+    Status _merge(JsonColumn* dst, size_t rows, FUNC func);
 
 private:
     ColumnReader* _reader;
@@ -540,7 +565,7 @@ Status JsonMergeIterator::init(const ColumnIteratorOptions& opts) {
 }
 
 template <typename FUNC>
-Status JsonMergeIterator::_merge(JsonColumn* dst, FUNC func) {
+Status JsonMergeIterator::_merge(JsonColumn* dst, size_t rows, FUNC func) {
     Columns all_columns;
     for (size_t i = 0; i < _all_iter.size(); i++) {
         auto iter = _all_iter[i].get();
@@ -550,6 +575,11 @@ Status JsonMergeIterator::_merge(JsonColumn* dst, FUNC func) {
     }
 
     SCOPED_RAW_TIMER(&_opts.stats->json_merge_ns);
+    // A reader checks the string offsets too, which _merger->check_input() leaves to it.
+    const bool has_remain = _all_iter.size() != _src_paths.size();
+    if (auto st = check_flat_json_columns(_src_paths, has_remain, all_columns, rows); UNLIKELY(!st.ok())) {
+        return flat_json_read_error(_opts, st);
+    }
     auto json = _merger->merge(all_columns);
     dst->append(*json, 0, json->size());
     dst->check_or_die();
@@ -558,14 +588,17 @@ Status JsonMergeIterator::_merge(JsonColumn* dst, FUNC func) {
 
 Status JsonMergeIterator::next_batch(size_t* n, Column* dst) {
     auto [json_column, null_column] = extract_json_output(dst);
+    // The null stream and every sub-iterator stop at the end of their own column and lower `n`, so a short column
+    // would shorten the reads after it too. Check against the rows left in the segment instead.
+    const size_t rows = std::min<size_t>(*n, num_rows() - get_current_ordinal());
 
     // 1. Read null column
-    RETURN_IF_ERROR(read_json_null_stream(dst, null_column, _null_iter.get(),
+    RETURN_IF_ERROR(read_json_null_stream(_opts, dst, null_column, _null_iter.get(), rows,
                                           [&](NullColumn* nulls) { return _null_iter->next_batch(n, nulls); }));
 
     auto func = [&](ColumnIterator* iter, Column* column) { return iter->next_batch(n, column); };
     const size_t before = json_column->size();
-    auto ret = _merge(json_column, func);
+    auto ret = _merge(json_column, rows, func);
     if (ret.ok()) {
         finish_json_read(dst, json_column, null_column, _null_iter.get(), before);
     }
@@ -574,14 +607,15 @@ Status JsonMergeIterator::next_batch(size_t* n, Column* dst) {
 
 Status JsonMergeIterator::next_batch(const SparseRange<>& range, Column* dst) {
     auto [json_column, null_column] = extract_json_output(dst);
+    const size_t rows = range.span_size();
 
     // 1. Read null column
-    RETURN_IF_ERROR(read_json_null_stream(dst, null_column, _null_iter.get(),
+    RETURN_IF_ERROR(read_json_null_stream(_opts, dst, null_column, _null_iter.get(), rows,
                                           [&](NullColumn* nulls) { return _null_iter->next_batch(range, nulls); }));
 
     auto func = [&](ColumnIterator* iter, Column* column) { return iter->next_batch(range, column); };
     const size_t before = json_column->size();
-    auto ret = _merge(json_column, func);
+    auto ret = _merge(json_column, rows, func);
     if (ret.ok()) {
         finish_json_read(dst, json_column, null_column, _null_iter.get(), before);
     }
@@ -592,13 +626,13 @@ Status JsonMergeIterator::fetch_values_by_rowid(const rowid_t* rowids, size_t si
     auto [json_column, null_column] = extract_json_output(dst);
 
     // 1. Read null column
-    RETURN_IF_ERROR(read_json_null_stream(dst, null_column, _null_iter.get(), [&](NullColumn* nulls) {
+    RETURN_IF_ERROR(read_json_null_stream(_opts, dst, null_column, _null_iter.get(), size, [&](NullColumn* nulls) {
         return _null_iter->fetch_values_by_rowid(rowids, size, nulls);
     }));
 
     auto func = [&](ColumnIterator* iter, Column* column) { return iter->fetch_values_by_rowid(rowids, size, column); };
     const size_t before = json_column->size();
-    auto ret = _merge(json_column, func);
+    auto ret = _merge(json_column, size, func);
     if (ret.ok()) {
         finish_json_read(dst, json_column, null_column, _null_iter.get(), before);
     }

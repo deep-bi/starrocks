@@ -34,6 +34,8 @@
 
 #include "storage/rowset/scalar_column_iterator.h"
 
+#include <string_view>
+
 #include "common/status.h"
 #include "storage/column_predicate.h"
 #include "storage/rowset/binary_dict_page.h"
@@ -45,6 +47,16 @@
 #include "util/bitmap.h"
 
 namespace starrocks {
+
+// A damaged segment can hold a column with fewer values than the segment has rows. The ordinal index takes the
+// segment's row count as the end of the last page, the page footer has the values really written, so a read of a
+// missing row lands on a page that ends before it. A page with fewer values than the ordinal index gives it leaves a
+// gap of rows before the next page starts.
+static Status row_not_in_page(std::string_view op, ordinal_t row, const std::string& file, ordinal_t page_first,
+                              ordinal_t page_end) {
+    return Status::Corruption(
+            fmt::format("{} row {} of {}, but its page holds rows [{}, {})", op, row, file, page_first, page_end));
+}
 
 ScalarColumnIterator::ScalarColumnIterator(ColumnReader* reader) : _reader(reader) {}
 
@@ -178,6 +190,11 @@ Status ScalarColumnIterator::seek_to_ordinal(ordinal_t ord) {
         RETURN_IF_ERROR(_reader->seek_at_or_before(ord, &_page_iter));
         RETURN_IF_ERROR(_read_data_page(_page_iter));
     }
+    // Some decoders seek past the end of a page without an error.
+    if (UNLIKELY(ord > _page->first_ordinal() + _page->num_rows())) {
+        return row_not_in_page("seek to", ord, _opts.read_file->filename(), _page->first_ordinal(),
+                               _page->first_ordinal() + _page->num_rows());
+    }
     RETURN_IF_ERROR(_seek_to_pos_in_page(_page.get(), ord - _page->first_ordinal()));
     _current_ordinal = ord;
     return Status::OK();
@@ -305,6 +322,12 @@ Status ScalarColumnIterator::next_batch(const SparseRange<>& range, Column* dst)
             _opts.stats->block_seek_num += 1;
             RETURN_IF_ERROR(seek_to_ordinal(iter.begin()));
             end_ord = _page->first_ordinal() + _page->num_rows();
+        }
+        // The page loaded above holds the next row, unless the row is at the end of the column's values, or a page
+        // before it has fewer values than the ordinal index gives it: the page read below would then get an empty or
+        // wrapped-around range.
+        if (UNLIKELY(iter.begin() < _page->first_ordinal() || iter.begin() >= end_ord)) {
+            return row_not_in_page("read", iter.begin(), _opts.read_file->filename(), _page->first_ordinal(), end_ord);
         }
 
         _current_ordinal = iter.begin();
@@ -574,6 +597,12 @@ Status ScalarColumnIterator::_do_next_batch_dict_codes(const SparseRange<>& rang
             RETURN_IF_ERROR(seek_to_ordinal(iter.begin()));
             end_ord = _page->first_ordinal() + _page->num_rows();
         }
+        // The page loaded above holds the next row, unless the row is at the end of the column's values, or a page
+        // before it has fewer values than the ordinal index gives it: the page read below would then get an empty or
+        // wrapped-around range.
+        if (UNLIKELY(iter.begin() < _page->first_ordinal() || iter.begin() >= end_ord)) {
+            return row_not_in_page("read", iter.begin(), _opts.read_file->filename(), _page->first_ordinal(), end_ord);
+        }
 
         _current_ordinal = iter.begin();
         if (end_ord > _current_ordinal) {
@@ -635,6 +664,10 @@ Status ScalarColumnIterator::_fetch_by_rowid(const rowid_t* rowids, size_t size,
         RETURN_IF_ERROR(seek_to_ordinal(*rowids));
         contain_deleted_row = contain_deleted_row || _contains_deleted_row(_page->page_index());
         auto last_rowid = implicit_cast<rowid_t>(_page->first_ordinal() + _page->num_rows());
+        // A row at the end of the column's values is not in the page, and the loop would never advance.
+        if (UNLIKELY(*rowids >= last_rowid)) {
+            return row_not_in_page("fetch", *rowids, _opts.read_file->filename(), _page->first_ordinal(), last_rowid);
+        }
         const rowid_t* next_page_rowid = std::lower_bound(rowids, end, last_rowid);
         while (rowids != next_page_rowid) {
             DCHECK_EQ(_current_ordinal, _page->first_ordinal() + _page->offset());

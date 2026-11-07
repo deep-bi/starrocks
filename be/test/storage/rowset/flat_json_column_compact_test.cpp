@@ -181,6 +181,10 @@ protected:
             // close the file
             ASSERT_TRUE(wfile->close().ok());
         }
+        size_t num_rows = 0;
+        std::for_each(jsons.begin(), jsons.end(), [&](ColumnPtr& json) { num_rows += json->size(); });
+        // a real segment takes its row count from the footer, and the flat JSON readers check reads against it
+        segment->set_num_rows(num_rows);
 
         auto res = ColumnReader::create(_meta.get(), segment.get(), nullptr);
         ASSERT_TRUE(res.ok());
@@ -200,8 +204,7 @@ protected:
             auto st = iter->seek_to_first();
             ASSERT_TRUE(st.ok()) << st.to_string();
 
-            size_t rows_read;
-            std::for_each(jsons.begin(), jsons.end(), [&](ColumnPtr& json) { rows_read += json->size(); });
+            size_t rows_read = num_rows;
             st = iter->next_batch(&rows_read, read_col.get());
             ASSERT_TRUE(st.ok());
         }

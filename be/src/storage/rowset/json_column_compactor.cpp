@@ -106,7 +106,9 @@ Status FlatJsonColumnCompactor::_merge_columns(Columns& json_datas) {
                                                       json_col->has_remain());
                 pre_col = json_col;
             }
-            auto j = merger->merge(json_col->get_flat_fields_ptrs());
+            auto fields = json_col->get_flat_fields_ptrs();
+            RETURN_IF_ERROR(merger->check_input(fields));
+            auto j = merger->merge(fields);
 
             if (col->is_nullable()) {
                 auto n = NullableColumn::create(j, null_col);
@@ -206,7 +208,9 @@ Status JsonColumnCompactor::append(const Column& column) {
     }
 
     JsonMerger merger(json_col->flat_column_paths(), json_col->flat_column_types(), json_col->has_remain());
-    auto p = merger.merge(json_col->get_flat_fields_ptrs());
+    auto fields = json_col->get_flat_fields_ptrs();
+    RETURN_IF_ERROR(merger.check_input(fields));
+    auto p = merger.merge(fields);
 
     if (column.is_nullable()) {
         auto n = NullableColumn::create(p, nulls);

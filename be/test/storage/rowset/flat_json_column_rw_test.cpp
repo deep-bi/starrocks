@@ -104,6 +104,8 @@ protected:
             // close the file
             ASSERT_TRUE(wfile->close().ok());
         }
+        // a real segment takes its row count from the footer, and the flat JSON readers check reads against it
+        segment->set_num_rows(write_col->size());
 
         auto res = ColumnReader::create(_meta.get(), segment.get(), nullptr);
         ASSERT_TRUE(res.ok());
@@ -1785,6 +1787,132 @@ TEST_F(FlatJsonColumnRWTest, testGetIORangeVec) {
     auto status_or = iter->get_io_range_vec(range, read_col.get());
     ASSERT_TRUE(status_or.ok());
     ASSERT_EQ((*status_or).size(), 1);
+}
+
+// A damaged flat JSON segment can hold a sub-column, or the null stream, with fewer values than the segment has rows.
+// Path reads (JsonFlatColumnIterator) and whole JSON reads (JsonMergeIterator) must fail every read that reaches the
+// missing row with Corruption, and still read the rows before it. The damaged column is made of two flat JSON columns
+// written to one file, with N and N - 1 rows: one sub-column of the first is replaced by the same one of the second.
+TEST_F(FlatJsonColumnRWTest, testReadShortSubColumn) {
+    constexpr rowid_t kRows = 10;
+    std::vector<std::string> jsons;
+    for (rowid_t i = 0; i < kRows; i++) {
+        jsons.emplace_back("{\"a\": " + std::to_string(i) + ", \"b\": \"str_" + std::to_string(i) + "\"}");
+    }
+    const std::vector<std::string> short_jsons(jsons.begin(), jsons.end() - 1);
+
+    auto fs = std::make_shared<MemoryFileSystem>();
+    ASSERT_TRUE(fs->create_dir(TEST_DIR).ok());
+    const std::string fname = TEST_DIR + "/test_flat_json_short_sub_column.data";
+    TabletColumn json_tablet_column = create_with_default_value<TYPE_JSON>("");
+
+    ColumnMetaPB full_meta;
+    ColumnMetaPB short_meta;
+    {
+        ASSIGN_OR_ABORT(auto wfile, fs->new_writable_file(fname));
+        auto write = [&](ColumnMetaPB* meta, const std::vector<std::string>& rows) {
+            ColumnWriterOptions writer_opts;
+            writer_opts.meta = meta;
+            writer_opts.meta->set_column_id(0);
+            writer_opts.meta->set_unique_id(0);
+            writer_opts.meta->set_type(TYPE_JSON);
+            writer_opts.meta->set_length(0);
+            writer_opts.meta->set_encoding(DEFAULT_ENCODING);
+            writer_opts.meta->set_compression(starrocks::LZ4_FRAME);
+            writer_opts.meta->set_is_nullable(true);
+            writer_opts.need_zone_map = false;
+            writer_opts.need_flat = true;
+
+            ASSIGN_OR_ABORT(auto writer, ColumnWriter::create(writer_opts, &json_tablet_column, wfile.get()));
+            ASSERT_OK(writer->init());
+            auto column = create_json(rows, true);
+            ASSERT_OK(writer->append(*column));
+            ASSERT_OK(writer->finish());
+            ASSERT_OK(writer->write_data());
+            ASSERT_OK(writer->write_ordinal_index());
+        };
+        ASSERT_NO_FATAL_FAILURE(write(&full_meta, jsons));
+        ASSERT_NO_FATAL_FAILURE(write(&short_meta, short_jsons));
+        ASSERT_OK(wfile->close());
+    }
+    ASSERT_TRUE(full_meta.json_meta().is_flat());
+    ASSERT_EQ(full_meta.children_columns_size(), short_meta.children_columns_size());
+
+    auto segment = create_dummy_segment(fs, fname);
+    segment->set_num_rows(kRows);
+    ASSIGN_OR_ABORT(auto read_file, fs->new_random_access_file(fname));
+
+    ASSIGN_OR_ABORT(auto root_path, ColumnAccessPath::create(TAccessPathType::FIELD, "root", 0));
+    ASSIGN_OR_ABORT(auto a_path, ColumnAccessPath::create(TAccessPathType::FIELD, "root.a", 0));
+    ASSIGN_OR_ABORT(auto b_path, ColumnAccessPath::create(TAccessPathType::FIELD, "root.b", 0));
+    root_path->children().emplace_back(std::move(a_path));
+    root_path->children().emplace_back(std::move(b_path));
+
+    // A short column read first lowers the rows of every sequential read after it, so the columns agree with each
+    // other: only the rows asked for show that one is short.
+    for (const std::string short_child : {"nulls", "a", "b"}) {
+        ColumnMetaPB meta = full_meta;
+        int index = -1;
+        for (int i = 0; i < meta.children_columns_size(); i++) {
+            if (meta.children_columns(i).name() == short_child) {
+                index = i;
+            }
+        }
+        ASSERT_GE(index, 0) << short_child;
+        ASSERT_EQ(short_child, short_meta.children_columns(index).name());
+        *meta.mutable_children_columns(index) = short_meta.children_columns(index);
+        ASSIGN_OR_ABORT(auto reader, ColumnReader::create(&meta, segment.get(), nullptr));
+
+        for (ColumnAccessPath* path : {static_cast<ColumnAccessPath*>(nullptr), root_path.get()}) {
+            const std::string name = short_child + (path == nullptr ? " short, whole json" : " short, path");
+            OlapReaderStatistics stats;
+            ColumnIteratorOptions iter_opts;
+            iter_opts.stats = &stats;
+            iter_opts.read_file = read_file.get();
+            auto new_iter = [&]() {
+                ASSIGN_OR_ABORT(auto iter, reader->new_iterator(path));
+                EXPECT_OK(iter->init(iter_opts));
+                return iter;
+            };
+            auto new_dst = []() -> ColumnPtr {
+                return NullableColumn::create(JsonColumn::create(), NullColumn::create());
+            };
+
+            // the rows before the missing one are still readable
+            {
+                auto iter = new_iter();
+                ASSERT_OK(iter->seek_to_ordinal(0));
+                auto dst = new_dst();
+                ASSERT_OK(iter->next_batch(SparseRange<>(0, kRows - 1), dst.get())) << name;
+                ASSERT_EQ(kRows - 1, dst->size()) << name;
+            }
+            // a sequential read of every row
+            {
+                auto iter = new_iter();
+                ASSERT_OK(iter->seek_to_first());
+                auto dst = new_dst();
+                size_t n = kRows;
+                auto st = iter->next_batch(&n, dst.get());
+                ASSERT_TRUE(st.is_corruption()) << name << ": " << st;
+            }
+            // a range read of every row: the short column stops at its last value without an error
+            {
+                auto iter = new_iter();
+                ASSERT_OK(iter->seek_to_ordinal(0));
+                auto dst = new_dst();
+                auto st = iter->next_batch(SparseRange<>(0, kRows), dst.get());
+                ASSERT_TRUE(st.is_corruption()) << name << ": " << st;
+            }
+            // a fetch of the missing row
+            {
+                auto iter = new_iter();
+                auto dst = new_dst();
+                rowid_t rowids[] = {kRows - 1};
+                auto st = iter->fetch_values_by_rowid(rowids, 1, dst.get());
+                ASSERT_TRUE(st.is_corruption()) << name << ": " << st;
+            }
+        }
+    }
 }
 
 } // namespace starrocks
