@@ -47,4 +47,12 @@ public interface AuthenticationProvider {
             throws AuthenticationException {
         return null;
     }
+
+    /**
+     * Some providers report success from {@link #authenticate} without verifying anything and leave the real
+     * check to the MySQL command loop. Channels that serve the request straight after authentication have no
+     * such loop, so they call this to run that check up front.
+     */
+    default void checkLoginSuccess(ConnectContext context) throws AuthenticationException {
+    }
 }

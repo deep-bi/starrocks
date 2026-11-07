@@ -101,7 +101,7 @@ public class ArrowFlightSqlSessionManagerTest {
 
     private void mockAuthentication(MockedStatic<AuthenticationHandler> mockedAuth,
                                     AtomicReference<ArrowFlightSqlConnectContext> contextRef) {
-        mockedAuth.when(() -> AuthenticationHandler.authenticate(any(), any(), any(), any()))
+        mockedAuth.when(() -> AuthenticationHandler.authenticateWithClearPassword(any(), any(), any(), any()))
                 .thenAnswer(invocation -> {
                     ConnectContext ctx = invocation.getArgument(0);
                     ctx.setCurrentUserIdentity(null);
