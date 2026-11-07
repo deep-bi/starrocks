@@ -4294,6 +4294,18 @@ public class Config extends ConfigBase {
     public static String[] group_provider = {};
 
     /**
+     * When set to true, a user also holds every role whose name equals one of the user's external groups (as
+     * returned by the group provider), the behavior of the 3.5 Deep.BI releases. It adds to the roles granted with
+     * GRANT ... TO EXTERNAL GROUP and behaves like them. Built-in roles (root, db_admin, cluster_admin, user_admin,
+     * security_admin, public) are never matched by name.
+     *
+     * Not mutable: every FE resolves the roles itself, including the leader for statements a follower forwards, so
+     * the value must be the same in fe.conf on all FEs.
+     */
+    @ConfField(mutable = false)
+    public static boolean authorization_map_groups_to_roles_by_name = false;
+
+    /**
      * Used to refresh the ldap group cache. All ldap group providers share the same thread pool.
      */
     @ConfField(mutable = false)
