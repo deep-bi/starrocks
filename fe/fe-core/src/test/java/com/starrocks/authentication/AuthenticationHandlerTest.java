@@ -14,16 +14,22 @@
 
 package com.starrocks.authentication;
 
+import com.starrocks.authorization.AuthorizationMgr;
+import com.starrocks.authorization.DefaultAuthorizationProvider;
+import com.starrocks.authorization.NativeAccessController;
+import com.starrocks.authorization.PrivilegeType;
 import com.starrocks.common.Config;
 import com.starrocks.common.DdlException;
 import com.starrocks.persist.EditLog;
 import com.starrocks.qe.ConnectContext;
+import com.starrocks.qe.DDLStmtExecutor;
 import com.starrocks.server.GlobalStateMgr;
 import com.starrocks.sql.analyzer.Analyzer;
 import com.starrocks.sql.ast.CreateUserStmt;
 import com.starrocks.sql.ast.UserAuthOption;
 import com.starrocks.sql.ast.UserIdentity;
 import com.starrocks.sql.parser.NodePosition;
+import com.starrocks.utframe.UtFrameUtils;
 import mockit.Mock;
 import mockit.MockUp;
 import org.junit.jupiter.api.Assertions;
@@ -125,5 +131,91 @@ public class AuthenticationHandlerTest {
         ldapGroupProvider2.setUserToGroupCache(groups2);
         Assertions.assertEquals(Set.of("group3", "group4"),
                 ldapGroupProvider2.getGroup(context.getCurrentUserIdentity(), context.getDistinguishedName()));
+    }
+
+    @Test
+    public void testGroupRoleNameMappingForStoredLdapUser() throws Exception {
+        assertGroupRoleNameMappingAtLogin(false);
+    }
+
+    @Test
+    public void testGroupRoleNameMappingForEphemeralLdapUser() throws Exception {
+        assertGroupRoleNameMappingAtLogin(true);
+    }
+
+    private void assertGroupRoleNameMappingAtLogin(boolean ephemeral) throws Exception {
+        GlobalStateMgr globalStateMgr = GlobalStateMgr.getCurrentState();
+        AuthenticationMgr savedAuthenticationMgr = globalStateMgr.getAuthenticationMgr();
+        AuthorizationMgr savedAuthorizationMgr = globalStateMgr.getAuthorizationMgr();
+        boolean savedMapGroupsToRoles = Config.authorization_map_groups_to_roles_by_name;
+        boolean savedEnableAuthCheck = Config.enable_auth_check;
+        String[] savedGroupProviders = Config.group_provider;
+        String[] savedAuthenticationChain = Config.authentication_chain;
+        try {
+            Config.authorization_map_groups_to_roles_by_name = true;
+            Config.enable_auth_check = true;
+            Config.group_provider = new String[] {"mapping_groups"};
+            Config.authentication_chain = new String[] {"native", "mapping_ldap"};
+
+            AuthenticationMgr authenticationMgr = new AuthenticationMgr();
+            AuthorizationMgr authorizationMgr = new AuthorizationMgr(new DefaultAuthorizationProvider());
+            globalStateMgr.setAuthenticationMgr(authenticationMgr);
+            globalStateMgr.setAuthorizationMgr(authorizationMgr);
+
+            ConnectContext adminContext = new ConnectContext();
+            DDLStmtExecutor.execute(UtFrameUtils.parseStmtWithNewParser(
+                    "create role analysts", adminContext), adminContext);
+            DDLStmtExecutor.execute(UtFrameUtils.parseStmtWithNewParser(
+                    "grant operate on system to role analysts", adminContext), adminContext);
+            Long roleId = authorizationMgr.getRoleIdByNameAllowNull("analysts");
+
+            authenticationMgr.replayCreateGroupProvider("mapping_groups", Map.of(
+                    GroupProvider.GROUP_PROVIDER_PROPERTY_TYPE_KEY, "ldap",
+                    LDAPGroupProvider.LDAP_USER_SEARCH_ATTR, "uid"));
+            Set<String> groups = Set.of("analysts", "no_matching_role");
+            LDAPGroupProvider groupProvider = (LDAPGroupProvider) authenticationMgr.getGroupProvider("mapping_groups");
+            groupProvider.setUserToGroupCache(Map.of("ldap_user", groups));
+
+            String userDn = "uid=ldap_user,ou=company,dc=example,dc=com";
+            if (ephemeral) {
+                authenticationMgr.replayCreateSecurityIntegration("mapping_ldap", Map.of(
+                        SecurityIntegration.SECURITY_INTEGRATION_PROPERTY_TYPE_KEY, "authentication_ldap_simple",
+                        SimpleLDAPSecurityIntegration.AUTHENTICATION_LDAP_SIMPLE_SERVER_HOST, "localhost",
+                        SimpleLDAPSecurityIntegration.AUTHENTICATION_LDAP_SIMPLE_BIND_DN_PATTERN,
+                        "uid=${USER},ou=company,dc=example,dc=com",
+                        SecurityIntegration.SECURITY_INTEGRATION_PROPERTY_GROUP_PROVIDER, "mapping_groups"));
+            } else {
+                CreateUserStmt createUserStmt = new CreateUserStmt(new UserIdentity("ldap_user", "%"), true,
+                        new UserAuthOption("AUTHENTICATION_LDAP_SIMPLE", userDn, false, NodePosition.ZERO),
+                        List.of(), Map.of(), NodePosition.ZERO);
+                Analyzer.analyze(createUserStmt, adminContext);
+                authenticationMgr.createUser(createUserStmt);
+            }
+
+            new MockUp<LDAPAuthProvider>() {
+                @Mock
+                public void checkPassword(String dn, String password) {
+                    Assertions.assertEquals(userDn, dn);
+                    Assertions.assertEquals("ldap_password", password);
+                }
+            };
+
+            ConnectContext context = new ConnectContext();
+            UserIdentity user = AuthenticationHandler.authenticateWithClearPassword(
+                    context, "ldap_user", "127.0.0.1", "ldap_password");
+
+            Assertions.assertEquals(ephemeral, user.isEphemeral());
+            Assertions.assertEquals(groups, context.getGroups());
+            Assertions.assertEquals(Set.of(roleId), context.getCurrentRoleIds());
+            Assertions.assertTrue(authorizationMgr.getRoleIdListByGroup("analysts").isEmpty());
+            new NativeAccessController().checkSystemAction(context, PrivilegeType.OPERATE);
+        } finally {
+            Config.authorization_map_groups_to_roles_by_name = savedMapGroupsToRoles;
+            Config.enable_auth_check = savedEnableAuthCheck;
+            Config.group_provider = savedGroupProviders;
+            Config.authentication_chain = savedAuthenticationChain;
+            globalStateMgr.setAuthenticationMgr(savedAuthenticationMgr);
+            globalStateMgr.setAuthorizationMgr(savedAuthorizationMgr);
+        }
     }
 }
