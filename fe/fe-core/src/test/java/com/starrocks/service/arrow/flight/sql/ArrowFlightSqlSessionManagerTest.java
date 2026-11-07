@@ -19,7 +19,9 @@ package com.starrocks.service.arrow.flight.sql;
 
 import com.starrocks.authentication.AuthenticationHandler;
 import com.starrocks.authorization.PrivilegeException;
+import com.starrocks.common.Config;
 import com.starrocks.common.Pair;
+import com.starrocks.common.jmockit.Deencapsulation;
 import com.starrocks.common.util.UUIDUtil;
 import com.starrocks.qe.ConnectContext;
 import com.starrocks.qe.ConnectScheduler;
@@ -32,7 +34,9 @@ import com.starrocks.service.ExecuteEnv;
 import com.starrocks.service.arrow.flight.sql.session.ArrowFlightSqlSessionManager;
 import com.starrocks.system.Frontend;
 import com.starrocks.thrift.TUniqueId;
+import org.apache.arrow.flight.CallStatus;
 import org.apache.arrow.flight.FlightRuntimeException;
+import org.apache.arrow.memory.BufferAllocator;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.MockedStatic;
@@ -40,6 +44,7 @@ import org.mockito.MockedStatic;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -49,8 +54,12 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.any;
+import static org.mockito.Mockito.anyBoolean;
+import static org.mockito.Mockito.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 public class ArrowFlightSqlSessionManagerTest {
@@ -92,13 +101,26 @@ public class ArrowFlightSqlSessionManagerTest {
     }
 
     private void mockAuthentication(MockedStatic<AuthenticationHandler> mockedAuth) {
+        mockAuthentication(mockedAuth, null);
+    }
+
+    private void mockAuthentication(MockedStatic<AuthenticationHandler> mockedAuth,
+                                    AtomicReference<ArrowFlightSqlConnectContext> contextRef) {
         mockedAuth.when(() -> AuthenticationHandler.authenticateWithClearPassword(any(), any(), any(), any()))
                 .thenAnswer(invocation -> {
                     ConnectContext ctx = invocation.getArgument(0);
                     ctx.setCurrentUserIdentity(null);
                     ctx.setQualifiedUser("testUser");
+                    if (contextRef != null) {
+                        contextRef.set((ArrowFlightSqlConnectContext) ctx);
+                    }
                     return null;
                 });
+    }
+
+    private void assertAllocatorClosed(ArrowFlightSqlConnectContext context) {
+        BufferAllocator allocator = Deencapsulation.getField(context, "allocator");
+        assertThrows(IllegalStateException.class, allocator::assertOpen);
     }
 
     @Test
@@ -128,12 +150,14 @@ public class ArrowFlightSqlSessionManagerTest {
 
     @Test
     public void testInitializeSession_registerConnectionFail() {
+        AtomicReference<ArrowFlightSqlConnectContext> contextRef = new AtomicReference<>();
         try (MockedStatic<ExecuteEnv> mockedEnv = mockStatic(ExecuteEnv.class);
                 MockedStatic<UUIDUtil> mockedUUID = mockStatic(UUIDUtil.class);
                 MockedStatic<GlobalStateMgr> mockedGlobalState = mockStatic(GlobalStateMgr.class);
+                MockedStatic<GlobalVariable> mockedGlobalVar = mockStatic(GlobalVariable.class);
                 MockedStatic<AuthenticationHandler> mockedAuth = mockStatic(AuthenticationHandler.class)) {
 
-            mockAuthentication(mockedAuth);
+            mockAuthentication(mockedAuth, contextRef);
 
             ExecuteEnv mockEnv = mock(ExecuteEnv.class);
             mockedEnv.when(ExecuteEnv::getInstance).thenReturn(mockEnv);
@@ -143,11 +167,51 @@ public class ArrowFlightSqlSessionManagerTest {
 
             mockedUUID.when(UUIDUtil::genUUID).thenReturn(mockUUID);
             mockedUUID.when(() -> UUIDUtil.toTUniqueId(mockUUID)).thenReturn(mockTUniqueId);
+            mockedGlobalVar.when(GlobalVariable::isArrowFlightProxyEnabled).thenReturn(false);
 
             mockGlobalStateMgr(mockedGlobalState);
 
             assertThrows(FlightRuntimeException.class, () -> sessionManager
                     .initializeSession("testUser", "127.0.0.1", "testPassword"));
+            assertThrows(IllegalArgumentException.class,
+                    () -> sessionManager.validateToken(mockUUID.toString()));
+            assertAllocatorClosed(contextRef.get());
+        }
+    }
+
+    // the token cache is bounded, so caching the token of a rejected login would evict, and kill, another session
+    @Test
+    public void testInitializeSession_rejectedLoginKeepsOtherSessions() {
+        int tokenCacheSize = Config.arrow_token_cache_size;
+        Config.arrow_token_cache_size = 1;
+        try (MockedStatic<ExecuteEnv> mockedEnv = mockStatic(ExecuteEnv.class);
+                MockedStatic<GlobalStateMgr> mockedGlobalState = mockStatic(GlobalStateMgr.class);
+                MockedStatic<GlobalVariable> mockedGlobalVar = mockStatic(GlobalVariable.class);
+                MockedStatic<AuthenticationHandler> mockedAuth = mockStatic(AuthenticationHandler.class)) {
+
+            mockAuthentication(mockedAuth);
+
+            ExecuteEnv mockEnv = mock(ExecuteEnv.class);
+            mockedEnv.when(ExecuteEnv::getInstance).thenReturn(mockEnv);
+            when(mockEnv.getScheduler()).thenReturn(mockScheduler);
+            when(mockScheduler.getNextConnectionId()).thenReturn(123, 124);
+            when(mockScheduler.registerConnection(any()))
+                    .thenReturn(Pair.create(true, ""), Pair.create(false, "register failed"));
+            when(mockScheduler.getArrowFlightSqlConnectContext(any())).thenReturn(mockContext);
+            mockedGlobalVar.when(GlobalVariable::isArrowFlightProxyEnabled).thenReturn(false);
+
+            mockGlobalStateMgr(mockedGlobalState);
+
+            ArrowFlightSqlSessionManager manager = new ArrowFlightSqlSessionManager();
+            String token = manager.initializeSession("testUser", "127.0.0.1", "testPassword");
+            FlightRuntimeException error = assertThrows(FlightRuntimeException.class,
+                    () -> manager.initializeSession("testUser", "127.0.0.1", "testPassword"));
+            assertEquals(CallStatus.RESOURCE_EXHAUSTED.code(), error.status().code());
+
+            assertDoesNotThrow(() -> manager.validateToken(token));
+            verify(mockContext, never()).kill(anyBoolean(), anyString());
+        } finally {
+            Config.arrow_token_cache_size = tokenCacheSize;
         }
     }
 
