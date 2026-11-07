@@ -544,6 +544,7 @@ public class ConnectContext {
         for (String group : groups) {
             roleIds.addAll(globalStateMgr.getAuthorizationMgr().getRoleIdListByGroup(group));
         }
+        roleIds.addAll(globalStateMgr.getAuthorizationMgr().getRoleIdsMappedByGroupName(groups));
         setCurrentRoleIds(roleIds);
     }
 

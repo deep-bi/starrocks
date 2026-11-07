@@ -845,6 +845,39 @@ public class AuthorizationMgr {
         }
     }
 
+    /**
+     * Roles the given external groups hold by name when {@link Config#authorization_map_groups_to_roles_by_name} is
+     * on: a group whose name matches an existing role holds that role, on top of the roles granted to it with
+     * GRANT ... TO EXTERNAL GROUP. Built-in roles are never matched, so a directory group named "root" or
+     * "db_admin" confers nothing. Empty when the option is off.
+     */
+    public Set<Long> getRoleIdsMappedByGroupName(Set<String> groups) {
+        roleReadLock();
+        try {
+            return getRoleIdsMappedByGroupNameUnlocked(groups);
+        } finally {
+            roleReadUnlock();
+        }
+    }
+
+    // requires the role lock
+    protected Set<Long> getRoleIdsMappedByGroupNameUnlocked(Set<String> groups) {
+        if (!Config.authorization_map_groups_to_roles_by_name || groups == null || groups.isEmpty()) {
+            return Set.of();
+        }
+        Set<Long> roleIds = new HashSet<>();
+        for (String group : groups) {
+            if (PrivilegeBuiltinConstants.BUILT_IN_ROLE_NAMES.contains(group)) {
+                continue;
+            }
+            Long roleId = roleNameToId.get(group);
+            if (roleId != null) {
+                roleIds.add(roleId);
+            }
+        }
+        return roleIds;
+    }
+
     protected boolean checkAction(PrivilegeCollectionV2 collection, ObjectType objectType,
                                   PrivilegeType privilegeType, List<String> objectNames) throws PrivilegeException {
         if (objectNames == null) {
@@ -996,6 +1029,15 @@ public class AuthorizationMgr {
 
             try {
                 roleReadLock();
+                // 1.1 Roles held by group name (authorization_map_groups_to_roles_by_name) join after the
+                // activated-role restriction, like the roles granted to the groups above. Copy instead of adding in
+                // place: for an ephemeral user validRoleIds is the caller's set, which is also the cache key.
+                Set<Long> roleIdsMappedByGroupName = getRoleIdsMappedByGroupNameUnlocked(groups);
+                if (!roleIdsMappedByGroupName.isEmpty()) {
+                    validRoleIds = new HashSet<>(validRoleIds);
+                    validRoleIds.addAll(roleIdsMappedByGroupName);
+                }
+
                 // 2. Get all predecessors base on step 1
                 // The main purpose of the secondary verification of UserPrivilegeCollection here is.
                 // Because the user's permissions may be revoked while the session is not disconnected,
@@ -1051,9 +1093,11 @@ public class AuthorizationMgr {
             if (roleIds == null) {
                 roleIds = getRoleIdsByUser(pair.userIdentity);
             }
+            // a role held by group name may postdate the session, so it need not be among the session's role ids
+            Set<Long> roleIdsMappedByGroupName = getRoleIdsMappedByGroupNameUnlocked(pair.groups);
 
             for (long badRoleId : badRoles) {
-                if (roleIds.contains(badRoleId)) {
+                if (roleIds.contains(badRoleId) || roleIdsMappedByGroupName.contains(badRoleId)) {
                     badKeys.add(pair);
                     break;
                 }
