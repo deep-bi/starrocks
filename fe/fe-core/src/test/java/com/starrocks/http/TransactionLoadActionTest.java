@@ -29,6 +29,7 @@ import com.starrocks.load.streamload.StreamLoadMgr;
 import com.starrocks.server.GlobalStateMgr;
 import com.starrocks.server.LocalMetastore;
 import com.starrocks.server.RunMode;
+import com.starrocks.service.ExecuteEnv;
 import com.starrocks.system.Backend;
 import com.starrocks.system.ComputeNode;
 import com.starrocks.thrift.TNetworkAddress;
@@ -104,6 +105,8 @@ public class TransactionLoadActionTest extends StarRocksHttpTestCase {
 
     @Override
     protected void doSetUp() {
+        // REST authentication registers the connection with the scheduler
+        ExecuteEnv.setup();
         Backend backend4 = new Backend(1234, "localhost", 8040);
         backend4.setBePort(9300);
         backend4.setAlive(true);
@@ -127,6 +130,7 @@ public class TransactionLoadActionTest extends StarRocksHttpTestCase {
             @Mock
             public void redirectTo(BaseRequest request,
                                    BaseResponse response,
+                                   boolean useSSL,
                                    TNetworkAddress addr) throws DdlException {
                 TransactionResult result = new TransactionResult();
                 result.setOKMsg("mock redirect to BE");

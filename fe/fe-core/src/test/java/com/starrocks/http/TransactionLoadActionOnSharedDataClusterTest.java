@@ -20,6 +20,7 @@ import com.starrocks.http.rest.TransactionResult;
 import com.starrocks.server.GlobalStateMgr;
 import com.starrocks.server.RunMode;
 import com.starrocks.server.WarehouseManager;
+import com.starrocks.service.ExecuteEnv;
 import com.starrocks.system.ComputeNode;
 import com.starrocks.thrift.TNetworkAddress;
 import io.netty.handler.codec.http.HttpMethod;
@@ -41,6 +42,8 @@ public class TransactionLoadActionOnSharedDataClusterTest extends TransactionLoa
 
     @Override
     protected void doSetUp() {
+        // REST authentication registers the connection with the scheduler
+        ExecuteEnv.setup();
         new MockUp<RunMode>() {
             @Mock
             public RunMode getCurrentRunMode() {
@@ -79,6 +82,7 @@ public class TransactionLoadActionOnSharedDataClusterTest extends TransactionLoa
             @Mock
             public void redirectTo(BaseRequest request,
                                    BaseResponse response,
+                                   boolean useSSL,
                                    TNetworkAddress addr) throws DdlException {
                 TransactionResult result = new TransactionResult();
                 result.setOKMsg("mock redirect to BE");
