@@ -805,6 +805,15 @@ This topic introduces the following types of FE configurations:
 - Description: The name of the attribute that identifies users in LDAP objects.
 - Introduced in: -
 
+### `authorization_map_groups_to_roles_by_name`
+
+- Default: false
+- Type: Boolean
+- Unit: -
+- Is mutable: No
+- Description: Whether a user also holds every role whose name equals one of the user's groups, as returned by the group provider. This is how the 3.5.x-deepbi releases mapped groups to roles. The roles add to the ones granted with `GRANT <role> TO EXTERNAL GROUP` and behave the same way. They apply in every session, `SET ROLE` can't name them, and `SHOW GRANTS FOR EXTERNAL GROUP` doesn't list them. Group names must match role names exactly. Built-in roles (`root`, `db_admin`, `cluster_admin`, `user_admin`, `security_admin`, `public`) are never matched by name. Set the same value in `fe.conf` on every FE, because each FE resolves the roles itself, including the leader for statements that a follower forwards.
+- Introduced in: 4.0.16-deepbi1
+
 ### `backup_job_default_timeout_ms`
 
 - Default: 86400 * 1000
