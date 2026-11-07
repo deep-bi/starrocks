@@ -1518,6 +1518,15 @@ public class Config extends ConfigBase {
     public static int qe_max_connection = 4096;
 
     /**
+     * Maximal number of connections per role and FE, as comma-separated role-pattern:max-connections entries,
+     * for example "analyst:20,AD_*:50". A pattern may use * as a wildcard, and the most specific pattern that
+     * matches a role applies. A connection is rejected if any role active in its session is at its limit.
+     * Empty means no role limits.
+     */
+    @ConfField
+    public static String qe_role_connection_limits = "";
+
+    /**
      * Used to limit element num of InPredicate in delete statement.
      */
     @ConfField(mutable = true)
