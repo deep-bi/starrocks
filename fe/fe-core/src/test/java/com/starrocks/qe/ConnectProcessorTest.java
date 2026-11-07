@@ -37,6 +37,7 @@ package com.starrocks.qe;
 import com.google.common.base.Strings;
 import com.google.common.collect.Sets;
 import com.starrocks.analysis.AccessTestUtil;
+import com.starrocks.analysis.RedirectStatus;
 import com.starrocks.authentication.AuthenticationMgr;
 import com.starrocks.authorization.PrivilegeBuiltinConstants;
 import com.starrocks.catalog.InternalCatalog;
@@ -59,6 +60,7 @@ import com.starrocks.server.GlobalStateMgr;
 import com.starrocks.server.RunMode;
 import com.starrocks.service.arrow.flight.sql.ArrowFlightSqlConnectProcessor;
 import com.starrocks.sql.analyzer.AnalyzerUtils;
+import com.starrocks.sql.analyzer.Authorizer;
 import com.starrocks.sql.analyzer.DDLTestBase;
 import com.starrocks.sql.ast.PrepareStmt;
 import com.starrocks.sql.ast.StatementBase;
@@ -692,6 +694,76 @@ public class ConnectProcessorTest extends DDLTestBase {
         Assertions.assertEquals(Set.of("analysts", "etl"),
                 groupsSeenByForwardedStatement(Arrays.asList("analysts", "etl")));
         Assertions.assertEquals(Set.of(), groupsSeenByForwardedStatement(null));
+    }
+
+    @Test
+    public void testProxyExecuteAuthorizesNameMappedGroupWithoutForwardedRoleIds() throws Exception {
+        boolean previousMapping = Config.authorization_map_groups_to_roles_by_name;
+        String roleName = "forwarded_name_mapped_role";
+        String sql = "select v1 from testTable1";
+        try {
+            Config.authorization_map_groups_to_roles_by_name = true;
+            UserIdentity user = UserIdentity.createEphemeralUserIdent("forwarded_group_user", "%");
+            ConnectContext follower = new ConnectContext();
+            follower.setGlobalStateMgr(GlobalStateMgr.getCurrentState());
+            follower.setCurrentUserIdentity(user);
+            follower.setQualifiedUser(user.getUser());
+            follower.setGroups(Set.of(roleName));
+            follower.setCurrentRoleIds(user, follower.getGroups());
+            follower.setCurrentCatalog("default");
+            follower.setDatabase("testDb1");
+            follower.setQueryId(UUIDUtil.genUUID());
+            follower.setSessionId(UUID.randomUUID());
+            follower.setIsLastStmt(true);
+            Assertions.assertTrue(follower.getCurrentRoleIds().isEmpty());
+
+            // The matching role appears after login. The leader must resolve it from the forwarded groups,
+            // since this session's role IDs cannot include it.
+            DDLStmtExecutor.execute(UtFrameUtils.parseStmtWithNewParser("create role " + roleName, ctx), ctx);
+            DDLStmtExecutor.execute(UtFrameUtils.parseStmtWithNewParser(
+                    "grant select on table testDb1.testTable1 to role " + roleName, ctx), ctx);
+            LeaderOpExecutor executor = new LeaderOpExecutor(new OriginStatement(sql),
+                    follower, RedirectStatus.FORWARD_NO_SYNC);
+            TMasterOpRequest request = executor.createTMasterOpRequest(follower, 1);
+            Assertions.assertEquals(Set.of(roleName), new HashSet<>(request.getUser_groups()));
+            Assertions.assertTrue(request.getUser_roles().getRole_id_list().isEmpty());
+
+            Assertions.assertEquals(QueryState.MysqlStateType.OK.toString(),
+                    authorizeForwardedTableSelect(request).getState());
+
+            // Without the forwarded groups the leader has nothing to map, so the same request is denied.
+            request.unsetUser_groups();
+            TMasterOpResult denied = authorizeForwardedTableSelect(request);
+            Assertions.assertEquals(QueryState.MysqlStateType.ERR.toString(), denied.getState());
+            Assertions.assertTrue(denied.getErrorMsg().contains("Access denied"), denied.getErrorMsg());
+        } finally {
+            try {
+                DDLStmtExecutor.execute(UtFrameUtils.parseStmtWithNewParser(
+                        "drop role if exists " + roleName, ctx), ctx);
+            } finally {
+                Config.authorization_map_groups_to_roles_by_name = previousMapping;
+                ctx.setThreadLocalInfo();
+            }
+        }
+    }
+
+    private TMasterOpResult authorizeForwardedTableSelect(TMasterOpRequest request) throws Exception {
+        StatementBase analyzed = UtFrameUtils.parseStmtWithNewParser(request.getSql(), ctx);
+        ConnectContext leader = new ConnectContext();
+        ConnectProcessor processor = new ConnectProcessor(leader);
+        try (MockedConstruction<StmtExecutor> ignored = Mockito.mockConstruction(StmtExecutor.class,
+                (mock, mockCtx) -> {
+                    // Run the check StmtExecutor runs on the identity, groups and roles restored by proxyExecute,
+                    // while avoiding backend query execution.
+                    Mockito.doAnswer(invocation -> {
+                        Authorizer.check(analyzed, leader);
+                        return null;
+                    }).when(mock).execute();
+                    Mockito.when(mock.getQueryStatisticsForAuditLog()).thenReturn(null);
+                    Mockito.when(mock.getParsedStmt()).thenReturn(analyzed);
+                })) {
+            return processor.proxyExecute(request, null);
+        }
     }
 
     private Set<String> groupsSeenByForwardedStatement(List<String> userGroups) throws Exception {
