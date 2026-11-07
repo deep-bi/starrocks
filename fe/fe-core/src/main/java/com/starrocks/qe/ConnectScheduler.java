@@ -77,6 +77,7 @@ public class ConnectScheduler {
     private final Map<String, ArrowFlightSqlConnectContext> arrowFlightSqlConnectContextMap = Maps.newConcurrentMap();
 
     private final Map<String, AtomicInteger> connCountByUser = Maps.newConcurrentMap();
+    private final RoleConnectionManager roleConnectionManager;
     private final ReentrantLock connStatsLock = new ReentrantLock();
 
     public static final class ConnectionIdExhaustedException extends Exception {
@@ -96,6 +97,7 @@ public class ConnectScheduler {
         }
         this.maxConnections = new AtomicInteger(maxConnections);
         connectionIdGenerator = new ConnectionIdGenerator(connectionIdSpace);
+        roleConnectionManager = new RoleConnectionManager(Config.qe_role_connection_limits);
         // Use a thread to check whether connection is timeout. Because
         // 1. If use a scheduler, the task maybe a huge number when query is messy.
         //    Let timeout is 10m, and 5000 qps, then there are up to 3000000 tasks in scheduler.
@@ -170,9 +172,18 @@ public class ConnectScheduler {
                         ctx.getConnectionId(), connCountByUser);
                 return new Pair<>(false, userErrMsg);
             }
+            // Check role, only once the user is authenticated: a MySQL connection registers before it
+            // authenticates and is counted against its roles by registerRoleConnection afterwards.
+            Pair<Boolean, String> roleRegisterResult = roleConnectionManager.registerConnection(ctx);
+            if (!roleRegisterResult.first) {
+                return roleRegisterResult;
+            }
 
             existing = connectionMap.putIfAbsent((long) ctx.getConnectionId(), ctx);
             if (existing != null) {
+                if (existing != ctx) {
+                    roleConnectionManager.unregisterConnection(ctx);
+                }
                 return handleExistingConnection(ctx, existing);
             }
             connCountByUser.computeIfAbsent(ctx.getQualifiedUser(), ignored -> new AtomicInteger()).incrementAndGet();
@@ -197,6 +208,26 @@ public class ConnectScheduler {
         return Pair.create(false, message);
     }
 
+    /**
+     * Count a registered connection against the role-based connection limits once its user is authenticated.
+     * Needed for a MySQL connection, which registers before it authenticates. A connection that was unregistered
+     * meanwhile is not counted, so that nothing is left behind for it.
+     *
+     * @param ctx authenticated connection context
+     * @return a pair, first is success or not, second is error message(if any)
+     */
+    public Pair<Boolean, String> registerRoleConnection(ConnectContext ctx) {
+        try {
+            connStatsLock.lock();
+            if (connectionMap.get((long) ctx.getConnectionId()) != ctx) {
+                return new Pair<>(false, "Connection " + ctx.getConnectionId() + " is not registered");
+            }
+            return roleConnectionManager.registerConnection(ctx);
+        } finally {
+            connStatsLock.unlock();
+        }
+    }
+
     public Pair<Boolean, String> onUserChanged(ConnectContext ctx, String oldQualifiedUser, String newQualifiedUser) {
         if (Objects.equals(oldQualifiedUser, newQualifiedUser)) {
             return new Pair<>(true, null);
@@ -208,6 +239,10 @@ public class ConnectScheduler {
 
         try {
             connStatsLock.lock();
+            // a connection closed meanwhile is not counted again, nothing would release it
+            if (connectionMap.get((long) ctx.getConnectionId()) != ctx) {
+                return new Pair<>(false, "Connection " + ctx.getConnectionId() + " is not registered");
+            }
             AtomicInteger newCounter = connCountByUser.computeIfAbsent(newQualifiedUser, k -> new AtomicInteger(0));
             int currentNewCount = newCounter.get();
             long currentUserMaxConn = GlobalStateMgr.getCurrentState().getAuthenticationMgr().getMaxConn(newQualifiedUser);
@@ -221,6 +256,11 @@ public class ConnectScheduler {
                         + ", user.currConn=" + currentNewCount;
                 LOG.info("{}, details: connectionId={}, connByUser={}", userErrMsg, ctx.getConnectionId(), connCountByUser);
                 return new Pair<>(false, userErrMsg);
+            }
+            // the context already carries the roles of the new user
+            Pair<Boolean, String> roleChangeResult = roleConnectionManager.onUserChanged(ctx);
+            if (!roleChangeResult.first) {
+                return roleChangeResult;
             }
 
             newCounter.incrementAndGet();
@@ -271,6 +311,8 @@ public class ConnectScheduler {
                         ctx.getMysqlChannel().getRemoteHostPortString(), ctx.getConnectionId(),
                         ctx.getQualifiedUser(), conns != null ? Integer.toString(conns.get()) : "nil");
             }
+            // releases exactly the roles this connection was counted against, if any
+            roleConnectionManager.unregisterConnection(ctx);
 
             if (ctx.isArrowFlightSql()) {
                 ArrowFlightSqlConnectContext context = (ArrowFlightSqlConnectContext) ctx;
@@ -287,6 +329,11 @@ public class ConnectScheduler {
 
     public ConnectContext getContext(long connectionId) {
         return connectionMap.get(connectionId);
+    }
+
+    @VisibleForTesting
+    public RoleConnectionManager getRoleConnectionManager() {
+        return roleConnectionManager;
     }
 
     public ArrowFlightSqlConnectContext getArrowFlightSqlConnectContext(String token) {
