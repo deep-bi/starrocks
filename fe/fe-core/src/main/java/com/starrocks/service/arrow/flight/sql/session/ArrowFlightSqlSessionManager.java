@@ -99,6 +99,8 @@ public class ArrowFlightSqlSessionManager {
         }
         ctx.resetConnectionStartTime();
 
+        // expired tokens are dropped lazily, so release their sessions before the connection limits are checked
+        tokenCache.cleanUp();
         Pair<Boolean, String> isSuccessAndErrorMsg = connectScheduler.registerConnection(ctx);
         if (!isSuccessAndErrorMsg.first) {
             String errorMsg = isSuccessAndErrorMsg.second;

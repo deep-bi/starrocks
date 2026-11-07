@@ -34,6 +34,7 @@
 
 package com.starrocks.mysql.nio;
 
+import com.starrocks.common.ErrorCode;
 import com.starrocks.common.Pair;
 import com.starrocks.common.util.LogUtil;
 import com.starrocks.mysql.MysqlProto;
@@ -112,6 +113,15 @@ public class AcceptListener implements ChannelListener<AcceptingChannel<StreamCo
                         result = MysqlProto.authenticate(context, result.authPacket());
                         if (result.state() != NegotiateState.OK) {
                             throw new AfterConnectedException(result.state().getMsg());
+                        }
+
+                        // the roles of the session are known only now
+                        Pair<Boolean, String> roleRegisterResult = connectScheduler.registerRoleConnection(context);
+                        if (!roleRegisterResult.first) {
+                            context.getState().setErrorCode(ErrorCode.ERR_TOO_MANY_USER_CONNECTIONS);
+                            context.getState().setError(roleRegisterResult.second);
+                            MysqlProto.sendResponsePacket(context);
+                            throw new AfterConnectedException(roleRegisterResult.second);
                         }
 
                         MysqlProto.sendResponsePacket(context);
