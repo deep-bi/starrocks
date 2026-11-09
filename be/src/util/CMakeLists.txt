@@ -78,6 +78,7 @@ set(UTIL_FILES
   file_util.cpp
   filesystem_util.cc
   fips.cpp
+  openssl_errors.cpp
   time.cpp
 # coding_util.cpp
   cidr.cpp

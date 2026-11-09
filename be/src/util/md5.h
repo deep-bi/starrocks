@@ -17,39 +17,20 @@
 
 #pragma once
 
-#include <openssl/evp.h>
-
 #include <cstddef>
-#include <memory>
-#include <string>
+
+#include "util/sha.h"
 
 namespace starrocks {
 
 // MD5 is not FIPS approved. It is kept only where another system expects an MD5 value: the md5
 // SQL functions, FE-supplied checksums for small files and UDF jars, and checksums stored in
 // backup repositories. New code that needs a checksum should use SHA256Digest from util/sha.h.
-class Md5Digest {
+class Md5Digest : public detail::EvpDigest<16> {
 public:
     static constexpr size_t kDigestLength = 16;
 
     Md5Digest();
-
-    void update(const void* data, size_t length);
-    void digest();
-
-    const std::string& hex() const { return _hex; }
-
-    // raw digest, kDigestLength bytes; valid after digest()
-    const unsigned char* binary() const { return _hash; }
-
-private:
-    struct CtxDeleter {
-        void operator()(EVP_MD_CTX* ctx) const { EVP_MD_CTX_free(ctx); }
-    };
-
-    std::unique_ptr<EVP_MD_CTX, CtxDeleter> _ctx;
-    unsigned char _hash[kDigestLength] = {};
-    std::string _hex;
 };
 
 } // namespace starrocks

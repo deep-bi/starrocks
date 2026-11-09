@@ -73,29 +73,6 @@ const EVP_CIPHER* get_evp_cipher(const FileEncryptionInfo& info) {
     }
 }
 
-// copy from kudu/src/kudu/util/env_posix.cc
-// Copyright (c) 2011 The LevelDB Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style license that can be
-// found in the LICENSE file. See the AUTHORS file for names of contributors.
-
-std::string get_openssl_errors() {
-    std::ostringstream serr;
-    unsigned long l;
-    int line, flags;
-    const char *file, *data;
-    char buf[256];
-#if OPENSSL_VERSION_NUMBER >= 0x30000000L
-    const char* func;
-    while ((l = ERR_get_error_all(&file, &line, &func, &data, &flags)) != 0) {
-#else
-    while ((l = ERR_get_error_line_data(&file, &line, &data, &flags)) != 0) {
-#endif
-        ERR_error_string_n(l, buf, sizeof(buf));
-        serr << " " << buf << ":" << file << ":" << line << ((flags & ERR_TXT_STRING) ? data : "");
-    }
-    return serr.str();
-}
-
 #define OPENSSL_RET_NOT_OK(call, msg)                                                  \
     if ((call) <= 0) {                                                                 \
         return Status::InternalError(fmt::format("{} {}", msg, get_openssl_errors())); \

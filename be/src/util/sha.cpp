@@ -22,8 +22,8 @@ namespace starrocks {
 
 namespace detail {
 
-// a failure here means allocation failed or the fips provider is in its error state; a wrong
-// digest would be worse than stopping, since callers use it for cache keys and fingerprints
+// a failure here means allocation failed or the provider is in its error state; a wrong digest
+// would be worse than stopping, since callers compare it with stored values or use it as a key
 template <size_t Size>
 EvpDigest<Size>::EvpDigest(const EVP_MD* md) : _ctx(EVP_MD_CTX_new()) {
     CHECK(_ctx != nullptr) << "EVP_MD_CTX_new failed";
@@ -56,6 +56,8 @@ std::string EvpDigest<Size>::hex() const {
     return out;
 }
 
+// Md5Digest, see util/md5.h
+template class EvpDigest<16>;
 template class EvpDigest<SHA224_DIGEST_LENGTH>;
 template class EvpDigest<SHA256_DIGEST_LENGTH>;
 template class EvpDigest<SHA384_DIGEST_LENGTH>;

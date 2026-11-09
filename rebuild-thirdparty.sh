@@ -616,8 +616,10 @@ rebuild_openssl_fips() {
     export GLOBAL_CFLAGS="-O3 -fno-omit-frame-pointer -std=gnu17 -fPIC -g"
     export GLOBAL_CXXFLAGS="-O3 -fno-omit-frame-pointer -Wno-class-memaccess -fPIC -g"
 
-    info "Building ${fips_source} FIPS provider..."
-    build_openssl_fips > "${build_dir}.log" 2>&1 || { error "Build failed; see ${build_dir}.log"; exit 1; }
+    info "Building ${fips_source} FIPS provider (log: ${build_dir}.log)..."
+    # a plain call keeps set -e active inside the function; under `||` a failed make would still
+    # go on to delete the installed provider
+    build_openssl_fips > "${build_dir}.log" 2>&1
 
     # Step 3: verify the module reports the validated version and passes its
     # self-tests; the throwaway fipsmodule.cnf is never shipped

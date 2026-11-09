@@ -30,28 +30,6 @@ static const EVP_MD* md5_method() {
     return md;
 }
 
-// a failure here means allocation failed or no provider can serve MD5; a wrong checksum would be
-// worse than stopping, since callers compare it with values from the FE and backup repositories
-Md5Digest::Md5Digest() : _ctx(EVP_MD_CTX_new()) {
-    CHECK(_ctx != nullptr) << "EVP_MD_CTX_new failed";
-    CHECK_EQ(EVP_DigestInit_ex(_ctx.get(), md5_method(), nullptr), 1) << "EVP_DigestInit_ex failed for MD5";
-}
-
-void Md5Digest::update(const void* data, size_t length) {
-    CHECK_EQ(EVP_DigestUpdate(_ctx.get(), data, length), 1) << "EVP_DigestUpdate failed for MD5";
-}
-
-void Md5Digest::digest() {
-    unsigned int len = 0;
-    CHECK_EQ(EVP_DigestFinal_ex(_ctx.get(), _hash, &len), 1) << "EVP_DigestFinal_ex failed for MD5";
-    DCHECK_EQ(len, kDigestLength);
-
-    static constexpr char kHex[] = "0123456789abcdef";
-    _hex.resize(2 * kDigestLength);
-    for (size_t i = 0; i < kDigestLength; i++) {
-        _hex[2 * i] = kHex[_hash[i] >> 4];
-        _hex[2 * i + 1] = kHex[_hash[i] & 0x0F];
-    }
-}
+Md5Digest::Md5Digest() : EvpDigest(md5_method()) {}
 
 } // namespace starrocks

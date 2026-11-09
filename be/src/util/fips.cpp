@@ -24,6 +24,7 @@
 
 #include "common/config.h"
 #include "fmt/format.h"
+#include "util/openssl_errors.h"
 
 namespace starrocks {
 
@@ -35,24 +36,13 @@ static constexpr std::string_view kFipsProviderVersion = "3.1.2";
 static std::atomic<bool> g_fips_enabled{false};
 static std::string g_fips_description = "disabled";
 
-static std::string drain_openssl_errors() {
-    std::string out;
-    char buf[256];
-    unsigned long err;
-    while ((err = ERR_get_error()) != 0) {
-        ERR_error_string_n(err, buf, sizeof(buf));
-        out.append(" ").append(buf);
-    }
-    return out;
-}
-
 static Status fips_error(std::string_view what) {
-    return Status::InternalError(fmt::format("FIPS mode: {}:{}", what, drain_openssl_errors()));
+    return Status::InternalError(fmt::format("FIPS mode: {}:{}", what, get_openssl_errors()));
 }
 
-// fetching alone isn't enough: the digest has to run under the default properties
-static bool digest_works(const char* name) {
-    EVP_MD* md = EVP_MD_fetch(nullptr, name, nullptr);
+// fetching alone isn't enough: the digest has to run. null properties means the default ones
+static bool digest_works(const char* name, const char* properties = nullptr) {
+    EVP_MD* md = EVP_MD_fetch(nullptr, name, properties);
     if (md == nullptr) {
         ERR_clear_error();
         return false;
@@ -95,6 +85,14 @@ Status init_fips_mode() {
     }
     if (digest_works("MD5")) {
         return Status::InternalError("FIPS mode: MD5 is still available under the default properties");
+    }
+    // md5_method() in util/md5.cpp CHECKs this fetch, so without the default provider the node would
+    // start and then abort on its first MD5 use (SQL md5, small file download, restore)
+    if (!digest_works("MD5", "fips=no")) {
+        // digest_works() has already cleared the error queue, so there is nothing to append
+        return Status::InternalError(fmt::format(
+                "FIPS mode: MD5 with fips=no is unavailable (does {} activate the default provider?)",
+                config::fips_openssl_conf));
     }
 
     OSSL_PROVIDER* fips = OSSL_PROVIDER_load(nullptr, "fips");
