@@ -34,38 +34,39 @@
         <java-extensions.home>${basedir}</java-extensions.home>
         <aws-v2-sdk.version>2.42.1</aws-v2-sdk.version>
         <hadoop.version>3.4.3</hadoop.version>
-        <zookeeper.version>3.8.6</zookeeper.version>
+        <zookeeper.version>3.8.7</zookeeper.version>
         <iceberg.version>1.10.0</iceberg.version>
-        <log4j2.version>2.23.1</log4j2.version>
+        <log4j2.version>2.25.4</log4j2.version>
         <junit.version>5.10.3</junit.version>
         <hive-apache.version>3.1.2-22</hive-apache.version>
         <jni-connector.version>1.0.0</jni-connector.version>
         <hadoop-ext.version>1.0.0</hadoop-ext.version>
         <java-utils.version>1.0.0</java-utils.version>
-        <io.netty.version>4.1.137.Final</io.netty.version>
+        <io.netty.version>4.1.138.Final</io.netty.version>
         <protobuf-java.version>3.25.5</protobuf-java.version>
-        <nimbusds.version>9.37.2</nimbusds.version>
-        <commons-io.version>2.14.0</commons-io.version>
+        <nimbusds.version>9.37.4</nimbusds.version>
+        <!-- commons-configuration2 2.15.0 needs commons-io 2.22.0 (HomeDirectoryLocationStrategy$Builder) -->
+        <commons-io.version>2.22.0</commons-io.version>
         <gcs.connector.version>3.0.13</gcs.connector.version>
         <slf4j.version>1.7.36</slf4j.version>
         <arrow.version>17.0.0</arrow.version>
-        <jackson.version>2.21.4</jackson.version>
-        <!-- jackson-annotations doesn't have 2.21.4 version released -->
+        <jackson.version>2.21.7</jackson.version>
+        <!-- jackson-annotations doesn't have 2.21.7 version released -->
         <jackson-annotations.version>2.21</jackson-annotations.version>
         <guava.version>32.0.1-jre</guava.version>
         <!-- hadoop-azure requires no more than jetty10+ -->
         <!-- https://stackoverflow.com/questions/66713254/spark-wasb-and-jetty-11 -->
         <jetty.version>9.4.58.v20250814</jetty.version>
-        <parquet.version>1.15.2</parquet.version>
+        <parquet.version>1.18.1</parquet.version>
         <airlift.version>2.0.3</airlift.version>
-        <avro.version>1.12.0</avro.version>
-        <luben.zstd.jni.version>1.5.4-2</luben.zstd.jni.version>
+        <avro.version>1.12.1</avro.version>
+        <luben.zstd.jni.version>1.5.7-15</luben.zstd.jni.version>
         <kryo.version>4.0.2</kryo.version>
         <commons-beanutils.version>1.11.0</commons-beanutils.version>
-        <lz4-java.version>1.10.1</lz4-java.version>
+        <lz4-java.version>1.11.4</lz4-java.version>
         <httpclient5.version>5.6.4</httpclient5.version>
         <httpcore5.version>5.4.3</httpcore5.version>
-        <bouncycastle.version>1.85</bouncycastle.version>
+        <bouncycastle.version>1.86</bouncycastle.version>
         <thrift.version>0.24.0</thrift.version>
     </properties>
 
@@ -209,16 +210,12 @@
                         <groupId>org.wildfly.openssl</groupId>
                         <artifactId>wildfly-openssl</artifactId>
                     </exclusion>
-                    <!-- CVE-2026-10050 (jetty-security) / CVE-2026-2332 (jetty-http):
-                         both are only reachable via Hadoop's embedded HttpServer2,
-                         which the JNI readers never instantiate (FS client use only). -->
+                    <!-- CVE-2026-10050 (jetty-security), CVE-2026-2332 (jetty-http), CVE-2026-6790 (jetty-server):
+                         hadoop-common only uses Jetty in its embedded HttpServer2 (org.apache.hadoop.http),
+                         which the JNI readers and libhdfs never instantiate (FS client use only). -->
                     <exclusion>
                         <groupId>org.eclipse.jetty</groupId>
-                        <artifactId>jetty-security</artifactId>
-                    </exclusion>
-                    <exclusion>
-                        <groupId>org.eclipse.jetty</groupId>
-                        <artifactId>jetty-http</artifactId>
+                        <artifactId>*</artifactId>
                     </exclusion>
                 </exclusions>
             </dependency>
@@ -261,10 +258,15 @@
                 <exclusions>
                     <!-- CVE-2026-10050: vulnerable DigestAuthentication lives in
                          jetty-client, pulled via hadoop-yarn-client -> websocket-client.
-                         The YARN websocket timeline client is unused by the readers. -->
+                         Only YarnClientImpl's container shell (websocket) and the YARN
+                         webapp server use Jetty; the readers never create a YARN client. -->
                     <exclusion>
                         <groupId>org.eclipse.jetty</groupId>
-                        <artifactId>jetty-client</artifactId>
+                        <artifactId>*</artifactId>
+                    </exclusion>
+                    <exclusion>
+                        <groupId>org.eclipse.jetty.websocket</groupId>
+                        <artifactId>*</artifactId>
                     </exclusion>
                     <exclusion>
                         <groupId>com.google.protobuf</groupId>
@@ -290,6 +292,14 @@
                         <groupId>org.slf4j</groupId>
                         <artifactId>slf4j-reload4j</artifactId>
                     </exclusion>
+                    <!-- Jetty only backs the KMS, HttpFS, NFS gateway and RBF router servers and the
+                         NameNode/DataNode servers in hadoop-hdfs; CN only uses their client classes.
+                         jetty-util and jetty-util-ajax still reach hadoop-lib through hadoop-azure:
+                         the WASB store (AzureNativeFileSystemStore) uses org.eclipse.jetty.util.ajax.JSON. -->
+                    <exclusion>
+                        <groupId>org.eclipse.jetty</groupId>
+                        <artifactId>*</artifactId>
+                    </exclusion>
                 </exclusions>
             </dependency>
 
@@ -297,6 +307,12 @@
                 <groupId>org.apache.hadoop</groupId>
                 <artifactId>hadoop-hdfs-rbf</artifactId>
                 <version>${hadoop.version}</version>
+                <exclusions>
+                    <exclusion>
+                        <groupId>org.eclipse.jetty</groupId>
+                        <artifactId>*</artifactId>
+                    </exclusion>
+                </exclusions>
             </dependency>
 
             <dependency>
@@ -307,6 +323,10 @@
                     <exclusion>
                         <groupId>org.slf4j</groupId>
                         <artifactId>slf4j-reload4j</artifactId>
+                    </exclusion>
+                    <exclusion>
+                        <groupId>org.eclipse.jetty</groupId>
+                        <artifactId>*</artifactId>
                     </exclusion>
                     <!-- json-simple 1.1.1 leaks junit 4.10 as a compile dependency
                          (CVE-2020-15250); it must not ship in the runtime lib -->
@@ -337,6 +357,10 @@
                     <exclusion>
                         <groupId>org.slf4j</groupId>
                         <artifactId>slf4j-reload4j</artifactId>
+                    </exclusion>
+                    <exclusion>
+                        <groupId>org.eclipse.jetty</groupId>
+                        <artifactId>*</artifactId>
                     </exclusion>
                 </exclusions>
             </dependency>
@@ -476,6 +500,13 @@
                 <artifactId>commons-lang3</artifactId>
                 <version>3.18.0</version>
             </dependency>
+            <!-- hadoop-common 3.4.3 brings commons-configuration2 2.10.1 (CVE fixed in 2.15.0);
+                 it ships in hadoop-lib and the hive/iceberg reader libs -->
+            <dependency>
+                <groupId>org.apache.commons</groupId>
+                <artifactId>commons-configuration2</artifactId>
+                <version>2.15.0</version>
+            </dependency>
             <!-- hadoop-yarn-common drags in 2.12.7 copies of these; keep them
                  aligned with the managed jackson version -->
             <dependency>
@@ -571,6 +602,12 @@
             <dependency>
                 <groupId>org.apache.parquet</groupId>
                 <artifactId>parquet-avro</artifactId>
+                <version>${parquet.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>org.apache.parquet</groupId>
+                <artifactId>parquet-hadoop</artifactId>
                 <version>${parquet.version}</version>
             </dependency>
 
@@ -680,6 +717,9 @@
                                         <exclude>org.eclipse.jetty:jetty-client</exclude>
                                         <exclude>org.eclipse.jetty:jetty-security</exclude>
                                         <exclude>org.eclipse.jetty:jetty-http</exclude>
+                                        <!-- CVE-2026-6790 (jetty-server): excluded from every Hadoop artifact and
+                                             from hudi-common, which declare it; only Hadoop's embedded servers use it. -->
+                                        <exclude>org.eclipse.jetty:jetty-server</exclude>
                                     </excludes>
                                 </bannedDependencies>
                             </rules>

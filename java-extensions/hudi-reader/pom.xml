@@ -105,6 +105,12 @@
                     <groupId>org.glassfish</groupId>
                     <artifactId>javax.el</artifactId>
                 </exclusion>
+                <!-- hudi-common declares jetty-server/jetty-servlet but none of its classes reference Jetty;
+                     the timeline server that uses Jetty lives in hudi-timeline-service, which is not shipped -->
+                <exclusion>
+                    <groupId>org.eclipse.jetty</groupId>
+                    <artifactId>*</artifactId>
+                </exclusion>
             </exclusions>
         </dependency>
 

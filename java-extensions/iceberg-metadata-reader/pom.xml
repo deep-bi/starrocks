@@ -13,7 +13,7 @@
 
     <properties>
         <java-extensions.home>${basedir}/../</java-extensions.home>
-        <avro.version>1.12.0</avro.version>
+        <avro.version>1.12.1</avro.version>
     </properties>
 
     <dependencies>
@@ -64,12 +64,6 @@
             <version>4.0.2</version>
         </dependency>
 
-
-        <dependency>
-            <groupId>commons-lang</groupId>
-            <artifactId>commons-lang</artifactId>
-            <version>2.6</version>
-        </dependency>
 
         <dependency>
             <groupId>org.apache.iceberg</groupId>

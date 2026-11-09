@@ -92,10 +92,16 @@
                     <groupId>org.lz4</groupId>
                 </exclusion>
                 <!-- aliyun-java-auth drags in bcprov-jdk15on 1.70 (multiple CVEs);
-                     bcprov-jdk18on 1.85 on the classpath provides the same packages -->
+                     bcprov-jdk18on 1.86 on the classpath provides the same packages -->
                 <exclusion>
                     <groupId>org.bouncycastle</groupId>
                     <artifactId>bcprov-jdk15on</artifactId>
+                </exclusion>
+                <!-- commons-lang 2.6 is EOL with an unfixed CVE; only the SDK's command API
+                     (DescribeTableCommand) uses it, and the reader never calls that path -->
+                <exclusion>
+                    <groupId>commons-lang</groupId>
+                    <artifactId>commons-lang</artifactId>
                 </exclusion>
             </exclusions>
         </dependency>
@@ -132,12 +138,6 @@
                     <artifactId>commons-compress</artifactId>
                 </exclusion>
             </exclusions>
-        </dependency>
-
-        <dependency>
-            <groupId>commons-lang</groupId>
-            <artifactId>commons-lang</artifactId>
-            <version>2.6</version>
         </dependency>
     </dependencies>
 

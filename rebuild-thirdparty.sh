@@ -14,8 +14,8 @@
 #
 # With no target, or with `all`, runs every registered target in the order
 # listed in TARGET_DESCRIPTIONS: OpenSSL and its dependants, libevent and
-# libserdes (HTTPS + mTLS), and the OpenSSL FIPS provider that every BE
-# package ships. It needs no input and is safe to re-run: a target whose
+# libserdes (HTTPS + mTLS), the OpenSSL FIPS provider that every BE package
+# ships, and the pprof binary pinned in thirdparty/vars-<arch>.sh. It needs no input and is safe to re-run: a target whose
 # result is already installed is skipped. Pass a specific target to rebuild
 # just that one, e.g. while iterating on a single patch. Run with an unknown
 # target to list them.
@@ -49,6 +49,7 @@ TARGET_DESCRIPTIONS=(
     "libevent:Rebuild libevent with OpenSSL support (needed for BE/CN HTTPS)"
     "libserdes:Rebuild libserdes from the deep-bi mTLS fork (SERDES_* in vars.sh)"
     "openssl_fips:Build the OpenSSL 3.1.2 FIPS provider (every BE package ships it)"
+    "pprof:Install the pprof binary pinned in thirdparty/vars-<arch>.sh (CN profile page)"
 )
 
 usage() {
@@ -632,6 +633,48 @@ rebuild_openssl_fips() {
 
     cd /
     rm -rf "${build_dir}" "${build_dir}.log"
+}
+
+#####################################################################
+# pprof: install the pinned binary
+#####################################################################
+# build.sh copies pprof from the pre-built thirdparty, so a version bump in
+# thirdparty/vars-<arch>.sh alone does not reach the build output. Installs in
+# place, so it runs after the targets that swap the whole tree.
+rebuild_pprof() {
+    require_files "${TP_DIR}/vars.sh"
+
+    # vars.sh picks vars-<arch>.sh relative to TP_DIR; sourced in a subshell so
+    # its exports don't leak into the other targets
+    local pprof_download pprof_md5
+    pprof_download=$(. "${TP_DIR}/vars.sh" && echo "${PPROF_DOWNLOAD}")
+    pprof_md5=$(. "${TP_DIR}/vars.sh" && echo "${PPROF_MD5SUM}")
+    if [ -z "${pprof_download}" ] || [ -z "${pprof_md5}" ]; then
+        error "PPROF_DOWNLOAD or PPROF_MD5SUM is not set by thirdparty/vars.sh"
+        exit 1
+    fi
+
+    local dest="${SOURCE_TP}/installed/flamegraph/pprof"
+    if [ -f "${dest}" ] && [ "$(md5sum "${dest}" | cut -d' ' -f1)" = "${pprof_md5}" ]; then
+        info "pprof: ${dest} already matches ${pprof_md5}; nothing to do."
+        return 0
+    fi
+
+    local tmp got
+    tmp="$(mktemp)"
+    info "pprof: downloading ${pprof_download}"
+    curl -fsSL --retry 3 -o "${tmp}" "${pprof_download}"
+    got="$(md5sum "${tmp}" | cut -d' ' -f1)"
+    if [ "${got}" != "${pprof_md5}" ]; then
+        rm -f "${tmp}"
+        error "pprof: md5 ${got} does not match PPROF_MD5SUM ${pprof_md5}"
+        exit 1
+    fi
+
+    mkdir -p "$(dirname "${dest}")"
+    install -m 0755 "${tmp}" "${dest}"
+    rm -f "${tmp}"
+    info "pprof: installed ${dest} (${pprof_md5})"
 }
 
 if [ "${TARGET}" = "all" ]; then
