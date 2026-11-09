@@ -207,6 +207,18 @@ public class RoleConnectionManagerTest {
         Assertions.assertFalse(patterns.registerConnection(newContext(ROLE_B)).first);
     }
 
+    // with as many literal characters, an exact name wins over a pattern, and other ties go to the earlier entry
+    @Test
+    public void testSpecificityTies() {
+        RoleConnectionManager exact = new RoleConnectionManager("role_a*:2,role_a:1");
+        Assertions.assertTrue(exact.registerConnection(newContext(ROLE_A)).first);
+        Assertions.assertFalse(exact.registerConnection(newContext(ROLE_A)).first);
+
+        RoleConnectionManager wildcards = new RoleConnectionManager("*role_a:1,role_a*:2");
+        Assertions.assertTrue(wildcards.registerConnection(newContext(ROLE_A)).first);
+        Assertions.assertFalse(wildcards.registerConnection(newContext(ROLE_A)).first);
+    }
+
     @Test
     public void testInvalidConfig() {
         Assertions.assertThrows(IllegalArgumentException.class, () -> new RoleConnectionManager("role_a"));

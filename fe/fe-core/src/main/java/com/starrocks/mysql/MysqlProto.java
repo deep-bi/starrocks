@@ -235,6 +235,8 @@ public class MysqlProto {
         // save previous user login info
         UserIdentity previousUserIdentity = context.getCurrentUserIdentity();
         Set<Long> previousRoleIds = context.getCurrentRoleIds();
+        // privilege checks derive roles from the groups, so they are restored with the role ids
+        Set<String> previousGroups = context.getGroups();
         String previousQualifiedUser = context.getQualifiedUser();
         String previousResourceGroup = context.getSessionVariable().getResourceGroup();
         String previousCatalog = context.getCurrentCatalog();
@@ -274,6 +276,7 @@ public class MysqlProto {
                 context.getSessionVariable().setResourceGroup(previousResourceGroup);
                 context.setCurrentUserIdentity(previousUserIdentity);
                 context.setCurrentRoleIds(previousRoleIds);
+                context.setGroups(previousGroups);
                 context.setQualifiedUser(previousQualifiedUser);
                 return false;
             }
@@ -289,6 +292,7 @@ public class MysqlProto {
             context.getSessionVariable().setResourceGroup(previousResourceGroup);
             context.setCurrentUserIdentity(previousUserIdentity);
             context.setCurrentRoleIds(previousRoleIds);
+            context.setGroups(previousGroups);
             context.setQualifiedUser(previousQualifiedUser);
             context.setCurrentCatalog(previousCatalog);
             context.setDatabase(previousDb);

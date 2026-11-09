@@ -14,6 +14,7 @@
 
 package com.starrocks.mysql;
 
+import com.starrocks.authentication.AuthenticationHandler;
 import com.starrocks.authentication.AuthenticationMgr;
 import com.starrocks.authorization.AccessDeniedException;
 import com.starrocks.authorization.MockedLocalMetaStore;
@@ -39,6 +40,9 @@ import org.junit.jupiter.api.Test;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyShort;
@@ -398,6 +402,58 @@ public class MysqlProtoChangeUserTest {
         Assertions.assertEquals(originalUser, context.getQualifiedUser(), "User should be reverted");
         Assertions.assertEquals(originalUserIdentity, context.getCurrentUserIdentity(), "User identity should be reverted");
         Assertions.assertEquals(originalDb, context.getDatabase(), "Database should remain original");
+    }
+
+    /**
+     * A rejected switch must not keep the groups of the user it switched to: privilege checks derive roles from
+     * the session's groups, so the session would keep that user's group roles without being counted against them.
+     */
+    @Test
+    public void testChangeUserSchedulerFailureRestoresGroups() throws IOException {
+        ByteBuffer changeUserPacket = createChangeUserPacket("user1", "password1", null);
+        mockGroupsOfAuthenticatedUser();
+
+        // for example a role granted to a group of user1 is at its connection limit
+        new MockUp<ConnectScheduler>() {
+            @Mock
+            public com.starrocks.common.Pair<Boolean, String> onUserChanged(
+                    ConnectContext context, String previousUser, String newUser) {
+                return new com.starrocks.common.Pair<>(false, "Role-based connection limit reached");
+            }
+        };
+        new MockUp<ExecuteEnv>() {
+            @Mock
+            public ConnectScheduler getScheduler() {
+                return new ConnectScheduler(1000);
+            }
+        };
+        Set<String> originalGroups = Set.copyOf(context.getGroups());
+        Set<Long> originalRoleIds = context.getCurrentRoleIds();
+
+        Assertions.assertFalse(MysqlProto.changeUser(context, changeUserPacket));
+        Assertions.assertEquals(originalGroups, context.getGroups());
+        Assertions.assertEquals(originalRoleIds, context.getCurrentRoleIds());
+    }
+
+    @Test
+    public void testChangeUserDatabaseSwitchFailureRestoresGroups() throws IOException {
+        ByteBuffer changeUserPacket = createChangeUserPacket("user1", "password1", "nonexistent_db");
+        mockGroupsOfAuthenticatedUser();
+        Set<String> originalGroups = Set.copyOf(context.getGroups());
+
+        Assertions.assertFalse(MysqlProto.changeUser(context, changeUserPacket));
+        Assertions.assertEquals(originalGroups, context.getGroups());
+    }
+
+    // the user that authenticates belongs to a group
+    private void mockGroupsOfAuthenticatedUser() {
+        new MockUp<AuthenticationHandler>() {
+            @Mock
+            public static Set<String> getGroups(UserIdentity userIdentity, String distinguishedName,
+                                                List<String> groupProviderList) {
+                return new HashSet<>(Set.of("analysts"));
+            }
+        };
     }
 
     /**
