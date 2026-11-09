@@ -199,7 +199,7 @@ public class RoleConnectionManager {
         return result;
     }
 
-    private record RoleConnectionLimit(Pattern rolePattern, int maxConnections, int specificity) {
+    private record RoleConnectionLimit(Pattern rolePattern, int maxConnections, int specificity, boolean exact) {
 
         public boolean matches(String role) {
             return rolePattern.matcher(role).matches();
@@ -214,7 +214,10 @@ public class RoleConnectionManager {
         return Stream.of(config.split(","))
             .map(String::trim)
             .map(RoleConnectionManager::parseEntry)
-            .sorted(Comparator.comparingInt(RoleConnectionLimit::specificity).reversed())
+            // the most literal characters first, an exact name before a pattern with as many, then config order
+            .sorted(Comparator.comparingInt(RoleConnectionLimit::specificity)
+                    .thenComparing(RoleConnectionLimit::exact)
+                    .reversed())
             .toList();
     }
 
@@ -225,11 +228,12 @@ public class RoleConnectionManager {
             throw new IllegalArgumentException("Invalid role connection limit entry: " + entry);
         }
 
-        String regex = wildcardToRegex(entry.substring(0, sep).trim());
+        String rolePattern = entry.substring(0, sep).trim();
+        String regex = wildcardToRegex(rolePattern);
         int specificity = calculateSpecificity(regex);
         int maxConnections = Integer.parseInt(entry.substring(sep + 1).trim());
 
-        return new RoleConnectionLimit(Pattern.compile(regex), maxConnections, specificity);
+        return new RoleConnectionLimit(Pattern.compile(regex), maxConnections, specificity, !rolePattern.contains("*"));
     }
 
     /**
