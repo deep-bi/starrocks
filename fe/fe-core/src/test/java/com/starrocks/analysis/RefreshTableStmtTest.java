@@ -69,7 +69,12 @@ public class RefreshTableStmtTest {
         stmt = AnalyzeTestUtil.analyzeSuccess(sql_1);
         Assertions.assertTrue(stmt instanceof RefreshTableStmt);
         sql_1 = "REFRESH EXTERNAL TABLE catalog1.db1.table1.test";
-        AnalyzeTestUtil.analyzeFail(sql_1);
+        AnalyzeTestUtil.analyzeFail(sql_1, "Invalid table name format");
+        sql_1 = "REFRESH EXTERNAL TABLE catalog1.db1.table1.test.extra";
+        AnalyzeTestUtil.analyzeFail(sql_1, "Invalid table name format");
+        sql_1 = "REFRESH EXTERNAL TABLE catalog1.db1.`table1.test`";
+        stmt = AnalyzeTestUtil.analyzeSuccess(sql_1);
+        Assertions.assertEquals("table1.test", ((RefreshTableStmt) stmt).getTableName());
         sql_1 = "REFRESH EXTERNAL TABLE catalog1.db1.table1 PARTITION(\"p1\", \"p2\")";
         stmt = AnalyzeTestUtil.analyzeSuccess(sql_1);
         Assertions.assertTrue(stmt instanceof RefreshTableStmt);

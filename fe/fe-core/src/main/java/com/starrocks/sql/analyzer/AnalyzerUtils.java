@@ -2286,6 +2286,10 @@ public class AnalyzerUtils {
         if (tableRef == null) {
             throw new SemanticException("Table ref is null");
         }
+        if (tableRef.getQualifiedName().getParts().size() > 3) {
+            throw new SemanticException(PARSER_ERROR_MSG.invalidTableFormat(tableRef.getQualifiedName().toString()),
+                    tableRef.getPos());
+        }
         TableName tableName = new TableName(tableRef.getCatalogName(), tableRef.getDbName(),
                 tableRef.getTableName(), tableRef.getPos());
         tableName.normalization(context);

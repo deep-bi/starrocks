@@ -105,7 +105,11 @@ jobs:
         timeout-minutes: 330
         run: |
           mkdir -p "$HOME/.m2/repository" ut-reports/be
-          docker run --rm --init --name "$BE_CONTAINER" \
+          bash .github/scripts/monitor-be-resources.sh "$RUNNER_TEMP/be-ut-resources.log" \
+            "$BE_CONTAINER" "$S3_CONTAINER" &
+          monitor_pid=$!
+          trap 'kill "$monitor_pid" 2>/dev/null || true; wait "$monitor_pid" 2>/dev/null || true' EXIT
+          docker run --init --name "$BE_CONTAINER" \
             --network "container:$S3_CONTAINER" \
             --volume "$GITHUB_WORKSPACE:/workspace" \
             --volume "$HOME/.m2:/root/.m2" \
@@ -155,7 +159,9 @@ jobs:
       - name: Clean up container and restore file ownership
         if: always()
         run: |
-          docker rm --force "$BE_CONTAINER" >/dev/null 2>&1 || true
+          docker inspect --format '{{json .State}}' "$BE_CONTAINER" \
+            > "$RUNNER_TEMP/be-ut-container-state.json" 2>/dev/null || true
+          docker rm --force --volumes "$BE_CONTAINER" >/dev/null 2>&1 || true
           docker logs "$S3_CONTAINER" > "$RUNNER_TEMP/be-ut-s3.log" 2>&1 || true
           docker rm --force --volumes "$S3_CONTAINER" >/dev/null 2>&1 || true
           docker network rm "$UT_NETWORK" >/dev/null 2>&1 || true
@@ -181,6 +187,8 @@ jobs:
             ut-reports/be/*.xml
             ut-reports/be-summary.json
             ${{ runner.temp }}/be-ut-s3.log
+            ${{ runner.temp }}/be-ut-resources.log
+            ${{ runner.temp }}/be-ut-container-state.json
           if-no-files-found: warn
           retention-days: 3
           compression-level: 9
