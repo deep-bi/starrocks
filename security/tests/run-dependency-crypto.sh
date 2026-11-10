@@ -19,7 +19,7 @@ classpath="$work_dir:$root/conf:$root/fe/fe-server/target/starrocks-fe.jar:$root
     "$root/security/tests/MariaDbAuthenticationTest.java" "$root/security/tests/CertificatePolicyTest.java" \
     "$root/security/tests/S3ProxyAuthenticationTest.java" "$root/security/tests/HttpAuthenticationPolicyTest.java" \
     "$root/security/tests/OcspRevocationPolicyTest.java" "$root/security/tests/OracleAuthenticationTest.java" \
-    "$root/security/tests/FrontendHttpStartupTest.java"
+    "$root/security/tests/AwsSigningTest.java"
 
 # Use the shipped service settings, without the FE heap size or GC log paths.
 export STARROCKS_HOME=$root
@@ -43,7 +43,7 @@ for mode in healthy readiness-fault active-fault; do
     done
 done
 for mode in signer signer-fault signer-active-fault; do
-    "$JAVA_HOME/bin/java" "${options[@]}" -cp "$classpath" FrontendHttpStartupTest "$mode"
+    "$JAVA_HOME/bin/java" "${options[@]}" -cp "$classpath" AwsSigningTest "$mode"
 done
 "$JAVA_HOME/bin/java" "${options[@]}" -cp "$classpath" HadoopCryptoPolicyTest missing-provider
 "$JAVA_HOME/bin/java" "${options[@]}" -cp "$classpath" MariaDbAuthenticationTest missing-provider

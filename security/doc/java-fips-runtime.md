@@ -339,24 +339,11 @@ The native helper builds a caller against production libhdfs JVM-creation code. 
 Java/native workers and Hadoop extension operations, then invokes the BE/CN launchers with
 the harness as their executable. This does not start full BE/CN services or perform remote I/O.
 
-Assemble a disposable FE fixture after packaging. The live helper creates temporary credentials
-and requires empty metadata. `mktemp` supplies a fresh fixture directory:
+Listener and launcher validation of assembled FE distributions lives in the
+[fips-validator binary checks](../../../fips-validator/README.md#test-a-disposable-fe-distribution).
+Those checks use the supplied distribution's configuration and bundled HTTP probe.
 
-```bash
-fe_fixture=$(mktemp -d /tmp/starrocks-fips-fe.XXXXXX)
-mkdir -p "$fe_fixture"/{bin,conf,lib,security,meta,log}
-cp bin/common.sh bin/start_fe.sh "$fe_fixture/bin/"
-cp conf/hadoop_env.sh conf/udf_security.policy conf/java-fips.security conf/core-site.xml "$fe_fixture/conf/"
-cp security/check-java-fips.py security/java-fips-pinned-dependencies.json "$fe_fixture/security/"
-cp fe/fe-server/target/starrocks-fe.jar fe/fe-server/target/lib/*.jar \
-  java-extensions/hadoop-ext/target/starrocks-hadoop-ext.jar "$fe_fixture/lib/"
-python3 security/check-java-fips.py --providers "$fe_fixture/lib" "$fe_fixture"
-python3 security/tests/fe-listener-smoke.py --home "$fe_fixture" --java-home "$JAVA_HOME"
-python3 security/tests/launcher-faults.py --home "$fe_fixture" --java-home "$JAVA_HOME"
-```
-
-Use `--no-tls` with `fe-listener-smoke.py` on a separate fresh fixture to test startup with TLS
-disabled. FE unit tests install approved-only providers through `CryptoTestExtension`, because
+FE unit tests install approved-only providers through `CryptoTestExtension`, because
 Surefire uses an isolated test classloader. JDK providers remain available to independent
 fixture peers, so consumer tests must establish explicit provider selection. Launcher and
 native-harness tests use the packaged security overlay without that test extension.
