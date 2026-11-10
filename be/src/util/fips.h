@@ -27,6 +27,10 @@ namespace starrocks {
 // continue in that case.
 Status init_fips_mode();
 
+// Call right after Aws::InitAPI. In FIPS mode, puts back OpenSSL's random number generator if the
+// AWS SDK replaced it, and checks that RAND_bytes is served by the fips provider. No-op otherwise.
+Status restore_fips_rand();
+
 // True once init_fips_mode() has succeeded.
 bool is_fips_mode_enabled();
 

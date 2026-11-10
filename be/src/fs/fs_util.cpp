@@ -50,20 +50,23 @@ Status list_dirs_files(const std::string& path, std::set<std::string>* dirs, std
     return list_dirs_files(fs.get(), path, dirs, files);
 }
 
-// reads in fixed-size chunks so that checksumming a large segment file doesn't need its size in memory
+// reads in chunks so that checksumming a large segment file doesn't need its size in memory. On
+// object storage every read is its own ranged GET, so remote files use a far larger chunk: a shared-data
+// backup checksums whole segments, and 1 MiB reads would cost one request per MiB
 template <typename Digest>
 static StatusOr<std::string> file_digest(const std::string& path) {
-    static constexpr int64_t kChunkSize = 1 << 20;
     ASSIGN_OR_RETURN(auto fs, FileSystem::CreateSharedFromString(path));
+    const int64_t chunk_size =
+            fs->type() == FileSystem::POSIX || fs->type() == FileSystem::MEMORY ? int64_t{1} << 20 : int64_t{64} << 20;
     ASSIGN_OR_RETURN(auto file, fs->new_random_access_file(path));
     ASSIGN_OR_RETURN(auto length, file->get_size());
-    std::unique_ptr<unsigned char[]> buf(new (std::nothrow) unsigned char[std::min(length, kChunkSize)]);
+    std::unique_ptr<unsigned char[]> buf(new (std::nothrow) unsigned char[std::min(length, chunk_size)]);
     if (UNLIKELY(buf == nullptr)) {
-        return Status::MemoryAllocFailed(fmt::format("alloca size={}", std::min(length, kChunkSize)));
+        return Status::MemoryAllocFailed(fmt::format("alloca size={}", std::min(length, chunk_size)));
     }
     Digest digest;
-    for (int64_t offset = 0; offset < length; offset += kChunkSize) {
-        const int64_t n = std::min(kChunkSize, length - offset);
+    for (int64_t offset = 0; offset < length; offset += chunk_size) {
+        const int64_t n = std::min(chunk_size, length - offset);
         RETURN_IF_ERROR(file->read_at_fully(offset, buf.get(), n));
         digest.update(buf.get(), n);
     }

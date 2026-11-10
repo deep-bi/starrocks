@@ -30,6 +30,10 @@ TEST(FipsTest, disabled_by_default) {
     ASSERT_EQ("disabled", fips_mode_description());
 }
 
+TEST(FipsTest, restore_rand_is_noop_when_disabled) {
+    ASSERT_TRUE(restore_fips_rand().ok());
+}
+
 // init_fips_mode() changes process-wide OpenSSL state even when it fails, so it runs in a child
 #ifndef THREAD_SANITIZER
 TEST(FipsDeathTest, refuses_without_openssl_fips_conf) {

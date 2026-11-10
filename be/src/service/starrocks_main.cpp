@@ -245,6 +245,10 @@ int main(int argc, char** argv) {
         return std::make_shared<starrocks::s3::AwsMd5HashFactory>();
     };
     Aws::InitAPI(aws_sdk_options);
+    if (auto st = starrocks::restore_fips_rand(); !st.ok()) {
+        fprintf(stderr, "%s\n", st.to_string().c_str());
+        exit(-1);
+    }
     if (starrocks::config::enable_poco_client_for_aws_sdk) {
         Aws::Http::SetHttpClientFactory(std::make_shared<starrocks::poco::PocoHttpClientFactory>());
     }

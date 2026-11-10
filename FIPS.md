@@ -78,7 +78,9 @@ If step 3 is skipped after `fips.so` changed, the node refuses to start and the 
   - `fips.so` or the 3.1.2 `openssl` tool is missing, or `fips_module_dir` points elsewhere;
   - `fips.so` is not OpenSSL FIPS Provider 3.1.2, even if it is another validated release;
   - `fips.so` fails its integrity check or self-tests;
-  - `conf/fipsmodule.cnf` is missing or was generated for a different `fips.so`.
+  - `conf/fipsmodule.cnf` is missing or was generated for a different `fips.so`;
+  - any of `security-checks`, `conditional-errors`, `tls1-prf-ems-check` or `drbg-no-trunc-md` is not 1. Section 2.4 of the security policy requires all four. The integrity MAC covers only `fips.so`, so an edited `fipsmodule.cnf` would otherwise go unnoticed;
+  - the random number generator behind `RAND_bytes` is not the FIPS provider's. s2n, the TLS library inside the AWS SDK, can replace it during startup because s2n 1.4.4 can't detect FIPS mode with OpenSSL 3. The BE checks right after the SDK starts, puts OpenSSL's back if needed, and logs that it did.
 
   It never falls back to non-FIPS mode.
 - A successful start logs `FIPS mode enabled: OpenSSL FIPS Provider 3.1.2`. `enable_fips_mode` appears in `information_schema.be_configs`.

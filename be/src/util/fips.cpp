@@ -14,12 +14,17 @@
 
 #include "util/fips.h"
 
+#include <openssl/conf.h>
 #include <openssl/crypto.h>
 #include <openssl/err.h>
 #include <openssl/evp.h>
 #include <openssl/provider.h>
+#include <openssl/rand.h>
 
 #include <atomic>
+#include <cstdio>
+#include <cstring>
+#include <memory>
 #include <string_view>
 
 #include "common/config.h"
@@ -53,6 +58,27 @@ static bool digest_works(const char* name, const char* properties = nullptr) {
     EVP_MD_free(md);
     ERR_clear_error();
     return ok;
+}
+
+// the provider doesn't report conditional-errors, and the module-mac in fipsmodule.cnf covers only
+// fips.so, so read the setting from the config the provider was loaded from. Follows the same
+// openssl_conf -> providers -> fips chain as OpenSSL, so a value overridden anywhere is seen
+static std::string fips_section_value(const char* key) {
+    std::unique_ptr<CONF, decltype(&NCONF_free)> conf(NCONF_new(nullptr), &NCONF_free);
+    long error_line = 0;
+    std::string value;
+    if (conf != nullptr && NCONF_load(conf.get(), config::fips_openssl_conf.c_str(), &error_line) == 1) {
+        const char* init = NCONF_get_string(conf.get(), nullptr, "openssl_conf");
+        const char* providers = init ? NCONF_get_string(conf.get(), init, "providers") : nullptr;
+        const char* fips = providers ? NCONF_get_string(conf.get(), providers, "fips") : nullptr;
+        const char* v = fips ? NCONF_get_string(conf.get(), fips, key) : nullptr;
+        if (v != nullptr) {
+            value = v;
+        }
+    }
+    // NCONF_get_string queues an error for every missing key
+    ERR_clear_error();
+    return value;
 }
 
 Status init_fips_mode() {
@@ -102,9 +128,18 @@ Status init_fips_mode() {
     const char* name = nullptr;
     const char* version = nullptr;
     int status = 0;
+    // security policy section 2.4 requires these for the approved mode; fipsinstall -pedantic
+    // writes them as 1, but nothing stops fipsmodule.cnf being edited afterwards
+    int security_checks = -1;
+    int tls1_prf_ems_check = -1;
+    int drbg_no_trunc_md = -1;
     OSSL_PARAM params[] = {OSSL_PARAM_construct_utf8_ptr("name", const_cast<char**>(&name), 0),
                            OSSL_PARAM_construct_utf8_ptr("version", const_cast<char**>(&version), 0),
-                           OSSL_PARAM_construct_int("status", &status), OSSL_PARAM_construct_end()};
+                           OSSL_PARAM_construct_int("status", &status),
+                           OSSL_PARAM_construct_int("security-checks", &security_checks),
+                           OSSL_PARAM_construct_int("tls1-prf-ems-check", &tls1_prf_ems_check),
+                           OSSL_PARAM_construct_int("drbg-no-trunc-md", &drbg_no_trunc_md),
+                           OSSL_PARAM_construct_end()};
     bool got_params = OSSL_PROVIDER_get_params(fips, params) == 1;
     std::string description = fmt::format("{} {}", name ? name : "unknown", version ? version : "unknown");
     bool expected = got_params && name != nullptr && version != nullptr && kFipsProviderName == name &&
@@ -118,9 +153,51 @@ Status init_fips_mode() {
         return Status::InternalError(fmt::format("FIPS mode: {} in {} is not {} {}", description,
                                                  config::fips_module_dir, kFipsProviderName, kFipsProviderVersion));
     }
+    std::string conditional_errors = fips_section_value("conditional-errors");
+    if (security_checks != 1 || tls1_prf_ems_check != 1 || drbg_no_trunc_md != 1 || conditional_errors != "1") {
+        return Status::InternalError(fmt::format(
+                "FIPS mode: the fips provider is not configured for the approved mode (security-checks={}, "
+                "tls1-prf-ems-check={}, drbg-no-trunc-md={}, conditional-errors={}; all must be 1). Delete "
+                "conf/fipsmodule.cnf and restart to regenerate it",
+                security_checks, tls1_prf_ems_check, drbg_no_trunc_md,
+                conditional_errors.empty() ? "unset" : conditional_errors));
+    }
 
     g_fips_description = std::move(description);
     g_fips_enabled.store(true, std::memory_order_release);
+    return Status::OK();
+}
+
+static bool drbg_from_fips(EVP_RAND_CTX* drbg) {
+    const OSSL_PROVIDER* provider = drbg ? EVP_RAND_get0_provider(EVP_RAND_CTX_get0_rand(drbg)) : nullptr;
+    const char* name = provider ? OSSL_PROVIDER_get0_name(provider) : nullptr;
+    return name != nullptr && std::strcmp(name, "fips") == 0;
+}
+
+Status restore_fips_rand() {
+    if (!is_fips_mode_enabled()) {
+        return Status::OK();
+    }
+    // s2n_init, run by Aws::InitAPI, installs its own DRBG as libcrypto's default RAND engine unless
+    // it detects FIPS, and s2n 1.4.4 detects it only through the OpenSSL 1.x FIPS_mode(). RAND_bytes
+    // would then bypass the provider's approved DRBG
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+    bool replaced = RAND_get_rand_method() != RAND_OpenSSL();
+    if (replaced && RAND_set_rand_method(RAND_OpenSSL()) != 1) {
+        return fips_error("cannot restore OpenSSL's random number generator");
+    }
+    bool restored = RAND_get_rand_method() == RAND_OpenSSL();
+#pragma GCC diagnostic pop
+    if (!restored) {
+        return fips_error("random number generator is not OpenSSL's");
+    }
+    if (!drbg_from_fips(RAND_get0_public(nullptr)) || !drbg_from_fips(RAND_get0_private(nullptr))) {
+        return fips_error("random number generator is not from the fips provider");
+    }
+    if (replaced) {
+        fprintf(stderr, "FIPS mode: restored OpenSSL's random number generator after AWS SDK initialisation\n");
+    }
     return Status::OK();
 }
 
