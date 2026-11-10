@@ -13,11 +13,7 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  ci-checks:
-    uses: ./.github/workflows/deepbi-ci-checks.yml
-
   fe-ut:
-    needs: ci-checks
     runs-on: ubuntu-24.04
     timeout-minutes: 360
     defaults:

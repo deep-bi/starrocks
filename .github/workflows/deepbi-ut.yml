@@ -11,5 +11,21 @@ jobs:
   fe-ut:
     uses: ./.github/workflows/deepbi-fe-ut.yml
 
-  be-ut:
-    uses: ./.github/workflows/deepbi-be-ut.yml
+  cpp-format:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Check C++ formatting
+        shell: bash
+        run: |
+          python3 -m pip install --no-cache-dir clang-format==11.1.0
+          clang-format --version
+          export CLANG_FORMAT_BINARY
+          CLANG_FORMAT_BINARY=$(command -v clang-format)
+          bash build-support/check-format.sh

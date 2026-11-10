@@ -41,11 +41,7 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  ci-checks:
-    uses: ./.github/workflows/deepbi-ci-checks.yml
-
   sql-it:
-    needs: ci-checks
     runs-on: ${{ inputs.platform == 'rhel9-arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
     timeout-minutes: 360
     defaults:

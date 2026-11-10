@@ -35,6 +35,7 @@ Usage: $0 <options>
      --test TEST_NAME               run specific test
      --gtest_filter GTEST_FILTER    run test cases with gtest filters
      --dry-run                      dry-run unit tests
+     --run-only                     run existing test executables without building
      --keep-going                   run remaining test binaries after a failure
      --clean                        clean old unit tests before run
      --with-gcov                    enable to build with gcov
@@ -84,6 +85,7 @@ OPTS=$(getopt \
   -o '' \
   -l 'test:' \
   -l 'dry-run' \
+  -l 'run-only' \
   -l 'keep-going' \
   -l 'clean' \
   -l 'with-gcov' \
@@ -112,6 +114,7 @@ eval set -- "$OPTS"
 
 CLEAN=0
 DRY_RUN=0
+RUN_ONLY=0
 KEEP_GOING=0
 TEST_NAME=*
 TEST_MODULE=".*"
@@ -130,6 +133,7 @@ while true; do
     case "$1" in
         --clean) CLEAN=1 ; shift ;;
         --dry-run) DRY_RUN=1 ; shift ;;
+        --run-only) RUN_ONLY=1 ; shift ;;
         --keep-going) KEEP_GOING=1 ; shift ;;
         --run) shift ;; # Option only for compatibility
         --test) TEST_NAME=${2}* ; shift 2;;
@@ -160,6 +164,11 @@ if [ ${HELP} -eq 1 ]; then
     exit 0
 fi
 
+if [[ ${RUN_ONLY} -eq 1 && ${CLEAN} -eq 1 ]]; then
+    echo "Error: --run-only cannot be combined with --clean"
+    exit 1
+fi
+
 CMAKE_BUILD_TYPE=${BUILD_TYPE:-ASAN}
 CMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE}"
 if [[ -z ${USE_SSE4_2} ]]; then
@@ -175,70 +184,79 @@ if [[ -z ${USE_AVX512} ]]; then
     # Disable it by default
     USE_AVX512=OFF
 fi
-echo "Build Backend UT"
 
 if [ -z $CMAKE_BUILD_PREFIX ]; then
     CMAKE_BUILD_PREFIX=${STARROCKS_HOME}/be
 fi
 
 CMAKE_BUILD_DIR=${CMAKE_BUILD_PREFIX}/ut_build_${CMAKE_BUILD_TYPE}
-if [ ${CLEAN} -eq 1 ]; then
-    rm ${CMAKE_BUILD_DIR} -rf
-    rm ${STARROCKS_HOME}/be/output/ -rf
-fi
-
-if [ ! -d ${CMAKE_BUILD_DIR} ]; then
-    mkdir -p ${CMAKE_BUILD_DIR}
-fi
-
 source ${STARROCKS_HOME}/bin/common.sh
 
-cd ${CMAKE_BUILD_DIR}
-if [ "${USE_STAROS}" == "ON"  ]; then
-  if [ -z "$STARLET_INSTALL_DIR" ] ; then
-    # assume starlet_thirdparty is installed to ${STARROCKS_THIRDPARTY}/installed/starlet/
-    STARLET_INSTALL_DIR=${STARROCKS_THIRDPARTY}/installed/starlet
-  fi
-  export STARLET_INSTALL_DIR
-fi
-
-# Build Java Extensions
-if [ ${BUILD_JAVA_EXT} = "ON" ]; then
-    echo "Build Java Extensions"
-    cd ${STARROCKS_HOME}/java-extensions
+if [ ${RUN_ONLY} -eq 0 ]; then
+    echo "Build Backend UT"
     if [ ${CLEAN} -eq 1 ]; then
-        ${MVN_CMD} clean
+        rm ${CMAKE_BUILD_DIR} -rf
+        rm ${STARROCKS_HOME}/be/output/ -rf
     fi
-    ${MVN_CMD} $addon_mvn_opts package -DskipTests -T ${PARALLEL}
-    cd ${STARROCKS_HOME}
+
+    if [ ! -d ${CMAKE_BUILD_DIR} ]; then
+        mkdir -p ${CMAKE_BUILD_DIR}
+    fi
+
+    cd ${CMAKE_BUILD_DIR}
+    if [ "${USE_STAROS}" == "ON"  ]; then
+      if [ -z "$STARLET_INSTALL_DIR" ] ; then
+        # assume starlet_thirdparty is installed to ${STARROCKS_THIRDPARTY}/installed/starlet/
+        STARLET_INSTALL_DIR=${STARROCKS_THIRDPARTY}/installed/starlet
+      fi
+      export STARLET_INSTALL_DIR
+    fi
+
+    # Build Java Extensions
+    if [ ${BUILD_JAVA_EXT} = "ON" ]; then
+        echo "Build Java Extensions"
+        cd ${STARROCKS_HOME}/java-extensions
+        if [ ${CLEAN} -eq 1 ]; then
+            ${MVN_CMD} clean
+        fi
+        ${MVN_CMD} $addon_mvn_opts package -DskipTests -T ${PARALLEL}
+        cd ${STARROCKS_HOME}
+    else
+        echo "Skip Building Java Extensions"
+    fi
+
+    if [[ -z ${CCACHE} ]] && [[ -x "$(command -v ccache)" ]]; then
+        CCACHE=ccache
+        export CCACHE_SLOPPINESS="pch_defines,time_macros"
+    fi
+
+
+    cd ${CMAKE_BUILD_DIR}
+    ${CMAKE_CMD}  -G "${CMAKE_GENERATOR}" \
+                -DSTARROCKS_THIRDPARTY=${STARROCKS_THIRDPARTY}\
+                -DSTARROCKS_HOME=${STARROCKS_HOME} \
+                -DCMAKE_CXX_COMPILER_LAUNCHER=$CCACHE \
+                -DMAKE_TEST=ON -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE} \
+                -DUSE_AVX2=$USE_AVX2 -DUSE_AVX512=$USE_AVX512 -DUSE_SSE4_2=$USE_SSE4_2 -DUSE_BMI_2=$USE_BMI_2\
+                -DUSE_STAROS=${USE_STAROS} \
+                -DSTARLET_INSTALL_DIR=${STARLET_INSTALL_DIR}          \
+                -DWITH_GCOV=${WITH_GCOV} \
+                -DWITH_STARCACHE=${WITH_STARCACHE} \
+                -DSTARROCKS_JIT_ENABLE=ON \
+                -DWITH_RELATIVE_SRC_PATH=OFF \
+                -DENABLE_MULTI_DYNAMIC_LIBS=${WITH_DYNAMIC} \
+                -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+                ${STARROCKS_HOME}/be
+
+    ${BUILD_SYSTEM} -j${PARALLEL}
 else
-    echo "Skip Building Java Extensions"
+    for binary in starrocks_test starrocks_dw_test; do
+        if [[ ! -x "${CMAKE_BUILD_DIR}/test/${binary}" ]]; then
+            echo "Error: missing prebuilt test executable ${CMAKE_BUILD_DIR}/test/${binary}"
+            exit 1
+        fi
+    done
 fi
-
-if [[ -z ${CCACHE} ]] && [[ -x "$(command -v ccache)" ]]; then
-    CCACHE=ccache
-    export CCACHE_SLOPPINESS="pch_defines,time_macros"
-fi
-
-
-cd ${CMAKE_BUILD_DIR}
-${CMAKE_CMD}  -G "${CMAKE_GENERATOR}" \
-            -DSTARROCKS_THIRDPARTY=${STARROCKS_THIRDPARTY}\
-            -DSTARROCKS_HOME=${STARROCKS_HOME} \
-            -DCMAKE_CXX_COMPILER_LAUNCHER=$CCACHE \
-            -DMAKE_TEST=ON -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE} \
-            -DUSE_AVX2=$USE_AVX2 -DUSE_AVX512=$USE_AVX512 -DUSE_SSE4_2=$USE_SSE4_2 -DUSE_BMI_2=$USE_BMI_2\
-            -DUSE_STAROS=${USE_STAROS} \
-            -DSTARLET_INSTALL_DIR=${STARLET_INSTALL_DIR}          \
-            -DWITH_GCOV=${WITH_GCOV} \
-            -DWITH_STARCACHE=${WITH_STARCACHE} \
-            -DSTARROCKS_JIT_ENABLE=ON \
-            -DWITH_RELATIVE_SRC_PATH=OFF \
-            -DENABLE_MULTI_DYNAMIC_LIBS=${WITH_DYNAMIC} \
-            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
-            ${STARROCKS_HOME}/be
-
-${BUILD_SYSTEM} -j${PARALLEL}
 
 cd ${STARROCKS_HOME}
 export STARROCKS_TEST_BINARY_BASE_DIR=${CMAKE_BUILD_DIR}
@@ -253,7 +271,7 @@ split_debug_symbol() {
     objcopy --add-gnu-debuglink="$symbol" "$bin"
 }
 
-if [ "x$WITH_DEBUG_SYMBOL_SPLIT" = "xON" ] ; then
+if [[ ${RUN_ONLY} -eq 0 && "x$WITH_DEBUG_SYMBOL_SPLIT" = "xON" ]]; then
     if [ "x$WITH_DEBUG_SO_SYMBOL_SPLIT" = "xON" ] ; then
         find "${STARROCKS_TEST_BINARY_BASE_DIR}" -type f -name "*.so*" ! -name "*.debuginfo" | while read -r so; do
             split_debug_symbol "$so"
@@ -346,6 +364,7 @@ if [ -n "$EXCLUDING_TEST_SUIT" ]; then
 fi
 
 # prepare util test_data
+mkdir -p "${STARROCKS_TEST_BINARY_DIR}/util"
 if [ -d ${STARROCKS_TEST_BINARY_DIR}/util/test_data ]; then
     rm -rf ${STARROCKS_TEST_BINARY_DIR}/util/test_data
 fi
