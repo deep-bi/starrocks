@@ -30,6 +30,7 @@
 #include "common/config.h"
 #include "fmt/format.h"
 #include "util/openssl_errors.h"
+#include "util/sha.h"
 
 namespace starrocks {
 
@@ -108,6 +109,17 @@ Status init_fips_mode() {
     }
     if (!digest_works("SHA2-256")) {
         return fips_error("SHA2-256 is unavailable");
+    }
+    // the SHA digest classes fetch their method once; one fetched before this point would stay
+    // with the default provider for the life of the process
+    for (const EVP_MD* md : {SHA224Digest::method(), SHA256Digest::method(), SHA384Digest::method(),
+                             SHA512Digest::method()}) {
+        const char* provider = OSSL_PROVIDER_get0_name(EVP_MD_get0_provider(md));
+        if (provider == nullptr || std::strcmp(provider, "fips") != 0) {
+            return Status::InternalError(fmt::format("FIPS mode: {} was fetched from the {} provider before FIPS "
+                                                     "mode was set up",
+                                                     EVP_MD_get0_name(md), provider ? provider : "unknown"));
+        }
     }
     if (digest_works("MD5")) {
         return Status::InternalError("FIPS mode: MD5 is still available under the default properties");

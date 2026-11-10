@@ -27,8 +27,6 @@ namespace detail {
 template <size_t Size>
 EvpDigest<Size>::EvpDigest(const EVP_MD* md) : _ctx(EVP_MD_CTX_new()) {
     CHECK(_ctx != nullptr) << "EVP_MD_CTX_new failed";
-    // the legacy EVP_shaXXX() handles are fetched here with the current default properties, so
-    // a digest constructed after init_fips_mode() uses the fips provider
     CHECK_EQ(EVP_DigestInit_ex(_ctx.get(), md, nullptr), 1) << "EVP_DigestInit_ex failed for " << EVP_MD_get0_name(md);
     DCHECK_EQ(static_cast<size_t>(EVP_MD_CTX_get_size(_ctx.get())), Size);
 }
@@ -65,12 +63,42 @@ template class EvpDigest<SHA512_DIGEST_LENGTH>;
 
 } // namespace detail
 
-SHA224Digest::SHA224Digest() : EvpDigest(EVP_sha224()) {}
+// fetched once, because a legacy EVP_shaXXX() handle makes every EVP_DigestInit_ex fetch again under
+// the method store lock, once per row in the SQL hash functions. The fetch uses the default
+// properties at the first call, which must come after init_fips_mode(); init_fips_mode() checks
+// that these come from the fips provider
+static const EVP_MD* fetch_sha(const char* name) {
+    EVP_MD* md = EVP_MD_fetch(nullptr, name, nullptr);
+    CHECK(md != nullptr) << "cannot fetch " << name;
+    return md;
+}
 
-SHA256Digest::SHA256Digest() : EvpDigest(EVP_sha256()) {}
+const EVP_MD* SHA224Digest::method() {
+    static const EVP_MD* md = fetch_sha("SHA2-224");
+    return md;
+}
 
-SHA384Digest::SHA384Digest() : EvpDigest(EVP_sha384()) {}
+const EVP_MD* SHA256Digest::method() {
+    static const EVP_MD* md = fetch_sha("SHA2-256");
+    return md;
+}
 
-SHA512Digest::SHA512Digest() : EvpDigest(EVP_sha512()) {}
+const EVP_MD* SHA384Digest::method() {
+    static const EVP_MD* md = fetch_sha("SHA2-384");
+    return md;
+}
+
+const EVP_MD* SHA512Digest::method() {
+    static const EVP_MD* md = fetch_sha("SHA2-512");
+    return md;
+}
+
+SHA224Digest::SHA224Digest() : EvpDigest(method()) {}
+
+SHA256Digest::SHA256Digest() : EvpDigest(method()) {}
+
+SHA384Digest::SHA384Digest() : EvpDigest(method()) {}
+
+SHA512Digest::SHA512Digest() : EvpDigest(method()) {}
 
 } // namespace starrocks

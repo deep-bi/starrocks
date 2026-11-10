@@ -56,21 +56,25 @@ private:
 class SHA224Digest : public detail::EvpDigest<SHA224_DIGEST_LENGTH> {
 public:
     SHA224Digest();
+    static const EVP_MD* method();
 };
 
 class SHA256Digest : public detail::EvpDigest<SHA256_DIGEST_LENGTH> {
 public:
     SHA256Digest();
+    static const EVP_MD* method();
 };
 
 class SHA384Digest : public detail::EvpDigest<SHA384_DIGEST_LENGTH> {
 public:
     SHA384Digest();
+    static const EVP_MD* method();
 };
 
 class SHA512Digest : public detail::EvpDigest<SHA512_DIGEST_LENGTH> {
 public:
     SHA512Digest();
+    static const EVP_MD* method();
 };
 
 } // namespace starrocks
