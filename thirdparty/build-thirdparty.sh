@@ -808,8 +808,11 @@ build_rocksdb() {
 build_kerberos() {
     check_if_source_exist $KRB5_SOURCE
     cd $TP_SOURCE_DIR/$KRB5_SOURCE/src
+    # openssl crypto puts AES, HMAC, SHA and the KDFs under the FIPS provider when enable_fips_mode is
+    # on; the builtin default runs them outside it. MD4 and RC4 stay builtin with OpenSSL 3
     CFLAGS="-std=gnu17 -fcommon -fPIC ${FILE_PREFIX_MAP_OPTION}" LDFLAGS="-L$TP_INSTALL_DIR/lib -pthread -ldl" \
-    ./configure --prefix=$TP_INSTALL_DIR --enable-static --disable-shared --with-spake-openssl=$TP_INSTALL_DIR
+    ./configure --prefix=$TP_INSTALL_DIR --enable-static --disable-shared --with-spake-openssl=$TP_INSTALL_DIR \
+                --with-crypto-impl=openssl
     make -j$PARALLEL
     make install
 }

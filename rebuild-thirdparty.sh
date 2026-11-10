@@ -14,9 +14,10 @@
 #
 # With no target, or with `all`, runs every registered target in the order
 # listed in TARGET_DESCRIPTIONS: OpenSSL and its dependants, libevent and
-# libserdes (HTTPS + mTLS), the OpenSSL FIPS provider that every BE package
-# ships, and the pprof binary pinned in thirdparty/vars-<arch>.sh. It needs no input and is safe to re-run: a target whose
-# result is already installed is skipped. Pass a specific target to rebuild
+# libserdes (HTTPS + mTLS), krb5 with OpenSSL crypto, the OpenSSL FIPS
+# provider that every BE package ships, and the pprof binary pinned in
+# thirdparty/vars-<arch>.sh. It needs no input and is safe to re-run: a target
+# whose result is already installed is skipped. Pass a specific target to rebuild
 # just that one, e.g. while iterating on a single patch. Run with an unknown
 # target to list them.
 #
@@ -48,6 +49,7 @@ TARGET_DESCRIPTIONS=(
     "openssl3:Rebuild OpenSSL and every library compiled against it (OpenSSL from vars.sh)"
     "libevent:Rebuild libevent with OpenSSL support (needed for BE/CN HTTPS)"
     "libserdes:Rebuild libserdes from the deep-bi mTLS fork (SERDES_* in vars.sh)"
+    "kerberos:Rebuild MIT krb5 with OpenSSL crypto (FIPS mode for Kafka SASL/GSSAPI)"
     "openssl_fips:Build the OpenSSL 3.1.2 FIPS provider (every BE package ships it)"
     "pprof:Install the pprof binary pinned in thirdparty/vars-<arch>.sh (CN profile page)"
 )
@@ -557,6 +559,87 @@ rebuild_libserdes() {
     info "serdes_conf_set_client_cert: found in ${TP_INSTALL_DIR}/include/libserdes/serdes.h"
 
     rm -rf "${build_dir}"
+}
+
+#####################################################################
+# kerberos: rebuild MIT krb5 with OpenSSL crypto
+#####################################################################
+# The openssl3 target skips an image whose OpenSSL is already current, so it
+# never picks up a configure change to krb5. Only krb5 is rebuilt: sasl and
+# librdkafka are static archives that leave krb5 symbols for the BE link to
+# resolve, and the krb5 version and headers don't change. Installs in place,
+# so it runs after the targets that swap the whole tree.
+krb5_uses_openssl() {
+    # the builtin crypto never calls into OpenSSL; the openssl one fetches its KDFs
+    nm "$1" 2>/dev/null | grep -q ' U EVP_KDF_fetch$'
+}
+
+rebuild_kerberos() {
+    require_files "${TP_DIR}/vars.sh" "${TP_DIR}/build-thirdparty.sh" "${SOURCE_TP}/installed/lib/libcrypto.a"
+
+    local krb5_download krb5_name krb5_source krb5_md5
+    krb5_download=$(tp_var KRB5_DOWNLOAD)
+    krb5_name=$(tp_var KRB5_NAME)
+    krb5_source=$(tp_var KRB5_SOURCE)
+    krb5_md5=$(tp_var KRB5_MD5SUM)
+    if [ -z "${krb5_download}" ] || [ -z "${krb5_name}" ] || [ -z "${krb5_source}" ] || [ -z "${krb5_md5}" ]; then
+        error "Could not read KRB5_* from ${TP_DIR}/vars.sh"
+        exit 1
+    fi
+
+    local k5crypto="${SOURCE_TP}/installed/lib/libk5crypto.a"
+    if krb5_uses_openssl "${k5crypto}"; then
+        info "Installed krb5 already uses OpenSSL crypto; nothing to do."
+        return 0
+    fi
+
+    # Step 1: download into a fresh scratch dir
+    local build_dir="/tmp/krb5-rebuild-$$"
+    rm -rf "${build_dir}"
+    mkdir -p "${build_dir}"
+    cd "${build_dir}"
+    info "Downloading ${krb5_name}..."
+    wget -q --tries=3 "${krb5_download}" -O "${krb5_name}"
+    if [ "$(md5sum "${krb5_name}" | cut -d' ' -f1)" != "${krb5_md5}" ]; then
+        error "${krb5_name} md5sum does not match KRB5_MD5SUM"
+        exit 1
+    fi
+    tar xzf "${krb5_name}"
+
+    # Step 2: load build_kerberos() and its helpers verbatim
+    local extracted_funcs extract_status
+    extracted_funcs=$(extract_functions check_if_source_exist restore_compile_flags build_kerberos "${TP_DIR}/build-thirdparty.sh") \
+        && extract_status=0 || extract_status=$?
+    if [ "${extract_status}" -ne 0 ] || [ -z "${extracted_funcs}" ]; then
+        error "Could not extract build_kerberos() from ${TP_DIR}/build-thirdparty.sh"
+        exit 1
+    fi
+    eval "${extracted_funcs}"
+
+    export TP_SOURCE_DIR="${build_dir}"
+    export TP_INSTALL_DIR="${SOURCE_TP}/installed"
+    export TP_INCLUDE_DIR="${TP_INSTALL_DIR}/include"
+    export KRB5_SOURCE="${krb5_source}"
+    export PARALLEL="${PARALLEL:-$(nproc)}"
+    export FILE_PREFIX_MAP_OPTION="-ffile-prefix-map=${TP_SOURCE_DIR}=. -ffile-prefix-map=${TP_INSTALL_DIR}=."
+    # build_kerberos sets only CFLAGS and LDFLAGS, so OpenSSL's headers come from the CPPFLAGS
+    # build-thirdparty.sh exports for every package
+    export CPPFLAGS="-I${TP_INCLUDE_DIR}"
+
+    info "Building ${krb5_source} (log: ${build_dir}.log)..."
+    # a plain call keeps set -e active inside the function
+    build_kerberos > "${build_dir}.log" 2>&1
+
+    # Step 3: verify
+    info "Verifying installation..."
+    if ! krb5_uses_openssl "${k5crypto}"; then
+        error "${k5crypto} does not call OpenSSL; check --with-crypto-impl in build_kerberos()"
+        exit 1
+    fi
+    info "libk5crypto.a: OpenSSL crypto"
+
+    cd /
+    rm -rf "${build_dir}" "${build_dir}.log"
 }
 
 #####################################################################
