@@ -164,12 +164,8 @@ if [ ! -z "${JAVA_OPTS_FOR_JDK_11}" ] ; then
 fi
 
 if [ -z "$final_java_opt" ] ; then
-    # lookup fails, provide a fixed opts with best guess that may or may not work
-    if [ -z "$DATE" ] ; then
-        DATE=`date +%Y%m%d-%H%M%S`
-    fi
-    final_java_opt="-Dlog4j2.formatMsgNoLookups=true -Xmx8192m -XX:+UseG1GC -Xlog:gc*:${LOG_DIR}/fe.gc.log.$DATE:time -Djava.security.policy=${STARROCKS_HOME}/conf/udf_security.policy"
-    echo "JAVA_OPTS is not set in fe.conf, use default java options to start fe process: $final_java_opt"
+    echo "JAVA_OPTS must be configured with the required FIPS settings in fe.conf" >&2
+    exit 1
 fi
 
 # Auto detect jvm -Xmx parameter in case $FE_ENABLE_AUTO_JVM_XMX_DETECT = true

@@ -128,7 +128,8 @@ def check_options(options, config, require_all=False):
         name, _, value = option[2:].partition("=")
         if name in expected and value != expected[name]:
             raise ValueError("Conflicting JVM property: " + name)
-        if name == "java.security.properties" and value != str(config):
+        if name == "java.security.properties" and (
+                not value or value.startswith("=") or Path(value).resolve() != config.resolve()):
             raise ValueError("Conflicting JVM property: " + name)
         # JNDI also disables hostname verification when the property has no value.
         if name == "com.sun.jndi.ldap.object.disableEndpointIdentification" and (
@@ -147,9 +148,9 @@ def check_options(options, config, require_all=False):
     return properties
 
 
-def environment_options(component):
-    names = ["JAVA_TOOL_OPTIONS", "_JAVA_OPTIONS"]
-    if component == "fe":
+def environment_options(component, after_service=False):
+    names = ["_JAVA_OPTIONS"] if after_service else ["JAVA_TOOL_OPTIONS"]
+    if component == "fe" and not after_service:
         names.append("JDK_JAVA_OPTIONS")
     options = []
     for name in names:
@@ -164,6 +165,28 @@ def environment_options(component):
     return options
 
 
+def check_trust_store(properties):
+    location = properties.get("javax.net.ssl.trustStore")
+    if location is None:
+        java_home = properties.get("java.home", os.environ.get("JAVA_HOME"))
+        if not java_home:
+            raise ValueError("JAVA_HOME is required to locate the default JSSE trust store")
+        security = Path(java_home) / "lib/security"
+        location = security / "jssecacerts"
+        if not location.exists():
+            location = security / "cacerts"
+    location = Path(location)
+    try:
+        with location.open("rb") as stream:
+            header = stream.read(12)
+    except OSError as error:
+        raise ValueError(f"Cannot read JSSE trust store {location}: {error}") from error
+    if (len(header) != 12 or header[:4] != b"\xfe\xed\xfe\xed"
+            or int.from_bytes(header[4:8], "big") not in (1, 2)):
+        raise ValueError(f"JSSE trust store must be JKS: {location}. "
+                         "Convert public CA certificates to a certificate-only JKS store before starting")
+
+
 def check_startup(home, component, options="", preflight=False):
     home = home.resolve()
     if any(c.isspace() for c in str(home)):
@@ -174,8 +197,10 @@ def check_startup(home, component, options="", preflight=False):
     if any(c.isspace() and c != " " for c in options):
         raise ValueError("Service JVM options must use spaces as separators")
     service_options = [option for option in options.split(" ") if option]
-    check_options(environment_options(component) + service_options, config,
-                  require_all=not preflight)
+    # _JAVA_OPTIONS overrides command-line and JNI options
+    properties = check_options(environment_options(component) + service_options
+                               + environment_options(component, after_service=True), config,
+                               require_all=not preflight)
     if preflight:
         return
     provider_dir = home / ("lib" if component == "fe" else "lib/hadoop/common")
@@ -186,6 +211,7 @@ def check_startup(home, component, options="", preflight=False):
     errors = check_packages([provider_dir / name for name in PINS["jars"]], provider_dir)
     if errors:
         raise ValueError("\n".join(errors))
+    check_trust_store(properties)
 
 
 def main():

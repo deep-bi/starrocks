@@ -48,10 +48,15 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.io.BufferedReader;
 import java.io.IOException;
+import java.io.InputStreamReader;
 import java.lang.reflect.Field;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
+import java.net.ServerSocket;
+import java.net.Socket;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.KeyStore;
@@ -297,6 +302,119 @@ class JavaTlsTest {
     }
 
     @Test
+    void jwksUsesHttpProxyAndHonorsNonProxyHosts() throws Exception {
+        AtomicInteger directRequests = new AtomicInteger();
+        AtomicInteger proxyRequests = new AtomicInteger();
+        byte[] body = "{\"keys\":[]}".getBytes(StandardCharsets.UTF_8);
+        HttpServer origin = HttpServer.create(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0);
+        origin.createContext("/", exchange -> {
+            directRequests.incrementAndGet();
+            exchange.sendResponseHeaders(200, body.length);
+            exchange.getResponseBody().write(body);
+            exchange.close();
+        });
+        origin.start();
+        String url = "http://localhost:" + origin.getAddress().getPort() + "/";
+        HttpServer proxy = HttpServer.create(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0);
+        proxy.createContext("/", exchange -> {
+            proxyRequests.incrementAndGet();
+            if (exchange.getRequestURI().getPath().equals("/redirect")) {
+                exchange.getResponseHeaders().add("Location", url);
+                exchange.sendResponseHeaders(302, -1);
+            } else {
+                exchange.sendResponseHeaders(200, body.length);
+                exchange.getResponseBody().write(body);
+            }
+            exchange.close();
+        });
+        proxy.start();
+        Map<String, String> saved = new HashMap<>();
+        for (String name : new String[] {"http.proxyHost", "http.proxyPort", "http.nonProxyHosts"}) {
+            saved.put(name, System.getProperty(name));
+        }
+        try {
+            System.setProperty("http.proxyHost", "localhost");
+            System.setProperty("http.proxyPort", Integer.toString(proxy.getAddress().getPort()));
+            System.setProperty("http.nonProxyHosts", "");
+            JwkMgr manager = new JwkMgr();
+            assertEquals(0, manager.getJwkSet(url).getKeys().size());
+            assertEquals(0, directRequests.get());
+            assertEquals(1, proxyRequests.get());
+            assertEquals("{\"keys\":[]}", HttpUtils.get(url, Map.of()));
+            assertEquals(1, directRequests.get());
+            assertEquals(1, proxyRequests.get());
+            System.setProperty("http.nonProxyHosts", "localhost");
+            assertEquals(0, manager.getJwkSet(url).getKeys().size());
+            assertEquals(2, directRequests.get());
+            assertEquals(1, proxyRequests.get());
+            assertEquals(0, manager.getJwkSet("http://jwks.invalid/redirect").getKeys().size());
+            assertEquals(3, directRequests.get());
+            assertEquals(2, proxyRequests.get());
+        } finally {
+            saved.forEach((name, value) -> {
+                if (value == null) {
+                    System.clearProperty(name);
+                } else {
+                    System.setProperty(name, value);
+                }
+            });
+            proxy.stop(0);
+            origin.stop(0);
+        }
+    }
+
+    @Test
+    void jwksUsesHttpsProxyTunnel() throws Exception {
+        SSLContext peer = fixtures.peerContext("valid");
+        Map<String, String> saved = new HashMap<>();
+        for (String name : new String[] {"https.proxyHost", "https.proxyPort", "http.nonProxyHosts"}) {
+            saved.put(name, System.getProperty(name));
+        }
+        try (ServerSocket proxy = new ServerSocket(0, 1, InetAddress.getLoopbackAddress())) {
+            CompletableFuture<Void> served = CompletableFuture.runAsync(() -> {
+                try (Socket transport = proxy.accept()) {
+                    transport.setSoTimeout(10000);
+                    BufferedReader connect = new BufferedReader(
+                            new InputStreamReader(transport.getInputStream(), StandardCharsets.US_ASCII));
+                    assertEquals("CONNECT localhost:1 HTTP/1.1", connect.readLine());
+                    while (!connect.readLine().isEmpty()) {
+                        // Consume the CONNECT headers before switching to TLS
+                    }
+                    transport.getOutputStream().write("HTTP/1.1 200 Connection established\r\n\r\n"
+                            .getBytes(StandardCharsets.US_ASCII));
+                    try (SSLSocket tls = (SSLSocket) peer.getSocketFactory().createSocket(transport, "localhost", 1, true)) {
+                        tls.setUseClientMode(false);
+                        tls.startHandshake();
+                        BufferedReader request = new BufferedReader(
+                                new InputStreamReader(tls.getInputStream(), StandardCharsets.US_ASCII));
+                        assertEquals("GET /jwks HTTP/1.1", request.readLine());
+                        while (!request.readLine().isEmpty()) {
+                            // Consume the request headers before sending the JWKS response
+                        }
+                        tls.getOutputStream().write(("HTTP/1.1 200 OK\r\nContent-Length: 11\r\n"
+                                + "Connection: close\r\n\r\n{\"keys\":[]}").getBytes(StandardCharsets.US_ASCII));
+                    }
+                } catch (IOException e) {
+                    throw new RuntimeException(e);
+                }
+            });
+            System.setProperty("https.proxyHost", "localhost");
+            System.setProperty("https.proxyPort", Integer.toString(proxy.getLocalPort()));
+            System.setProperty("http.nonProxyHosts", "");
+            assertEquals(0, new JwkMgr().getJwkSet("https://localhost:1/jwks").getKeys().size());
+            served.get(10, TimeUnit.SECONDS);
+        } finally {
+            saved.forEach((name, value) -> {
+                if (value == null) {
+                    System.clearProperty(name);
+                } else {
+                    System.setProperty(name, value);
+                }
+            });
+        }
+    }
+
+    @Test
     void httpsMissingKeyStoreFailsInsteadOfReturningPlaintextContext() {
         Config.ssl_keystore_location = "";
         assertThrows(IllegalArgumentException.class, HttpSSLContextLoader::getSslContext);
@@ -342,6 +460,8 @@ class JavaTlsTest {
             assertEquals(0, new JwkMgr().getJwkSet(insecureUrl).getKeys().size());
             assertThrows(HttpRequestException.class,
                     () -> HttpUtils.get("https://localhost:" + redirect.getAddress().getPort() + "/", Map.of()));
+            assertThrows(IOException.class,
+                    () -> new JwkMgr().getJwkSet("https://localhost:" + redirect.getAddress().getPort() + "/"));
             assertEquals(2, plaintextRequests.get());
         } finally {
             redirect.stop(0);

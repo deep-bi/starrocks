@@ -78,14 +78,15 @@ class JavaRuntimeTest(unittest.TestCase):
         config = Path("/srv/java-fips.security")
         for name in ("JAVA_TOOL_OPTIONS", "JDK_JAVA_OPTIONS", "_JAVA_OPTIONS"):
             with self.subTest(name=name), patch.dict(os.environ, {name: '-Xmx1g -Duser.timezone="UTC"'}, clear=True):
-                self.assertEqual("UTC", runtime.check_options(runtime.environment_options("fe"), config)["user.timezone"])
+                self.assertEqual("UTC", runtime.check_options(
+                    runtime.environment_options("fe", after_service=name == "_JAVA_OPTIONS"), config)["user.timezone"])
             for option in ("-Dorg.bouncycastle.fips.approved_only=false",
                            "-Dio.netty.handler.ssl.noOpenSsl=false",
                            "-Dio.grpc.netty.shaded.io.netty.handler.ssl.noOpenSsl=false",
                            "-Dcom.sun.jndi.ldap.object.disableEndpointIdentification"):
                 with self.subTest(name=name, option=option), patch.dict(os.environ, {name: option}, clear=True):
                     with self.assertRaises(ValueError):
-                        runtime.check_options(runtime.environment_options("fe"), config)
+                        runtime.check_options(runtime.environment_options("fe", after_service=name == "_JAVA_OPTIONS"), config)
         with patch.dict(os.environ, {"JDK_JAVA_OPTIONS": "-Dorg.bouncycastle.fips.approved_only=false"}, clear=True):
             self.assertEqual([], runtime.environment_options("backend"))
 
@@ -96,11 +97,43 @@ class JavaRuntimeTest(unittest.TestCase):
                 options = "-Dtest.value=" + separator + "-Dorg.bouncycastle.fips.approved_only=false"
                 with self.subTest(name=name, separator=separator), patch.dict(os.environ, {name: options}, clear=True):
                     with self.assertRaisesRegex(ValueError, "Conflicting JVM property"):
-                        runtime.check_options(runtime.environment_options("fe"), config)
+                        runtime.check_options(runtime.environment_options("fe", after_service=name == "_JAVA_OPTIONS"), config)
             with self.subTest(name=name), patch.dict(os.environ, {
                     name: '-Dtest.value="two\\ words" -javaagent:/srv/metrics.jar'}, clear=True):
                 self.assertEqual(["-Dtest.value=two\\ words", "-javaagent:/srv/metrics.jar"],
-                                 runtime.environment_options("fe"))
+                                 runtime.environment_options("fe", after_service=name == "_JAVA_OPTIONS"))
+
+    def test_trust_store_selection_and_format(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary)
+            security = home / "lib/security"
+            security.mkdir(parents=True)
+            cacerts = security / "cacerts"
+            jssecacerts = security / "jssecacerts"
+            # Only the JKS header is checked here, no JVM loads these bytes
+            jks = bytes.fromhex("feedfeed0000000200000000") + bytes(20)
+            with patch.dict(os.environ, {"JAVA_HOME": str(home)}, clear=True):
+                with self.assertRaisesRegex(ValueError, "Cannot read JSSE trust store"):
+                    runtime.check_trust_store({})
+                cacerts.write_bytes(jks)
+                runtime.check_trust_store({})
+                for invalid in (b"", b"\x30\x82PKCS12", jks[:8], b"feedfeed0000000200000000",
+                                bytes.fromhex("feedfeed0000000300000000")):
+                    jssecacerts.write_bytes(invalid)
+                    with self.subTest(invalid=invalid), self.assertRaisesRegex(ValueError, "must be JKS"):
+                        runtime.check_trust_store({})
+                jssecacerts.write_bytes(jks)
+                cacerts.write_bytes(b"invalid")
+                runtime.check_trust_store({})
+                with self.assertRaisesRegex(ValueError, "must be JKS"):
+                    runtime.check_trust_store({"javax.net.ssl.trustStore": str(cacerts)})
+                with self.assertRaisesRegex(ValueError, "Cannot read JSSE trust store"):
+                    runtime.check_trust_store({"javax.net.ssl.trustStore": str(home / "missing")})
+            with patch.dict(os.environ, {}, clear=True):
+                runtime.check_trust_store({"javax.net.ssl.trustStore": str(jssecacerts)})
+                runtime.check_trust_store({"java.home": str(home)})
+                with self.assertRaisesRegex(ValueError, "JAVA_HOME is required"):
+                    runtime.check_trust_store({})
 
     def test_preflight_does_not_require_runtime_metadata(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -118,7 +151,7 @@ class JavaRuntimeTest(unittest.TestCase):
             home = Path(temporary)
             for directory in ("bin", "conf", "security", "lib", "jdk/bin"):
                 (home / directory).mkdir(parents=True)
-            for name in ("start_backend.sh", "start_be.sh", "start_cn.sh", "common.sh"):
+            for name in ("start_backend.sh", "start_be.sh", "start_cn.sh", "meta_tool.sh", "common.sh"):
                 shutil.copy2(ROOT / "bin" / name, home / "bin" / name)
             for name in ("be.conf", "cn.conf", "hadoop_env.sh", "java-fips.security"):
                 shutil.copy2(ROOT / "conf" / name, home / "conf" / name)
@@ -128,14 +161,15 @@ class JavaRuntimeTest(unittest.TestCase):
             (home / "lib/starrocks_be").chmod(0o755)
             (home / "jdk/bin/java").write_text('#!/bin/bash\necho \'openjdk version "17"\' >&2\n')
             (home / "jdk/bin/java").chmod(0o755)
-            for component in ("be", "cn"):
+            for component in ("be", "cn", "meta_tool"):
                 for java_home in ("", str(home / "jdk")):
                     with self.subTest(component=component, java_home=java_home):
+                        script = "meta_tool.sh" if component == "meta_tool" else "start_" + component + ".sh"
                         result = subprocess.run([
-                            "bash", str(home / "bin" / ("start_" + component + ".sh")), "--logconsole",
+                            "bash", str(home / "bin" / script), "--logconsole",
                         ], env={"PATH": os.defpath, "JAVA_HOME": java_home}, text=True,
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=30)
-                        if java_home:
+                        if java_home and component != "meta_tool":
                             self.assertNotEqual(0, result.returncode, result.stdout)
                             self.assertIn("Java startup rejected:", result.stdout)
                             self.assertIn("Missing package path:", result.stdout)
@@ -176,6 +210,9 @@ class JavaRuntimeTest(unittest.TestCase):
                 env["JAVA_HOME"] = str(home / "jdk")
                 configured = configured_options(home, component)
                 config = home / "conf" / (component + ".conf")
+                if component == "fe":
+                    config.write_text("")
+                    assert_rejected(component, env, "JAVA_OPTS must be configured")
                 for options, error in (("-Dorg.bouncycastle.fips.approved_only=false", "Conflicting JVM property"),
                                        (configured + " -Dorg.bouncycastle.rsa.allow_sha1_sig=true",
                                         "Conflicting JVM property: org.bouncycastle.rsa.allow_sha1_sig"),
@@ -221,6 +258,12 @@ class JavaRuntimeTest(unittest.TestCase):
             home = Path(temporary)
             (home / "conf").mkdir()
             (home / "security").mkdir()
+            security = home / "jdk/lib/security"
+            security.mkdir(parents=True)
+            trust = security / "cacerts"
+            trust.write_bytes(bytes.fromhex("feedfeed0000000200000000") + bytes(20))
+            alias = home / "current"
+            alias.symlink_to(home, target_is_directory=True)
             shutil.copy2(ROOT / "security/check-java-fips.py", home / "security/check-java-fips.py")
             config = home / "conf/java-fips.security"
             original = (ROOT / "conf/java-fips.security").read_bytes()
@@ -237,11 +280,27 @@ class JavaRuntimeTest(unittest.TestCase):
                 command = ["python3", str(home / "security/check-java-fips.py"), "--home", str(home),
                            "--component", "fe" if component == "fe" else "backend",
                            "--options=" + configured_options(home, component)]
-                with patch.dict(os.environ, {}, clear=True):
+                with patch.dict(os.environ, {"JAVA_HOME": str(home / "jdk")}, clear=True):
                     config.write_bytes(original)
                     result = subprocess.run(command, capture_output=True, text=True)
                     self.assertEqual(0, result.returncode, result.stderr)
                     self.assertEqual("", result.stdout)
+                    aliased = ["python3", str(alias / "security/check-java-fips.py"), "--home", str(alias),
+                               "--component", "fe" if component == "fe" else "backend",
+                               "--options=" + configured_options(alias, component)]
+                    result = subprocess.run(aliased, capture_output=True, text=True)
+                    self.assertEqual(0, result.returncode, result.stderr)
+                    for name in ("JAVA_TOOL_OPTIONS", "JDK_JAVA_OPTIONS", "_JAVA_OPTIONS"):
+                        invalid_trust = "-Djavax.net.ssl.trustStore=" + str(home / "missing")
+                        explicit = command[:-1] + [command[-1] + " -Djavax.net.ssl.trustStore=" + str(trust)]
+                        with self.subTest(component=component, environment=name), patch.dict(os.environ, {
+                                name: invalid_trust}):
+                            result = subprocess.run(explicit, capture_output=True, text=True)
+                            if name == "_JAVA_OPTIONS":
+                                self.assertNotEqual(0, result.returncode, result.stderr)
+                                self.assertIn("Cannot read JSSE trust store", result.stderr)
+                            else:
+                                self.assertEqual(0, result.returncode, result.stderr)
                     config.write_bytes(original + b"\nsecurity.provider.1=SUN\n")
                     result = subprocess.run(command, capture_output=True, text=True)
                     self.assertNotEqual(0, result.returncode)

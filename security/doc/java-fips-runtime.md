@@ -50,8 +50,10 @@ Ship the configuration and validator together with the JARs.
 `check-java-fips.py` is the package/startup validator. Package paths select the full artifact scan.
 `--home` and `--component` select startup validation. Launchers use `--preflight` to check
 injected options before the Java version probe, then `--options` for the final JVM settings and pinned files.
-Java-enabled startup requires Python 3 and Bash. BE/CN skips Java validation when `JAVA_HOME`
+Java-enabled startup requires Python 3.9 or newer and Bash. BE/CN skips Java validation when `JAVA_HOME`
 is unset and uses the existing native-only path. Java features remain unavailable on that path.
+The native `meta_tool.sh` command skips Java validation even when `JAVA_HOME` is set
+
 The configuration is not embedded in application JARs. Startup compares its SHA-256 with
 `security_properties_sha256` in the pin manifest. Update that pin when changing the configuration.
 
@@ -113,7 +115,17 @@ adding or changing them. `${STARROCKS_HOME}` is expanded by the existing configu
 The checked-in default trust-store password is `changeit`. When supplying a custom
 `javax.net.ssl.trustStore`, configure its actual nonempty password in `JAVA_OPTS`.
 Empty paths, `NONE`, conflicting providers and non-JKS global trust types are rejected.
-The default path uses the prepared JDK's `jssecacerts`.
+Startup checks that the trust store is readable and has a JKS header
+
+An explicit `javax.net.ssl.trustStore` path takes priority, including inherited JVM overrides
+
+Without an explicit path, startup uses `$JAVA_HOME/lib/security/jssecacerts` if present,
+otherwise `$JAVA_HOME/lib/security/cacerts`
+
+A `java.home` JVM property overrides `JAVA_HOME` for this lookup
+
+The header check does not validate passwords or store contents, which BCFIPS checks when loading the store
+
 No custom default `SSLContext` is installed.
 
 JSSE does not read PEM. Existing global PEM or BCFKS trust inputs must be converted offline
@@ -142,6 +154,10 @@ Missing or conflicting required provider/trust settings and a different security
 Existing installations must merge the required flags into their configuration. Legacy
 `JAVA_OPTS_FOR_JDK_11` and `JAVA_OPTS_FOR_JDK_9_AND_LATER` still replace `JAVA_OPTS`. If used,
 they must contain the same required settings. The validator rejects missing settings.
+FE has no fallback JVM options and rejects an empty configuration
+
+Symbolic links to the packaged security configuration are accepted
+
 `JAVA_TOOL_OPTIONS` and `_JAVA_OPTIONS` are checked for the same conflicts.
 `JDK_JAVA_OPTIONS` is checked for FE. The JNI invocation does not consume it.
 Unrelated options and agents are not banned, and unused legacy variables are not validated.
@@ -213,6 +229,15 @@ Signed BC artifacts and native compression/network transports are unchanged.
 
 Elasticsearch HTTPS uses BCJSSE trust validation and normal hostname verification.
 Install the Elasticsearch CA in the configured trust store before connecting.
+
+JWKS downloads use the JVM proxy selector for HTTP proxies, including HTTPS tunnels and
+`http.nonProxyHosts`, while other `HttpUtils` requests keep their direct routes
+
+JVM `Authenticator` credentials are not passed to the JWKS client, so authenticated proxies need separate support
+
+SOCKS proxies are not covered by these tests
+
+Proxy support keeps the existing TLS checks, Basic-only authentication and HTTPS downgrade rejection
 
 Hadoop's separate WildFly OpenSSL dependency is excluded and banned by both Maven reactors.
 FE and Paimon-reader consume Paimon `1.4.2-fips-deepbi1`, which excludes ordinary BC and

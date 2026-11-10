@@ -39,12 +39,14 @@ import org.apache.http.impl.client.CloseableHttpClient;
 import org.apache.http.impl.client.DefaultHttpRequestRetryHandler;
 import org.apache.http.impl.client.DefaultRedirectStrategy;
 import org.apache.http.impl.conn.PoolingHttpClientConnectionManager;
+import org.apache.http.impl.conn.SystemDefaultRoutePlanner;
 import org.apache.http.protocol.HttpContext;
 import org.apache.http.util.EntityUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
+import java.net.ProxySelector;
 import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
 import java.util.Map;
@@ -57,7 +59,7 @@ public class HttpUtils {
 
 
     private static class SingletonHolder {
-        private static final CloseableHttpClient INSTANCE = getHttpClient();
+        private static final CloseableHttpClient INSTANCE = getHttpClient(false);
     }
 
     public static CloseableHttpClient getInstance() {
@@ -66,7 +68,7 @@ public class HttpUtils {
 
     private static final PoolingHttpClientConnectionManager CLIENT_CONNECTION_MANAGER;
 
-    private static CloseableHttpClient getHttpClient() {
+    private static CloseableHttpClient getHttpClient(boolean useSystemProxy) {
         Objects.requireNonNull(CLIENT_CONNECTION_MANAGER, "clientConnectionManager is not initialized");
 
         RequestConfig  requestConfig = RequestConfig.custom().setCookieSpec(CookieSpecs.IGNORE_COOKIES)
@@ -79,6 +81,8 @@ public class HttpUtils {
 
         return HttpAuthenticationPolicy.clientBuilder()
                 .setConnectionManager(CLIENT_CONNECTION_MANAGER)
+                .setConnectionManagerShared(useSystemProxy)
+                .setRoutePlanner(useSystemProxy ? new SystemDefaultRoutePlanner(ProxySelector.getDefault()) : null)
                 .setDefaultRequestConfig(requestConfig)
                 .setRedirectStrategy(new DefaultRedirectStrategy() {
                     @Override
@@ -122,14 +126,22 @@ public class HttpUtils {
     public static String get(String uri, Map<String, String> header) throws Exception {
         HttpGet httpGet = new HttpGet(uri);
         addHeaders(httpGet, header);
-        return executeRequest(uri, httpGet, null);
+        return executeRequest(uri, httpGet, null, getInstance());
+    }
+
+    public static String getWithSystemProxy(String uri, Map<String, String> header) throws Exception {
+        try (CloseableHttpClient httpClient = getHttpClient(true)) {
+            HttpGet httpGet = new HttpGet(uri);
+            addHeaders(httpGet, header);
+            return executeRequest(uri, httpGet, null, httpClient);
+        }
     }
 
     public static String post(String uri, AbstractHttpEntity entity, Map<String, String> header) throws Exception {
         HttpPost httpPost = new HttpPost(uri);
         httpPost.setEntity(entity);
         addHeaders(httpPost, header);
-        return executeRequest(uri, httpPost, entity);
+        return executeRequest(uri, httpPost, entity, getInstance());
     }
 
     private static void addHeaders(HttpRequestBase request, Map<String, String> headers) {
@@ -140,8 +152,8 @@ public class HttpUtils {
 
     private static String executeRequest(String uri,
                                          HttpUriRequest request,
-                                         AbstractHttpEntity entity) throws HttpRequestException {
-        CloseableHttpClient httpClient = getInstance();
+                                         AbstractHttpEntity entity,
+                                         CloseableHttpClient httpClient) throws HttpRequestException {
         if (Objects.isNull(httpClient)) {
             LOG.error("HttpClient is null for uri: {}", uri);
             throw new HttpRequestException("HttpClient is null for uri: " + uri);

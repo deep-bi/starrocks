@@ -28,7 +28,7 @@ public class JwkMgr {
         if (jwksUrl.startsWith("http://") || jwksUrl.startsWith("https://")) {
             String jwks;
             try {
-                jwks = HttpUtils.get(jwksUrl, null);
+                jwks = HttpUtils.getWithSystemProxy(jwksUrl, null);
             } catch (Exception e) {
                 throw new IOException("Cannot load JWKS", e);
             }
