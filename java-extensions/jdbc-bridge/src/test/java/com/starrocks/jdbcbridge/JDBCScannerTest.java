@@ -14,25 +14,158 @@
 
 package com.starrocks.jdbcbridge;
 
+import com.starrocks.connector.share.security.FipsCertificateProvider;
+import com.starrocks.connector.share.security.FipsTlsCryptoProvider;
+import org.bouncycastle.jcajce.provider.BouncyCastleFipsProvider;
+import org.bouncycastle.jsse.provider.BouncyCastleJsseProvider;
 import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
+import java.security.Provider;
+import java.security.Security;
 import java.sql.Connection;
+import java.sql.Driver;
+import java.sql.DriverPropertyInfo;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
+import java.sql.SQLException;
 import java.sql.Time;
 import java.sql.Timestamp;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Properties;
+import java.util.concurrent.atomic.AtomicInteger;
 
 public class JDBCScannerTest {
+    @BeforeAll
+    public static void initializeProviders() {
+        System.setProperty("org.bouncycastle.fips.approved_only", "true");
+        System.setProperty("org.bouncycastle.native.cpu_variant", "java");
+        if (Security.getProvider("BCFIPS") == null) {
+            Security.addProvider(new FipsCertificateProvider());
+            Security.addProvider(new BouncyCastleFipsProvider());
+            Security.addProvider(new BouncyCastleJsseProvider("fips:" + FipsTlsCryptoProvider.class.getName()));
+        }
+    }
+
+    @Test
+    public void testCachedResultSetRemainsReadableWhenProvidersAreRemoved() throws Exception {
+        JDBCScanner scanner = createScanner("org.postgresql.Driver", "UTC", 1);
+        setField(scanner, "resultSetMetaData", singleColumnMetaData());
+        setField(scanner, "resultChunk", singleStringColumnChunk());
+        setResultColumnClassNames(scanner, List.of("java.lang.String"));
+        AtomicInteger row = new AtomicInteger();
+        setField(scanner, "resultSet", proxy(ResultSet.class, (method, args) -> {
+            if ("next".equals(method.getName())) {
+                row.incrementAndGet();
+                return true;
+            }
+            if ("getObject".equals(method.getName())) {
+                return "row-" + row.get();
+            }
+            return defaultValue(method);
+        }));
+        Assertions.assertTrue(scanner.hasNext());
+        Assertions.assertEquals("row-1", scanner.getNextChunk().get(0)[0]);
+        int expectedRow = 1;
+        for (String name : List.of("BCFIPS", "BCJSSE", "StarRocksPKIX")) {
+            Provider provider = Security.getProvider(name);
+            Security.removeProvider(name);
+            try {
+                for (int retry = 0; retry < 3; retry++) {
+                    Assertions.assertTrue(scanner.hasNext());
+                    Assertions.assertEquals("row-" + ++expectedRow, scanner.getNextChunk().get(0)[0]);
+                    Assertions.assertEquals(1, scanner.getResultNumRows());
+                }
+            } finally {
+                Security.addProvider(provider);
+            }
+        }
+        Assertions.assertEquals(expectedRow, row.get());
+    }
+
+    @Test
+    public void testExternalDriverReceivesUnchangedUrlAndCredentials() throws Exception {
+        for (String url : List.of("jdbc:unreviewed://localhost/review?custom=value",
+                "jdbc:oracle:thin:@//localhost:1521/review?oracle.net.useJCEAPI=false",
+                "jdbc:postgresql://localhost/review?requireAuth=md5&sslmode=prefer",
+                "jdbc:mariadb://localhost/review?restrictedAuth=client_ed25519",
+                "jdbc:mysql://localhost/review?sslMode=PREFERRED&useConfigs=maxPerformance",
+                "jdbc:sqlserver://localhost;integratedSecurity=true",
+                "jdbc:clickhouse://localhost/review?sslmode=none")) {
+            JDBCScanContext context = new JDBCScanContext(RecordingDriver.class.getName(), url,
+                    "review-user", "synthetic-review-password", "SELECT 1", "UTC",
+                    1, 1, 0, 0, 1000, 30000, 0);
+            String driver = new java.io.File(RecordingDriver.class.getProtectionDomain()
+                    .getCodeSource().getLocation().toURI()).getPath();
+            JDBCScanner scanner = new JDBCScanner(driver, context);
+            ClassLoader original = Thread.currentThread().getContextClassLoader();
+            RecordingDriver.url = null;
+            RecordingDriver.properties = null;
+            try {
+                var failure = Assertions.assertThrows(com.zaxxer.hikari.pool.HikariPool.PoolInitializationException.class,
+                        scanner::open);
+                Assertions.assertEquals("Fixture stops before network access", failure.getCause().getMessage());
+                Assertions.assertEquals(url, RecordingDriver.url);
+                Properties expected = new Properties();
+                expected.setProperty("user", "review-user");
+                expected.setProperty("password", "synthetic-review-password");
+                Assertions.assertEquals(expected, RecordingDriver.properties);
+            } finally {
+                Thread.currentThread().setContextClassLoader(original);
+            }
+        }
+    }
+
+    public static final class RecordingDriver implements Driver {
+        private static String url;
+        private static Properties properties;
+
+        @Override
+        public Connection connect(String jdbcUrl, Properties info) throws SQLException {
+            url = jdbcUrl;
+            properties = (Properties) info.clone();
+            throw new SQLException("Fixture stops before network access");
+        }
+
+        @Override
+        public boolean acceptsURL(String jdbcUrl) {
+            return true;
+        }
+
+        @Override
+        public DriverPropertyInfo[] getPropertyInfo(String jdbcUrl, Properties info) {
+            return new DriverPropertyInfo[0];
+        }
+
+        @Override
+        public int getMajorVersion() {
+            return 1;
+        }
+
+        @Override
+        public int getMinorVersion() {
+            return 0;
+        }
+
+        @Override
+        public boolean jdbcCompliant() {
+            return false;
+        }
+
+        @Override
+        public java.util.logging.Logger getParentLogger() {
+            return java.util.logging.Logger.getGlobal();
+        }
+    }
 
     @Test
     public void testOracleVarcharColumnDoesNotUseTemporalConversion() throws Exception {

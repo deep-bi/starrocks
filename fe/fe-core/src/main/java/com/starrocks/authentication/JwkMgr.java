@@ -16,28 +16,27 @@ package com.starrocks.authentication;
 
 import com.nimbusds.jose.jwk.JWKSet;
 import com.starrocks.common.Config;
+import com.starrocks.http.HttpUtils;
 
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.net.URL;
 import java.text.ParseException;
 
 public class JwkMgr {
     public JWKSet getJwkSet(String jwksUrl) throws IOException, ParseException {
-        InputStream jwksInputStream = null;
-        try {
-            if (jwksUrl.startsWith("http://") || jwksUrl.startsWith("https://")) {
-                jwksInputStream = new URL(jwksUrl).openStream();
-            } else {
-                String filePath = Config.STARROCKS_HOME_DIR + "/conf/" + jwksUrl;
-                jwksInputStream = new FileInputStream(filePath);
+        if (jwksUrl.startsWith("http://") || jwksUrl.startsWith("https://")) {
+            String jwks;
+            try {
+                jwks = HttpUtils.getWithSystemProxy(jwksUrl, null);
+            } catch (Exception e) {
+                throw new IOException("Cannot load JWKS", e);
             }
+            return JWKSet.parse(jwks);
+        }
+        String filePath = Config.STARROCKS_HOME_DIR + "/conf/" + jwksUrl;
+        try (InputStream jwksInputStream = new FileInputStream(filePath)) {
             return JWKSet.load(jwksInputStream);
-        } finally {
-            if (jwksInputStream != null) {
-                jwksInputStream.close();
-            }
         }
     }
 }

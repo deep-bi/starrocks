@@ -19,6 +19,7 @@ import com.google.common.base.Strings;
 import com.starrocks.catalog.UserIdentity;
 import com.starrocks.common.Config;
 import com.starrocks.common.DdlException;
+import com.starrocks.connector.share.security.FipsTlsCryptoProvider;
 import com.starrocks.sql.analyzer.SemanticException;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.logging.log4j.LogManager;
@@ -63,6 +64,7 @@ public class LDAPGroupProvider extends GroupProvider {
     public static final String LDAP_PROP_BASE_DN_KEY = "ldap_bind_base_dn";
     public static final String LDAP_SSL_CONN_ALLOW_INSECURE = "ldap_ssl_conn_allow_insecure";
     public static final String LDAP_SSL_CONN_TRUST_STORE_PATH = "ldap_ssl_conn_trust_store_path";
+    public static final String LDAP_SSL_CONN_TRUST_STORE_TYPE = "ldap_ssl_conn_trust_store_type";
     public static final String LDAP_SSL_CONN_TRUST_STORE_PWD = "ldap_ssl_conn_trust_store_pwd";
     public static final String LDAP_PROP_CONN_TIMEOUT_MS_KEY = "ldap_conn_timeout";
     public static final String LDAP_PROP_CONN_READ_TIMEOUT_MS_KEY = "ldap_conn_read_timeout";
@@ -204,7 +206,9 @@ public class LDAPGroupProvider extends GroupProvider {
             } else {
                 LOG.warn("Neither ldap_group_filter nor ldap_group_dn exists");
             }
+            FipsTlsCryptoProvider.checkReady();
         } catch (Exception e) {
+            refreshed = false;
             LOG.error("LDAP group search failed", e);
         } finally {
             if (ctx != null) {
@@ -357,6 +361,7 @@ public class LDAPGroupProvider extends GroupProvider {
 
     public DirContext createDirContextOnConnection(String dn, String pwd) throws NamingException, IOException,
             GeneralSecurityException {
+        FipsTlsCryptoProvider.checkReady();
         if (Strings.isNullOrEmpty(pwd)) {
             LOG.warn("empty password is not allowed for simple authentication");
             throw new IOException("empty password is not allowed for simple authentication");
@@ -373,20 +378,36 @@ public class LDAPGroupProvider extends GroupProvider {
         environment.put("com.sun.jndi.ldap.connect.timeout", getLdapConnTimeout());
         environment.put("com.sun.jndi.ldap.read.timeout", getLdapConnReadTimeout());
 
-        if (!isLdapSslConnAllowInsecure()) {
+        if (usesTls(url)) {
             String trustStorePath = getLdapSslConnTrustStorePath();
             String trustStorePwd = getLdapSslConnTrustStorePwd();
             SSLContext sslContext = SslUtils.createSSLContext(
-                    Optional.empty(), /* For now, we don't support server to verify us(client). */
-                    Optional.empty(),
                     trustStorePath.isEmpty() ? Optional.empty() : Optional.of(new File(trustStorePath)),
-                    trustStorePwd.isEmpty() ? Optional.empty() : Optional.of(trustStorePwd));
-            LdapSslSocketFactory.setSslContextForCurrentThread(sslContext);
+                    trustStorePwd.isEmpty() ? Optional.empty() : Optional.of(trustStorePwd),
+                    properties.getOrDefault(LDAP_SSL_CONN_TRUST_STORE_TYPE, ""));
+            LdapSslSocketFactory.setSslContextForCurrentThread(sslContext, Integer.parseInt(getLdapConnTimeout()));
             // Refer to https://docs.oracle.com/javase/jndi/tutorial/ldap/security/ssl.html.
             environment.put("java.naming.ldap.factory.socket", LdapSslSocketFactory.class.getName());
         }
 
         return new InitialDirContext(environment);
+    }
+
+    private boolean usesTls(String url) {
+        boolean tls = false;
+        boolean plain = false;
+        for (String endpoint : url.trim().split("\\s+")) {
+            if (endpoint.regionMatches(true, 0, "ldaps:", 0, 6)) {
+                tls = true;
+            } else {
+                plain = true;
+            }
+        }
+        if (tls && plain && isLdapSslConnAllowInsecure()) {
+            throw new IllegalArgumentException("LDAP URL lists must not mix plaintext and TLS endpoints");
+        }
+        // An ldaps URL configures TLS even when the legacy allow-insecure option is unset.
+        return tls || !isLdapSslConnAllowInsecure();
     }
 
     public String getLdapConnUrl() {

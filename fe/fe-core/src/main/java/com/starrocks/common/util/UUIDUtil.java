@@ -27,7 +27,7 @@ public class UUIDUtil {
     // Prefer UUIDv7 values as they are ordered, and include timestamp.
     // Using ThreadLocal to avoid lock contention in multithread environment.
     // See https://github.com/StarRocks/starrocks/issues/58962 for more details.
-    private static final SecureRandom TRUE_RANDOM = new SecureRandom();
+    private static final SecureRandom TRUE_RANDOM = CryptoUtils.secureRandom();
     private static final ThreadLocal<TimeBasedEpochRandomGenerator> UUID7_FACTORY =
             new ThreadLocal<>() {
                 @Override protected TimeBasedEpochRandomGenerator initialValue() {

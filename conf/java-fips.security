@@ -1,0 +1,29 @@
+# Copyright 2021-present StarRocks, Inc. All rights reserved.
+# Licensed under the Apache License, Version 2.0
+# Overlay for the pinned Temurin runtime, consumed before application initialization
+security.provider.1=com.starrocks.connector.share.security.FipsCertificateProvider
+security.provider.2=org.bouncycastle.jcajce.provider.BouncyCastleFipsProvider
+security.provider.3=org.bouncycastle.jsse.provider.BouncyCastleJsseProvider fips:com.starrocks.connector.share.security.FipsTlsCryptoProvider
+# Retain only pinned JDK entropy and compatibility services, including nonsecurity MD5
+# SHA digests and signatures must fail when BCFIPS is unavailable or in an error state
+security.provider.4=com.starrocks.connector.share.security.FipsJdkProvider
+security.provider.5=SunJGSS
+# Hadoop calls SASL factories directly, bypassing jdk.sasl.disabledMechanisms.
+# Keep only the JDK's non-cryptographic PLAIN/EXTERNAL mechanisms here.
+security.provider.6=com.starrocks.connector.share.security.FipsSaslProvider
+security.provider.7=XMLDSig
+security.provider.8=SunPCSC
+security.provider.9=JdkLDAP
+security.provider.10=JdkSASL
+security.provider.11=
+security.provider.12=
+ssl.KeyManagerFactory.algorithm=PKIX
+ssl.TrustManagerFactory.algorithm=PKIX
+keystore.type=BCFKS
+securerandom.strongAlgorithms=NativePRNGNonBlocking:SUN
+# Keep the module's default entropy health tests and prediction-resistant DRBG
+securerandom.source=file:/dev/urandom
+# BCJSSE does not understand Temurin's conditional SHA1 clauses
+# Use unconditional exclusions rather than silently ignoring those restrictions
+jdk.tls.disabledAlgorithms=SSLv3, TLSv1, TLSv1.1, DTLSv1.0, RC4, DES, MD5withRSA, DH keySize < 2048, EC keySize < 224, 3DES_EDE_CBC, anon, NULL, ECDH, SHA1, DSA
+jdk.certpath.disabledAlgorithms=MD2, MD5, SHA1, RSA keySize < 2048, DSA, EC keySize < 224

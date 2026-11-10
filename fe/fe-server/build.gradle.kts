@@ -23,6 +23,11 @@ dependencies {
     implementation("com.google.guava:guava")
     implementation("commons-cli:commons-cli")
 
+    implementation("org.bouncycastle:bc-fips")
+    implementation("org.bouncycastle:bcutil-fips")
+    implementation("org.bouncycastle:bctls-fips")
+    implementation("org.bouncycastle:bcpkix-fips")
+
     testImplementation("org.junit.jupiter:junit-jupiter")
 }
 

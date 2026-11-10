@@ -353,6 +353,9 @@ public class HttpServer {
                 SslContext sslContext = null;
                 if (enableHttps) {
                     sslContext = HttpSSLContextLoader.getSslContext();
+                    if (sslContext == null) {
+                        throw new IllegalStateException("HTTPS listener has no TLS context");
+                    }
                 }
                 serverBootstrap.group(bossGroup, workerGroup)
                         .channel(NioServerSocketChannel.class)

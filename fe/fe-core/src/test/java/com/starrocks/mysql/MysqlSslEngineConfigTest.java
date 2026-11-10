@@ -15,6 +15,8 @@
 package com.starrocks.mysql;
 
 import com.starrocks.common.Config;
+import com.starrocks.common.util.CryptoUtils;
+import com.starrocks.common.util.TlsUtils;
 import com.starrocks.http.SslUtil;
 import com.starrocks.mysql.ssl.SSLContextLoader;
 import org.junit.jupiter.api.BeforeEach;
@@ -74,7 +76,6 @@ class MysqlSslEngineConfigTest {
         };
         String[] filtered = {"TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256"};
 
-        KeyStore ks = mock(KeyStore.class);
         KeyManagerFactory kmf = mock(KeyManagerFactory.class);
         SSLContext ctx = mock(SSLContext.class);
         SSLEngine engine = mock(SSLEngine.class);
@@ -82,18 +83,17 @@ class MysqlSslEngineConfigTest {
         SSLParameters paramsSupported = new SSLParameters();
         paramsSupported.setCipherSuites(supported);
 
-        when(ctx.getSupportedSSLParameters()).thenReturn(paramsSupported);
+        when(ctx.getDefaultSSLParameters()).thenReturn(paramsSupported);
         when(ctx.createSSLEngine()).thenReturn(engine);
 
-        try (MockedStatic<KeyStore> ksStatic = mockStatic(KeyStore.class);
-                MockedStatic<KeyManagerFactory> kmfStatic = mockStatic(KeyManagerFactory.class);
+        try (MockedStatic<TlsUtils> tls = mockStatic(TlsUtils.class);
                 MockedStatic<SSLContext> sslCtxStatic = mockStatic(SSLContext.class);
                 MockedStatic<SslUtil> sslUtilStatic = mockStatic(SslUtil.class)) {
 
-            ksStatic.when(() -> KeyStore.getInstance("JKS")).thenReturn(ks);
-            kmfStatic.when(KeyManagerFactory::getDefaultAlgorithm).thenReturn("SunX509");
-            kmfStatic.when(() -> KeyManagerFactory.getInstance("SunX509")).thenReturn(kmf);
-            sslCtxStatic.when(() -> SSLContext.getInstance("TLSv1.2")).thenReturn(ctx);
+            tls.when(() -> TlsUtils.keyManagers(Config.ssl_keystore_location, Config.ssl_keystore_type,
+                    Config.ssl_keystore_password, Config.ssl_key_password)).thenReturn(kmf);
+            tls.when(() -> TlsUtils.trustManagers(null)).thenReturn(mock(TrustManagerFactory.class));
+            sslCtxStatic.when(() -> SSLContext.getInstance("TLSv1.2", CryptoUtils.jsseProvider())).thenReturn(ctx);
 
             sslUtilStatic.when(() -> SslUtil.filterCipherSuites(supported)).thenReturn(filtered);
 
@@ -120,24 +120,22 @@ class MysqlSslEngineConfigTest {
                 "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384"
         };
 
-        KeyStore ks = mock(KeyStore.class);
         KeyManagerFactory kmf = mock(KeyManagerFactory.class);
         SSLContext ctx = mock(SSLContext.class);
         SSLEngine engine = mock(SSLEngine.class);
         SSLParameters paramsSupported = new SSLParameters();
         paramsSupported.setCipherSuites(supported);
-        when(ctx.getSupportedSSLParameters()).thenReturn(paramsSupported);
+        when(ctx.getDefaultSSLParameters()).thenReturn(paramsSupported);
         when(ctx.createSSLEngine()).thenReturn(engine);
 
-        try (MockedStatic<KeyStore> ksStatic = mockStatic(KeyStore.class);
-                MockedStatic<KeyManagerFactory> kmfStatic = mockStatic(KeyManagerFactory.class);
+        try (MockedStatic<TlsUtils> tls = mockStatic(TlsUtils.class);
                 MockedStatic<SSLContext> sslCtxStatic = mockStatic(SSLContext.class);
                 MockedStatic<SslUtil> sslUtilStatic = mockStatic(SslUtil.class)) {
 
-            ksStatic.when(() -> KeyStore.getInstance("JKS")).thenReturn(ks);
-            kmfStatic.when(KeyManagerFactory::getDefaultAlgorithm).thenReturn("SunX509");
-            kmfStatic.when(() -> KeyManagerFactory.getInstance("SunX509")).thenReturn(kmf);
-            sslCtxStatic.when(() -> SSLContext.getInstance("TLSv1.2")).thenReturn(ctx);
+            tls.when(() -> TlsUtils.keyManagers(Config.ssl_keystore_location, Config.ssl_keystore_type,
+                    Config.ssl_keystore_password, Config.ssl_key_password)).thenReturn(kmf);
+            tls.when(() -> TlsUtils.trustManagers(null)).thenReturn(mock(TrustManagerFactory.class));
+            sslCtxStatic.when(() -> SSLContext.getInstance("TLSv1.2", CryptoUtils.jsseProvider())).thenReturn(ctx);
 
             sslUtilStatic.when(() -> SslUtil.filterCipherSuites(supported)).thenReturn(filtered);
 
@@ -155,24 +153,22 @@ class MysqlSslEngineConfigTest {
         String[] supported = {"TLS_AES_128_GCM_SHA256", "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256"};
         String[] filtered = {};
 
-        KeyStore ks = mock(KeyStore.class);
         KeyManagerFactory kmf = mock(KeyManagerFactory.class);
         SSLContext ctx = mock(SSLContext.class);
         SSLEngine engine = mock(SSLEngine.class);
         SSLParameters paramsSupported = new SSLParameters();
         paramsSupported.setCipherSuites(supported);
-        when(ctx.getSupportedSSLParameters()).thenReturn(paramsSupported);
+        when(ctx.getDefaultSSLParameters()).thenReturn(paramsSupported);
         when(ctx.createSSLEngine()).thenReturn(engine);
 
-        try (MockedStatic<KeyStore> ksStatic = mockStatic(KeyStore.class);
-                MockedStatic<KeyManagerFactory> kmfStatic = mockStatic(KeyManagerFactory.class);
+        try (MockedStatic<TlsUtils> tls = mockStatic(TlsUtils.class);
                 MockedStatic<SSLContext> sslCtxStatic = mockStatic(SSLContext.class);
                 MockedStatic<SslUtil> sslUtilStatic = mockStatic(SslUtil.class)) {
 
-            ksStatic.when(() -> KeyStore.getInstance("JKS")).thenReturn(ks);
-            kmfStatic.when(KeyManagerFactory::getDefaultAlgorithm).thenReturn("SunX509");
-            kmfStatic.when(() -> KeyManagerFactory.getInstance("SunX509")).thenReturn(kmf);
-            sslCtxStatic.when(() -> SSLContext.getInstance("TLSv1.2")).thenReturn(ctx);
+            tls.when(() -> TlsUtils.keyManagers(Config.ssl_keystore_location, Config.ssl_keystore_type,
+                    Config.ssl_keystore_password, Config.ssl_key_password)).thenReturn(kmf);
+            tls.when(() -> TlsUtils.trustManagers(null)).thenReturn(mock(TrustManagerFactory.class));
+            sslCtxStatic.when(() -> SSLContext.getInstance("TLSv1.2", CryptoUtils.jsseProvider())).thenReturn(ctx);
 
             sslUtilStatic.when(() -> SslUtil.filterCipherSuites(supported)).thenReturn(filtered);
 
@@ -195,13 +191,12 @@ class MysqlSslEngineConfigTest {
         String[] supported = {"TLS_AES_256_GCM_SHA384", "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256"};
         String[] filtered = {"TLS_AES_256_GCM_SHA384"};
 
-        KeyStore ks = mock(KeyStore.class);
         KeyManagerFactory kmf = mock(KeyManagerFactory.class);
         SSLContext ctx = mock(SSLContext.class);
         SSLEngine engine = mock(SSLEngine.class);
         SSLParameters paramsSupported = new SSLParameters();
         paramsSupported.setCipherSuites(supported);
-        when(ctx.getSupportedSSLParameters()).thenReturn(paramsSupported);
+        when(ctx.getDefaultSSLParameters()).thenReturn(paramsSupported);
         when(ctx.createSSLEngine()).thenReturn(engine);
 
         KeyStore trustKs = mock(KeyStore.class);
@@ -209,21 +204,16 @@ class MysqlSslEngineConfigTest {
         TrustManager[] tms = new TrustManager[] {mock(TrustManager.class)};
         when(tmf.getTrustManagers()).thenReturn(tms);
 
-        try (MockedStatic<KeyStore> ksStatic = mockStatic(KeyStore.class);
-                MockedStatic<KeyManagerFactory> kmfStatic = mockStatic(KeyManagerFactory.class);
-                MockedStatic<TrustManagerFactory> tmfStatic = mockStatic(TrustManagerFactory.class);
+        try (MockedStatic<TlsUtils> tls = mockStatic(TlsUtils.class);
                 MockedStatic<SSLContext> sslCtxStatic = mockStatic(SSLContext.class);
                 MockedStatic<SslUtil> sslUtilStatic = mockStatic(SslUtil.class)) {
 
-            ksStatic.when(() -> KeyStore.getInstance("JKS"))
-                    .thenReturn(ks)
-                    .thenReturn(trustKs)
-            ;
-            kmfStatic.when(KeyManagerFactory::getDefaultAlgorithm).thenReturn("SunX509");
-            kmfStatic.when(() -> KeyManagerFactory.getInstance("SunX509")).thenReturn(kmf);
-            tmfStatic.when(TrustManagerFactory::getDefaultAlgorithm).thenReturn("PKIX");
-            tmfStatic.when(() -> TrustManagerFactory.getInstance("PKIX")).thenReturn(tmf);
-            sslCtxStatic.when(() -> SSLContext.getInstance("TLSv1.2")).thenReturn(ctx);
+            tls.when(() -> TlsUtils.keyManagers(Config.ssl_keystore_location, Config.ssl_keystore_type,
+                    Config.ssl_keystore_password, Config.ssl_key_password)).thenReturn(kmf);
+            tls.when(() -> TlsUtils.trustStore(Config.ssl_truststore_location, Config.ssl_truststore_type,
+                    Config.ssl_truststore_password)).thenReturn(trustKs);
+            tls.when(() -> TlsUtils.trustManagers(trustKs)).thenReturn(tmf);
+            sslCtxStatic.when(() -> SSLContext.getInstance("TLSv1.2", CryptoUtils.jsseProvider())).thenReturn(ctx);
 
             sslUtilStatic.when(() -> SslUtil.filterCipherSuites(supported)).thenReturn(filtered);
 
