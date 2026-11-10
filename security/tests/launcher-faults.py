@@ -11,6 +11,8 @@ import zipfile
 
 
 def main():
+    if not __debug__:
+        raise ValueError("Run without Python optimization so security assertions remain enabled")
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--home", type=Path, required=True)
     parser.add_argument("--java-home", type=Path, required=True)
@@ -23,6 +25,13 @@ def main():
     env = dict(os.environ, JAVA_HOME=str(args.java_home))
     for name in ("JAVA_TOOL_OPTIONS", "JDK_JAVA_OPTIONS", "_JAVA_OPTIONS", "JAVA_OPTS", "LIBHDFS_OPTS", "CLASSPATH"):
         env.pop(name, None)
+
+    healthy = subprocess.run(["bash", str(home / "bin/start_fe.sh"), "--logconsole", "--", "-v"],
+                             env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=30)
+    if healthy.returncode != 0:
+        raise ValueError("Unmodified fixture failed startup validation; fault results would be inconclusive:\n"
+                         + healthy.stdout)
+    print("Unmodified launcher accepted")
 
     def rejected(label, changes=None):
         result = subprocess.run(["bash", str(home / "bin/start_fe.sh"), "--logconsole", "--", "-v"],

@@ -158,7 +158,7 @@ security settings. An unreviewed driver is not rejected merely because it is unr
 | Path | StarRocks controls |
 | --- | --- |
 | FE LDAP direct DN bind, service-account search and user bind, DN patterns | `LDAPAuthProvider`, `SslUtils` and `LdapSslSocketFactory` apply shared readiness checks and verified BCJSSE LDAPS to global configuration and security integrations |
-| FE LDAP memberOf lookup and separate group provider | `LDAPGroupProvider` checks readiness for directory connections, refreshes and cached group reads. LDAPS verifies certificates and hostnames |
+| FE LDAP memberOf lookup and separate group provider | Directory connections and group refreshes check readiness. Cached group reads follow the existing cache policy without rechecking crypto readiness. LDAPS verifies certificates and hostnames |
 | FE JDBC metadata catalogs | Checks readiness before Hikari initialization and new or replacement physical connections. Cached borrows do not recheck readiness |
 | FE Iceberg JDBC catalogs | Checks readiness before catalog initialization and new or replacement physical connections. URLs and `jdbc.*` driver properties pass through without security-policy rewrites |
 | Embedded BE/CN JDBC scans | Checks readiness in `open()` and before physical connection creation. The configured driver and URL pass through without security-policy rewrites. Result reads do not recheck readiness |

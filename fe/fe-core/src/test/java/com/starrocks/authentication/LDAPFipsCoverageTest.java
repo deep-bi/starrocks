@@ -185,7 +185,7 @@ class LDAPFipsCoverageTest {
     }
 
     @Test
-    void missingProvidersStopBindsRefreshesCachedGroupsAndCachedSocketFactories() throws Exception {
+    void missingProvidersStopDirectoryAccessButPreserveCachedGroups() throws Exception {
         AtomicInteger binds = new AtomicInteger();
         try (InMemoryDirectoryServer server = directory(binds)) {
             int port = server.getListenPort();
@@ -207,11 +207,12 @@ class LDAPFipsCoverageTest {
                 Security.removeProvider(name);
                 try {
                     assertThrows(Exception.class, () -> authenticate(login));
-                    assertThrows(IllegalStateException.class, () -> login.resolveMemberOfGroupsForUser("alice"));
+                    assertEquals(new LDAPAuthProvider.TargetUserGroups(null, Set.of()),
+                            login.resolveMemberOfGroupsForUser("alice"));
                     assertThrows(IllegalStateException.class,
                             () -> groups.createDirContextOnConnection(SERVICE, fixtures.password));
                     groups.refreshGroups();
-                    assertThrows(IllegalStateException.class, () -> groups.getGroup(IDENTITY, USER));
+                    assertEquals(Set.of("analysts"), groups.getGroup(IDENTITY, USER));
                     assertThrows(IllegalStateException.class, LdapSslSocketFactory::getDefault);
                     assertThrows(IllegalStateException.class, () -> cached.createSocket("localhost", port));
                     assertEquals(prior, binds.get());
@@ -227,7 +228,7 @@ class LDAPFipsCoverageTest {
     }
 
     @Test
-    void moduleErrorStopsPlainAndTlsBindsAndCachedObjects() throws Exception {
+    void moduleErrorStopsDirectoryAccessButPreservesCachedGroups() throws Exception {
         String classpath = System.getProperty("surefire.test.class.path", System.getProperty("java.class.path"));
         Path log = directory.resolve("module-error.log");
         Process process = new ProcessBuilder(Path.of(System.getProperty("java.home"), "bin", "java").toString(),
@@ -258,11 +259,13 @@ class LDAPFipsCoverageTest {
             assertThrows(InvocationTargetException.class, () -> fail.invoke(null, "LDAP module error fixture"));
             assertThrows(FipsOperationError.class, () -> cached.createSocket("localhost", 1));
             assertThrows(FipsOperationError.class, LdapSslSocketFactory::getDefault);
-            assertThrows(FipsOperationError.class, () -> groups.getGroup(IDENTITY, USER));
+            assertEquals(Set.of("analysts"), groups.getGroup(IDENTITY, USER));
             assertThrows(FipsOperationError.class, groups::refreshGroups);
             for (boolean tls : new boolean[] {false, true}) {
                 LDAPAuthProvider login = new LDAPAuthProvider("localhost", 1, tls, "", "", SERVICE,
                         "fixture-password", BASE, "uid", USER, "");
+                assertEquals(new LDAPAuthProvider.TargetUserGroups(null, Set.of()),
+                        login.resolveMemberOfGroupsForUser("alice"));
                 assertThrows(FipsOperationError.class, () -> login.checkPassword(USER, "fixture-password"));
                 assertThrows(FipsOperationError.class, () -> login.findUserDNByRoot("alice"));
             }

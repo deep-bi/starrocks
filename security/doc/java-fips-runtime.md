@@ -4,6 +4,9 @@ Java providers are configured by the JVM security file and launcher options.
 There is no application security initializer or JNI security callback.
 This reference covers FE and the Java components embedded in BE/CN.
 The verification scope and remaining qualification work are listed below.
+Use the [verification workflow](../../../fips-validator/docs/fips-verification.md) and
+[feature inventory](../../../fips-validator/docs/fips-feature-inventory.md) in the sibling
+`fips-validator` project to record current release evidence.
 The [baseline](fips-baseline.md), [dependencies](java-fips-dependencies.md) and
 [TLS/store policy](java-fips-tls.md) remain part of the contract.
 
@@ -44,7 +47,7 @@ python3 security/check-java-fips.py --providers output/be/lib/hadoop/common outp
 `build.sh` validates the FE dependency staging directory and the assembled BE Java libraries.
 Direct Maven builds require the explicit package checks above.
 Ship the configuration and validator together with the JARs.
-`check-java-fips.py` is the single validator. Package paths select the full artifact scan.
+`check-java-fips.py` is the package/startup validator. Package paths select the full artifact scan.
 `--home` and `--component` select startup validation. Launchers use `--preflight` to check
 injected options before the Java version probe, then `--options` for the final JVM settings and pinned files.
 Java-enabled startup requires Python 3 and Bash. BE/CN skips Java validation when `JAVA_HOME`

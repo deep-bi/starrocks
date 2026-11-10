@@ -5,6 +5,7 @@
 
 import argparse
 import http.client
+import ipaddress
 import os
 from pathlib import Path
 import secrets
@@ -69,6 +70,14 @@ def mysql(host, query_port, tls, context, require_tls=True):
             send(active, 0, b"\x03SELECT 1")
             _, response = packet(active)
             assert response[0] == 1, response  # one result column
+            _, column = packet(active)
+            assert column, "Missing SELECT 1 column definition"
+            _, eof = packet(active)
+            assert eof[0] == 254 and len(eof) < 9, eof
+            _, row = packet(active)
+            assert row == b"\x011", row
+            _, eof = packet(active)
+            assert eof[0] == 254 and len(eof) < 9, eof
         finally:
             if active is not transport:
                 active.close()
@@ -121,11 +130,17 @@ def no_tls(home, java_home):
 
 
 def main():
+    if not __debug__:
+        raise ValueError("Run without Python optimization so security assertions remain enabled")
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--home", type=Path, required=True, help="Dedicated temporary FE distribution")
     parser.add_argument("--java-home", type=Path, required=True)
     parser.add_argument("--no-tls", action="store_true", help="Check startup with TLS disabled")
+    parser.add_argument("--require-nonloopback", action="store_true",
+                        help="Reject a fixture that cannot test nonloopback plaintext rejection")
     args = parser.parse_args()
+    if args.require_nonloopback and ipaddress.ip_address(socket.gethostbyname(socket.gethostname())).is_loopback:
+        parser.error("Hostname resolves to loopback; configure a nonloopback address for the complete listener test")
     home = args.home.resolve()
     assert str(home).startswith("/tmp/"), "Use an isolated /tmp distribution"
     if any((home / "meta").iterdir()):
@@ -243,6 +258,8 @@ def main():
                                env=env, stdout=client_log, stderr=client_log, check=True, timeout=30)
                 print("Default dependency TLS rejected " + label)
         print("Actual FE HTTP, HTTPS and MySQL TLS passed at 127.0.0.1 and " + host)
+        if ipaddress.ip_address(host).is_loopback:
+            print("NOT TESTED: nonloopback plaintext MySQL rejection")
     finally:
         process.terminate()
         try:

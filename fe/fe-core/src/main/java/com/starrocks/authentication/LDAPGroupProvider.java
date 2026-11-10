@@ -156,7 +156,6 @@ public class LDAPGroupProvider extends GroupProvider {
 
     @Override
     public Set<String> getGroup(UserIdentity userIdentity, String distinguishedName) {
-        FipsTlsCryptoProvider.checkReady();
         String ldapUserSearchAttr = getLdapUserSearchAttr();
         String lookupKey;
         if (ldapUserSearchAttr != null) {

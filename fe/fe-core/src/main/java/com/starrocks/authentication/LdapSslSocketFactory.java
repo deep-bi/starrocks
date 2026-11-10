@@ -65,7 +65,7 @@ public final class LdapSslSocketFactory extends SocketFactory {
         Socket transport = new Socket();
         try {
             transport.connect(new InetSocketAddress(host, port), connectTimeout);
-            return verifyHostname(((SSLSocketFactory) socketFactory).createSocket(transport, host, port, true));
+            return configureLdapTls(((SSLSocketFactory) socketFactory).createSocket(transport, host, port, true));
         } catch (IOException | RuntimeException e) {
             transport.close();
             throw e;
@@ -76,24 +76,24 @@ public final class LdapSslSocketFactory extends SocketFactory {
     public Socket createSocket(String host, int port, InetAddress localHost, int localPort)
             throws IOException {
         FipsTlsCryptoProvider.checkReady();
-        return verifyHostname(socketFactory.createSocket(host, port, localHost, localPort));
+        return configureLdapTls(socketFactory.createSocket(host, port, localHost, localPort));
     }
 
     @Override
     public Socket createSocket(InetAddress host, int port)
             throws IOException {
         FipsTlsCryptoProvider.checkReady();
-        return verifyHostname(socketFactory.createSocket(host, port));
+        return configureLdapTls(socketFactory.createSocket(host, port));
     }
 
     @Override
     public Socket createSocket(InetAddress address, int port, InetAddress localAddress, int localPort)
             throws IOException {
         FipsTlsCryptoProvider.checkReady();
-        return verifyHostname(socketFactory.createSocket(address, port, localAddress, localPort));
+        return configureLdapTls(socketFactory.createSocket(address, port, localAddress, localPort));
     }
 
-    private static Socket verifyHostname(Socket socket) {
+    private static Socket configureLdapTls(Socket socket) {
         SSLSocket ssl = (SSLSocket) socket;
         SSLParameters parameters = ssl.getSSLParameters();
         parameters.setEndpointIdentificationAlgorithm("LDAPS");

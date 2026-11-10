@@ -235,7 +235,6 @@ public class LDAPAuthProvider implements AuthenticationProvider {
      * empty result is never an error here, it just means the caller keeps the group providers only
      */
     public TargetUserGroups resolveMemberOfGroupsForUser(String user) {
-        FipsTlsCryptoProvider.checkReady();
         if (!ldapGroupSource.readsMemberOf()) {
             // Nothing to read, and deliberately no request: the default configuration must not pay
             // for a directory round trip it does not need.
