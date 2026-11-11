@@ -81,7 +81,6 @@ public class ArrowFlightSqlSessionManager {
         }
 
         ArrowFlightSqlTokenInfo tokenInfo = new ArrowFlightSqlTokenInfo(ctx.getCurrentUserIdentity(), token);
-        tokenCache.put(token, tokenInfo);
 
         ctx.setGlobalStateMgr(GlobalStateMgr.getCurrentState());
         ctx.setQueryId(UUIDUtil.genUUID());
@@ -92,15 +91,19 @@ public class ArrowFlightSqlSessionManager {
         ctx.setConnectionId(connectScheduler.getNextConnectionId());
         ctx.resetConnectionStartTime();
 
+        // expired tokens are dropped lazily, so release their sessions before the connection limits are checked
+        tokenCache.cleanUp();
         Pair<Boolean, String> isSuccessAndErrorMsg = connectScheduler.registerConnection(ctx);
         if (!isSuccessAndErrorMsg.first) {
             String errorMsg = isSuccessAndErrorMsg.second;
             ctx.getState().setError(errorMsg);
+            ctx.kill(true, "failed to register connection: " + errorMsg);
             throw CallStatus.RESOURCE_EXHAUSTED
                     .withDescription("failed to register connection: " + errorMsg)
                     .toRuntimeException();
         }
 
+        tokenCache.put(token, tokenInfo);
         return token;
     }
 

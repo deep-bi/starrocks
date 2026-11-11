@@ -34,113 +34,170 @@
 
 package com.starrocks.qe;
 
-import com.google.common.collect.Maps;
-import com.starrocks.authentication.AuthenticationException;
+import com.google.common.annotations.VisibleForTesting;
 import com.starrocks.authorization.RolePrivilegeCollectionV2;
 import com.starrocks.common.CloseableLock;
 import com.starrocks.common.ErrorCode;
+import com.starrocks.common.Pair;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.regex.Pattern;
-import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
+/**
+ * Limits the concurrent connections per role, as configured by qe_role_connection_limits.
+ *
+ * <p>A connection is counted against every limited role active in its session when it is registered. If any of
+ * those roles is already at its limit, the connection is rejected and nothing is counted. The roles a connection
+ * was counted against are remembered, so closing it releases exactly those, even after SET ROLE changed the roles
+ * of the session. A rejection carries the message of ERR_GROUP_MAX_CONNECTION.
+ */
 public class RoleConnectionManager {
     private static final Logger LOG = LogManager.getLogger(RoleConnectionManager.class);
-    private final Map<String, Integer> connCountByRole = Maps.newConcurrentMap();
+    private final Map<String, Integer> connCountByRole = new HashMap<>();
+    // the limited roles each registered connection is counted against
+    private final Map<ConnectContext, Set<String>> rolesByConnection = new IdentityHashMap<>();
     private final ReentrantLock connLock = new ReentrantLock();
     private final List<RoleConnectionLimit> roleConnectionLimits;
-    private final Integer maxConnections;
 
-    public RoleConnectionManager(int maxConnections, String config) {
-        this.maxConnections = maxConnections;
+    public RoleConnectionManager(String config) {
         this.roleConnectionLimits = parse(config);
     }
 
-    public void unregisterConnection(ConnectContext context) {
+    /**
+     * Count the connection against the limits of its active roles. A connection is counted once, registering it
+     * again has no effect. A connection whose user is not authenticated yet is not counted, so it must be
+     * registered again once it is.
+     *
+     * @param ctx connection context
+     * @return a pair, first is success or not, second is error message(if any)
+     */
+    public Pair<Boolean, String> registerConnection(ConnectContext ctx) {
+        if (roleConnectionLimits.isEmpty() || ctx.getCurrentUserIdentity() == null) {
+            return new Pair<>(true, null);
+        }
+
+        Map<String, Integer> maxLimitForRoles = getMaxLimitForRoles(ctx);
         try (CloseableLock ignored = CloseableLock.lock(this.connLock)) {
-            getUserRoles(context).forEach(role -> connCountByRole.computeIfPresent(role, (k, v) -> v > 1 ? v - 1 : null));
+            if (rolesByConnection.containsKey(ctx)) {
+                return new Pair<>(true, null);
+            }
+
+            String errMsg = checkLimits(ctx, maxLimitForRoles, Set.of());
+            if (errMsg != null) {
+                return new Pair<>(false, errMsg);
+            }
+            this.registerConnection(ctx, maxLimitForRoles.keySet());
+            return new Pair<>(true, null);
         }
     }
 
-    public void registerConnection(ConnectContext ctx) throws AuthenticationException {
-        Set<String> userRoles = getUserRoles(ctx);
-
-        if (userRoles.isEmpty() || roleConnectionLimits.isEmpty()) {
-            return;
+    /**
+     * Move a connection that switched to another user over to the roles of that user. A rejected switch leaves the
+     * connection counted against its previous roles.
+     *
+     * @param ctx connection context that already carries the new user and roles
+     * @return a pair, first is success or not, second is error message(if any)
+     */
+    public Pair<Boolean, String> onUserChanged(ConnectContext ctx) {
+        if (roleConnectionLimits.isEmpty()) {
+            return new Pair<>(true, null);
         }
 
-        Map<String, Integer> maxLimitForRoles = getMaxLimitForRoles(userRoles);
-
+        Map<String, Integer> maxLimitForRoles = getMaxLimitForRoles(ctx);
         try (CloseableLock ignored = CloseableLock.lock(this.connLock)) {
-            for (String role : userRoles) {
-                Integer currentConnection = getCurrentConnection(role);
-                Integer limit = maxLimitForRoles.get(role);
+            Set<String> previousRoles = rolesByConnection.getOrDefault(ctx, Set.of());
+            // a role the connection is already counted against needs no new slot
+            String errMsg = checkLimits(ctx, maxLimitForRoles, previousRoles);
+            if (errMsg != null) {
+                return new Pair<>(false, errMsg);
+            }
+            this.unregisterConnection(previousRoles);
+            this.registerConnection(ctx, maxLimitForRoles.keySet());
+            return new Pair<>(true, null);
+        }
+    }
 
-                if (currentConnection >= limit) {
-                    String userErrMsg = String.format("Role-based connection limit reached "
+    public void unregisterConnection(ConnectContext ctx) {
+        try (CloseableLock ignored = CloseableLock.lock(this.connLock)) {
+            Set<String> roles = rolesByConnection.remove(ctx);
+            if (roles != null) {
+                this.unregisterConnection(roles);
+            }
+        }
+    }
+
+    @VisibleForTesting
+    public int getCurrentConnection(String role) {
+        try (CloseableLock ignored = CloseableLock.lock(this.connLock)) {
+            return connCountByRole.getOrDefault(role, 0);
+        }
+    }
+
+    private String checkLimits(ConnectContext ctx, Map<String, Integer> maxLimitForRoles, Set<String> countedRoles) {
+        for (Map.Entry<String, Integer> entry : maxLimitForRoles.entrySet()) {
+            String role = entry.getKey();
+            if (countedRoles.contains(role)) {
+                continue;
+            }
+
+            int currentConnection = connCountByRole.getOrDefault(role, 0);
+            int limit = entry.getValue();
+            if (currentConnection >= limit) {
+                String userErrMsg = String.format("Role-based connection limit reached "
                                 + "[user=%s, role=%s, maxAllowed=%s, activeConnections=%s, node=%s, connectionId=%s]",
-                            ctx.getQualifiedUser(),
-                            role,
-                            limit,
-                            currentConnection,
-                            ctx.getGlobalStateMgr().getNodeMgr().getSelfNode(),
-                            ctx.getConnectionId());
-                    LOG.info("{}, details: userRoles={}", userErrMsg, userRoles);
-                    throw new AuthenticationException(ErrorCode.ERR_GROUP_MAX_CONNECTION, role, limit, currentConnection);
-                }
-            }
-        } finally {
-            // Register the connection, since it has already been created before we apply any role based restrictions.
-            this.registerConnection(userRoles);
-        }
-    }
-
-    private Map<String, Integer> getMaxLimitForRoles(Set<String> userRoles) {
-        Map<String, Integer> result = new HashMap<>(userRoles.size());
-
-        for (String role : userRoles) {
-            result.put(role, maxConnections);
-
-            for (RoleConnectionLimit rcl : roleConnectionLimits) {
-                if (rcl.matches(role)) {
-                    result.put(role, rcl.maxConnections);
-                    break;
-                }
+                        ctx.getQualifiedUser(),
+                        role,
+                        limit,
+                        currentConnection,
+                        ctx.getGlobalStateMgr().getNodeMgr().getSelfNode(),
+                        ctx.getConnectionId());
+                LOG.info("{}, details: userRoles={}", userErrMsg, maxLimitForRoles.keySet());
+                return ErrorCode.ERR_GROUP_MAX_CONNECTION.formatErrorMsg(role, limit, currentConnection);
             }
         }
-
-        return result;
+        return null;
     }
 
-    private Integer getCurrentConnection(String role) {
-        return connCountByRole.getOrDefault(role, 0);
-    }
-
-    private void registerConnection(Set<String> roles) {
+    private void registerConnection(ConnectContext ctx, Set<String> roles) {
         roles.forEach(role -> connCountByRole.merge(role, 1, Integer::sum));
+        rolesByConnection.put(ctx, Set.copyOf(roles));
     }
 
-    private Set<String> getUserRoles(ConnectContext context) {
-        if (context.getCurrentUserIdentity() != null) {
-            return context.getCurrentRoleIds()
-                    .stream()
-                    .map(context.getGlobalStateMgr().getAuthorizationMgr()::getRolePrivilegeCollection)
-                    .filter(Objects::nonNull)
-                    .map(RolePrivilegeCollectionV2::getName)
-                    .collect(Collectors.toSet());
+    private void unregisterConnection(Set<String> roles) {
+        roles.forEach(role -> connCountByRole.computeIfPresent(role, (k, v) -> v > 1 ? v - 1 : null));
+    }
+
+    // the active roles of the session that have a limit, with that limit
+    private Map<String, Integer> getMaxLimitForRoles(ConnectContext ctx) {
+        Map<String, Integer> result = new HashMap<>();
+        if (ctx.getCurrentRoleIds() == null) {
+            return result;
         }
 
-        return Set.of();
+        ctx.getCurrentRoleIds().stream()
+                .map(ctx.getGlobalStateMgr().getAuthorizationMgr()::getRolePrivilegeCollection)
+                .filter(Objects::nonNull)
+                .map(RolePrivilegeCollectionV2::getName)
+                .forEach(role -> {
+                    for (RoleConnectionLimit rcl : roleConnectionLimits) {
+                        if (rcl.matches(role)) {
+                            result.put(role, rcl.maxConnections);
+                            break;
+                        }
+                    }
+                });
+        return result;
     }
 
     private record RoleConnectionLimit(Pattern rolePattern, int maxConnections, int specificity) {
@@ -185,9 +242,9 @@ public class RoleConnectionManager {
 
     /**
      * Higher number = more specific
-     * Removes wildcards and regex noise
+     * Counts the literal characters: removes wildcards and regex noise
      */
     private static int calculateSpecificity(String pattern) {
-        return pattern.replace(".", "").length();
+        return pattern.replace(".*", "").replace("\\.", ".").length();
     }
 }

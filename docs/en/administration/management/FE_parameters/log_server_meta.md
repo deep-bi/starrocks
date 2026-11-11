@@ -938,13 +938,9 @@ This topic introduces the following types of FE configurations:
 - Type: String
 - Unit: -
 - Is mutable: No
-- Description: This defines maximum concurrent connections per role using role patterns.<br/>
-  `<role-pattern>:<max-connections>[,<role-pattern>:<max-connections>...]`<br/>
-  Each entry consists of:
-    - role-pattern - Role name or wildcard pattern
-    - max-connections - Maximum allowed concurrent connections (integer)
-  
-  Entries are comma-separated.
+- Description: The maximum number of concurrent connections per role to the FE node, as comma-separated entries in the form `<role-pattern>:<max-connections>`, for example `analyst:20,AD_*:50`. A role pattern is a role name, or a name with `*` as a wildcard. When several patterns match a role, the most specific one applies. Roles that match no pattern have no role limit.<br/>
+  A connection counts against every limited role that is active in its session when it is established, including the roles named after the user's external groups. If any of those roles has reached its limit, the connection is rejected, and a MySQL client gets error 5209. `SET ROLE` later in the session doesn't change what the connection counts against. A connection that switches to another user counts against the roles of that user instead.<br/>
+  MySQL connections, HTTP SQL API sessions and Arrow Flight SQL sessions count. Other HTTP requests and Stream Load don't.
 - Introduced in: -
 
 ### `query_port`
