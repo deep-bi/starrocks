@@ -1091,15 +1091,16 @@ public class DictionaryMgr implements Writable, GsonPostProcessable {
                     rows.put(node, results.get(next++).txnRows);
                 }
             }
-            // An old BE does not report rows, so it cannot show that it got every chunk. Leave it out too, but only
-            // when another node reports rows: with only old nodes, the sink is an old BE as well, which cancels on
-            // the first failed chunk, so no node can hold part of the data. A node without the txn reports -1, so
-            // it is below the others and is left out.
-            boolean anyNodeReportsRows = rows.values().stream().anyMatch(r -> r != null);
+            // An old BE does not report rows, so it cannot show that it got every chunk. Keep such nodes only when
+            // every node answered and none reports rows: then the sink is an old BE as well, which cancels on the
+            // first failed chunk, so no node can hold part of the data. A node that failed this check may be the new
+            // sink, so the old nodes are left out then too. A node without the txn reports -1, so it is below the
+            // others and is left out.
+            boolean onlyOldNodes = failedNodes.isEmpty() && rows.values().stream().allMatch(r -> r == null);
             long maxRows = rows.values().stream().filter(r -> r != null).mapToLong(Long::longValue).max().orElse(0);
             for (Map.Entry<TNetworkAddress, Long> node : rows.entrySet()) {
                 Long nodeRows = node.getValue();
-                if (nodeRows == null ? !anyNodeReportsRows : nodeRows >= maxRows) {
+                if (nodeRows == null ? onlyOldNodes : nodeRows >= maxRows) {
                     continue;
                 }
                 failedNodes.add(node.getKey());

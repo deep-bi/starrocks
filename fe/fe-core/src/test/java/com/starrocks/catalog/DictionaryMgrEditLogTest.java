@@ -1185,6 +1185,24 @@ public class DictionaryMgrEditLogTest {
         Assertions.assertEquals(Dictionary.DictionaryState.FINISHED, dictionary.getState());
     }
 
+    // A failed STATISTIC call can hide the new sink node, which honours skip_failed_nodes. The old nodes left
+    // could then hold part of the data, so they are left out and the refresh fails.
+    @Test
+    public void testRowCheckLeavesOutOldNodesWhenANodeFailsTheCheck() throws Exception {
+        List<PProcessDictionaryCacheRequest> requests = mockThreeNodesWithRows(Map.of(), Set.of(NODE_A));
+        Dictionary dictionary = createRefreshingDictionary("hidden_sink_dict", false);
+        DictionaryMgr.RefreshDictionaryCacheWorker worker = masterDictionaryMgr.new RefreshDictionaryCacheWorker(
+                dictionary, masterDictionaryMgr.getAndIncrementTxnIdUnlocked());
+        worker.begin();
+
+        worker.leaveOutNodesWithMissingRows();
+        worker.commit();
+        worker.finish();
+
+        Assertions.assertTrue(requests.stream().noneMatch(r -> r.type == PProcessDictionaryCacheRequestType.COMMIT));
+        Assertions.assertEquals(Dictionary.DictionaryState.CANCELLED, dictionary.getState());
+    }
+
     @Test
     public void testNoRowCheckWhenFailedNodesAreNotLeftOut() throws Exception {
         List<PProcessDictionaryCacheRequest> requests =
