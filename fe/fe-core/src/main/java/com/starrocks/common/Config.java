@@ -1471,6 +1471,12 @@ public class Config extends ConfigBase {
     @ConfField
     public static int qe_max_connection = 4096;
 
+    /**
+     * Maximal number of connections per role and FE, as comma-separated role-pattern:max-connections entries,
+     * for example "analyst:20,AD_*:50". A pattern may use * as a wildcard, and the most specific pattern that
+     * matches a role applies. A connection is rejected if any role active in its session is at its limit.
+     * Empty means no role limits.
+     */
     @ConfField
     public static String qe_role_connection_limits = "";
 
@@ -2133,6 +2139,18 @@ public class Config extends ConfigBase {
             "authentication_failure_cache_ttl_second. Bounds the memory a client (or an attacker) cycling " +
             "usernames can occupy.")
     public static int authentication_failure_cache_capacity = 1024;
+
+    @ConfField(mutable = true, comment = "How long (seconds) a successful authentication_ldap_simple bind is " +
+            "remembered, so that repeated logins with the same user and password (Stream Load authenticates on " +
+            "every request) do not contact the LDAP server each time. An entry expires this long after the bind " +
+            "that created it, however often it is used, which is also how long a disabled LDAP account or a " +
+            "changed password can keep working on this FE. Only a salted hash of the password is kept, in memory. " +
+            "0 disables it.")
+    public static int authentication_ldap_simple_auth_success_cache_ttl_second = 0;
+
+    @ConfField(mutable = true, comment = "Maximum number of users remembered by " +
+            "authentication_ldap_simple_auth_success_cache_ttl_second on each FE.")
+    public static int authentication_ldap_simple_auth_success_cache_capacity = 1024;
 
     @ConfField(mutable = true, comment = "false to enable ssl connection")
     public static boolean authentication_ldap_simple_ssl_conn_allow_insecure = true;

@@ -92,6 +92,7 @@ public class SiLdapClearPasswordTest {
         lastBoundPassword.set(null);
         // The rejection cache is process-wide: without this, one case's wrong password short-circuits the next.
         AuthenticationHandler.invalidateRejectedCredentialCache();
+        LDAPAuthProvider.invalidateSuccessfulBindCache();
         registerLdapSecurityIntegration(LDAP_SI);
         // 3.5 has no bind DN pattern, so the provider resolves the DN with a root-bound search first
         new MockUp<LDAPAuthProvider>() {
@@ -495,5 +496,78 @@ public class SiLdapClearPasswordTest {
         // is not enough -- drop the trailing-NUL trim and the bind still succeeds with a stray \0 appended,
         // which every real directory would reject.
         Assertions.assertEquals("ldap_password", lastBoundPassword.get());
+    }
+
+    @Test
+    public void testSuccessfulBindCacheServesEveryChannel() throws Exception {
+        stubLdapBind();
+        Config.authentication_chain = new String[] {"native", LDAP_SI};
+        int savedTtl = Config.authentication_ldap_simple_auth_success_cache_ttl_second;
+        Config.authentication_ldap_simple_auth_success_cache_ttl_second = 300;
+
+        try {
+            // A Stream Load authenticates three times: at the FE HTTP endpoint, then on the BE->FE begin and
+            // commit RPCs. With the cache on, only the first of them may open a directory connection.
+            for (int login = 0; login < 3; login++) {
+                ConnectContext context = new ConnectContext();
+                UserIdentity user = AuthenticationHandler.authenticateWithClearPassword(
+                        context, "alice", "10.1.2.3", "ldap_password");
+                Assertions.assertEquals("alice", user.getUser());
+                Assertions.assertEquals(LDAP_SI, context.getSecurityIntegration());
+                // group providers resolve against the DN, so a cache hit has to deliver the one the search found
+                Assertions.assertEquals("uid=alice,ou=People,dc=example,dc=com", context.getDistinguishedName());
+            }
+
+            // the MySQL protocol shares the same entry
+            ConnectContext mysqlContext = new ConnectContext();
+            mysqlContext.setAuthPlugin(AuthPlugin.Client.MYSQL_CLEAR_PASSWORD.toString());
+            AuthenticationHandler.authenticate(mysqlContext, "alice", "10.1.2.3",
+                    "ldap_password\0".getBytes(StandardCharsets.UTF_8));
+
+            Assertions.assertEquals(1, ldapBindCount.get());
+        } finally {
+            Config.authentication_ldap_simple_auth_success_cache_ttl_second = savedTtl;
+        }
+    }
+
+    @Test
+    public void testSuccessfulBindCacheCoversNativeLdapUsers() throws Exception {
+        new MockUp<LDAPAuthProvider>() {
+            @Mock
+            public void checkPassword(String dn, String password) throws Exception {
+                ldapBindCount.incrementAndGet();
+                if (!"ldap_password".equals(password)) {
+                    throw new javax.naming.AuthenticationException("invalid credentials");
+                }
+            }
+        };
+        Config.authentication_chain = new String[] {"native"};
+        int savedTtl = Config.authentication_ldap_simple_auth_success_cache_ttl_second;
+        Config.authentication_ldap_simple_auth_success_cache_ttl_second = 300;
+
+        try {
+            ConnectContext rootCtx = UtFrameUtils.initCtxForNewPrivilege(UserIdentity.ROOT);
+            CreateUserStmt createUser = (CreateUserStmt) UtFrameUtils.parseStmtWithNewParser(
+                    "CREATE USER ldap_native IDENTIFIED WITH authentication_ldap_simple AS "
+                            + "'uid=ldap_native,ou=People,dc=example,dc=com'", rootCtx);
+            authenticationMgr.createUser(createUser);
+
+            // native users bind through the same LDAPAuthProvider, built from the FE config instead of an
+            // integration's properties, so they are served from the cache as well
+            for (int login = 0; login < 2; login++) {
+                UserIdentity user = AuthenticationHandler.authenticateWithClearPassword(
+                        new ConnectContext(), "ldap_native", "10.1.2.3", "ldap_password");
+                Assertions.assertFalse(user.isEphemeral());
+            }
+            Assertions.assertEquals(1, ldapBindCount.get());
+
+            // a different password is not answered from the cache: it reaches the directory and is refused there
+            Assertions.assertThrows(AuthenticationException.class, () ->
+                    AuthenticationHandler.authenticateWithClearPassword(
+                            new ConnectContext(), "ldap_native", "10.1.2.3", "wrong_password"));
+            Assertions.assertEquals(2, ldapBindCount.get());
+        } finally {
+            Config.authentication_ldap_simple_auth_success_cache_ttl_second = savedTtl;
+        }
     }
 }

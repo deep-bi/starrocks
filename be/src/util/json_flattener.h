@@ -69,6 +69,8 @@ public:
     LogicalType type = LogicalType::TYPE_JSON;
     bool remain = false;
     OP op = OP_INCLUDE; // merge flat json use, to mark the path is need
+    // JsonFlattener use, the last row reaching this node, to find a key repeated within one row
+    uint32_t last_row = -1;
     FlatJsonHashMap<std::string_view, std::unique_ptr<JsonFlatPath>> children;
 
     JsonFlatPath() = default;
@@ -206,6 +208,9 @@ private:
     bool _flatten_json(const vpack::Slice& value, const JsonFlatPath* root, vpack::Builder* builder,
                        uint32_t* hit_count);
 
+    // Fill one row that repeats a key of the layout, see _flatten().
+    void _flatten_duplicate_row(const vpack::Slice& value, const JsonFlatPath* root);
+
 private:
     bool _has_remain = false;
     // note: paths may be less 1 than flat columns
@@ -214,6 +219,11 @@ private:
 
     Columns _flat_columns;
     JsonColumn* _remain;
+
+    // Stamp of the row being flattened, kept in JsonFlatPath::last_row of the layout nodes it reaches.
+    uint32_t _row_stamp = 0;
+    // The current row repeats a key of the layout.
+    bool _duplicate = false;
 };
 
 // merge flat json A,B,C to JsonColumn
@@ -249,9 +259,10 @@ private:
     template <bool IN_TREE>
     void _merge_impl(size_t rows);
 
+    // `keep_excluded`: `remain` is a copy of an object its row repeats, which keeps the excluded paths below it.
     template <bool IN_TREE>
     void _merge_json_with_remain(const JsonFlatPath* root, const vpack::Slice* remain, vpack::Builder* builder,
-                                 size_t index);
+                                 size_t index, bool keep_excluded = false);
 
     void _merge_json(const JsonFlatPath* root, vpack::Builder* builder, size_t index);
 
@@ -264,6 +275,8 @@ private:
     bool _has_remain = false;
 
     std::shared_ptr<JsonFlatPath> _src_root;
+    // The nodes with an excluded path below them.
+    phmap::flat_hash_set<const JsonFlatPath*> _above_excluded;
     std::vector<const Column*> _src_columns;
     std::vector<std::string> _exclude_paths;
     std::vector<std::string> _level_paths;
