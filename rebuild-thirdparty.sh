@@ -147,6 +147,37 @@ require_files() {
     done
 }
 
+# perl modules the OpenSSL 3 build loads outside its tests, from the 3.5.7 and 3.1.2 sources:
+# Configure (IPC::Cmd), the unix Makefile template (Time::Piece, 3.5 only), configdata.pm
+# (Getopt::Long, Pod::Usage) and, for the fips provider, util/mk-fipsmodule-cnf.pl (Digest::SHA).
+# Debian and Ubuntu ship them with perl; RHEL and CentOS split each into perl-<Name-With-Dashes>
+OPENSSL_BUILD_PERL_MODULES=(IPC::Cmd Time::Piece Getopt::Long Pod::Usage Digest::SHA)
+
+missing_openssl_build_perl_modules() {
+    local m
+    for m in "${OPENSSL_BUILD_PERL_MODULES[@]}"; do
+        perl -M"${m}" -e 1 2> /dev/null || echo "${m}"
+    done
+}
+
+# installs the missing modules when yum and root are available, as in the dev-env containers;
+# otherwise fails here rather than partway through the build
+require_openssl_build_perl() {
+    local missing m pkgs=()
+    missing=$(missing_openssl_build_perl_modules)
+    [ -z "${missing}" ] && return 0
+    if command -v yum > /dev/null && [ "$(id -u)" -eq 0 ]; then
+        for m in ${missing}; do pkgs+=("perl-${m//::/-}"); done
+        info "Installing perl modules the OpenSSL 3 build needs: ${pkgs[*]}"
+        yum install -y -q "${pkgs[@]}" || true
+        missing=$(missing_openssl_build_perl_modules)
+        [ -z "${missing}" ] && return 0
+    fi
+    error "The OpenSSL 3 build needs these perl modules: $(echo ${missing})"
+    error "Install them (CentOS/RHEL: yum install -y perl-<Module-Name>, e.g. perl-Time-Piece) and re-run."
+    exit 1
+}
+
 # tp_var <NAME>: value of NAME from vars.sh, read without sourcing it
 tp_var() {
     grep "^$1=" "${TP_DIR}/vars.sh" | head -1 | cut -d= -f2- | tr -d '"'
@@ -280,6 +311,7 @@ rebuild_openssl3() {
         info "Pre-built thirdparty already has OpenSSL ${want_version}; nothing to do."
         return 0
     fi
+    require_openssl_build_perl
 
     # Step 1: create writable thirdparty copy. Always fresh: a copy left by a
     # failed run may hold a half-installed package.
@@ -667,6 +699,7 @@ rebuild_openssl_fips() {
         info "FIPS provider from ${fips_source} already installed; nothing to do."
         return 0
     fi
+    require_openssl_build_perl
 
     # Step 1: download and check the exact tarball the security policy names
     local build_dir="/tmp/openssl-fips-rebuild-$$"
