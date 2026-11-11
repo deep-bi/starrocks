@@ -1087,7 +1087,11 @@ void PInternalServiceImplBase<T>::process_dictionary_cache(google::protobuf::Rpc
         break;
     }
     case PProcessDictionaryCacheRequestType::STATISTIC: {
-        StorageEngine::instance()->dictionary_cache_manager()->get_info(request->dict_id(), *response);
+        std::optional<int64_t> txn_id;
+        if (request->has_txn_id()) {
+            txn_id = request->txn_id();
+        }
+        StorageEngine::instance()->dictionary_cache_manager()->get_info(request->dict_id(), *response, txn_id);
         Status::OK().to_protobuf(response->mutable_status());
         break;
     }
