@@ -14,6 +14,9 @@
 
 #pragma once
 
+#include <mutex>
+#include <vector>
+
 #include "column/chunk.h"
 #include "exec/pipeline/fragment_context.h"
 #include "gen_cpp/InternalService_types.h"
@@ -60,9 +63,16 @@ public:
 
 private:
     Status _send_request(ChunkPB* pchunk, POlapTableSchemaParam* pschema,
-                         std::vector<RefCountClosure<PProcessDictionaryCacheResult>*>& closures);
+                         std::vector<RefCountClosure<PProcessDictionaryCacheResult>*>& closures,
+                         std::vector<bool>& sent);
 
-    Status _wait_response(std::vector<RefCountClosure<PProcessDictionaryCacheResult>*>& closures);
+    Status _wait_response(std::vector<RefCountClosure<PProcessDictionaryCacheResult>*>& closures,
+                          const std::vector<bool>& sent);
+
+    bool _skip_failed_nodes() const;
+    bool _is_node_failed(size_t node);
+    // Returns true if no node is left.
+    bool _mark_node_failed(size_t node, const Status& st);
 
     Status _submit();
 
@@ -82,6 +92,12 @@ private:
 
     RuntimeState* _state = nullptr;
     starrocks::pipeline::FragmentContext* _fragment_ctx;
+
+    // With skip_failed_nodes, a node that fails gets no more chunks. The FE then finds that it has fewer
+    // rows and leaves it out at COMMIT. Chunks are sent from many threads, so a mutex protects the flags.
+    std::mutex _failed_nodes_lock;
+    std::vector<bool> _failed_nodes;
+    size_t _num_failed_nodes = 0;
 };
 
 }; // namespace starrocks

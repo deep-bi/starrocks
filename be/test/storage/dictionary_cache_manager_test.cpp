@@ -92,6 +92,13 @@ public:
     static void create_new_dictionary_cache(starrocks::DictionaryCacheManager* dictionary_cache_manager, int64_t dict,
                                             int64_t txn_id, const TabletSharedPtr& tablet,
                                             const std::vector<TColumn>* tcolumns = nullptr) {
+        refresh_dictionary_cache(dictionary_cache_manager, dict, txn_id, tablet, tcolumns, true);
+    }
+
+    // Runs BEGIN and one REFRESH with one row. Runs COMMIT too if commit is true.
+    static void refresh_dictionary_cache(starrocks::DictionaryCacheManager* dictionary_cache_manager, int64_t dict,
+                                         int64_t txn_id, const TabletSharedPtr& tablet,
+                                         const std::vector<TColumn>* tcolumns, bool commit) {
         auto schema = ChunkHelper::convert_schema(tablet->thread_safe_get_tablet_schema());
         auto chunk = ChunkHelper::new_chunk(schema, 0);
         chunk->reset_slot_id_to_index();
@@ -179,7 +186,9 @@ public:
 
         ASSERT_TRUE(dictionary_cache_manager->begin(&request).ok());
         ASSERT_TRUE(dictionary_cache_manager->refresh(&request).ok());
-        ASSERT_TRUE(dictionary_cache_manager->commit(&request).ok());
+        if (commit) {
+            ASSERT_TRUE(dictionary_cache_manager->commit(&request).ok());
+        }
 
         request.release_chunk();
         request.release_schema();
@@ -385,6 +394,55 @@ TEST_F(DictionaryCacheManagerTest, dictionary_get_expr_rejects_real_null) {
     auto res = dictionary_get_expr->evaluate_checked(nullptr, nullptr);
     ASSERT_FALSE(res.ok());
     ASSERT_EQ("invalid parameter for dictionary_get function: get NULL paramenter", res.status().message());
+}
+
+// NOLINTNEXTLINE
+TEST_F(DictionaryCacheManagerTest, statistic_reports_txn_rows_and_version) {
+    test_tablet = create_tablet(9148, 6548);
+    const int64_t dict = 500;
+
+    // -1 tells the FE that this node has no copy or no such txn. An old BE does not set the fields at all.
+    PProcessDictionaryCacheResult empty;
+    dictionary_cache_manager->get_info(dict, empty, 501);
+    ASSERT_EQ(-1, empty.dictionary_version());
+    ASSERT_EQ(-1, empty.txn_rows());
+
+    refresh_dictionary_cache(dictionary_cache_manager, dict, 501, test_tablet, nullptr, false);
+    PProcessDictionaryCacheResult open_txn;
+    dictionary_cache_manager->get_info(dict, open_txn, 501);
+    ASSERT_TRUE(open_txn.has_txn_rows());
+    ASSERT_EQ(1, open_txn.txn_rows());
+    ASSERT_EQ(-1, open_txn.dictionary_version());
+
+    // Without a txn id, the result has no rows.
+    PProcessDictionaryCacheResult no_txn;
+    dictionary_cache_manager->get_info(dict, no_txn, std::nullopt);
+    ASSERT_FALSE(no_txn.has_txn_rows());
+
+    PProcessDictionaryCacheRequest commit_request;
+    commit_request.set_dict_id(dict);
+    commit_request.set_txn_id(501);
+    ASSERT_TRUE(dictionary_cache_manager->commit(&commit_request).ok());
+    PProcessDictionaryCacheResult committed;
+    dictionary_cache_manager->get_info(dict, committed, 501);
+    ASSERT_EQ(501, committed.dictionary_version());
+    ASSERT_EQ(-1, committed.txn_rows());
+
+    // A new txn starts again from zero rows.
+    PProcessDictionaryCacheRequest begin_request;
+    begin_request.set_dict_id(dict);
+    begin_request.set_txn_id(502);
+    ASSERT_TRUE(dictionary_cache_manager->begin(&begin_request).ok());
+    PProcessDictionaryCacheResult new_txn;
+    dictionary_cache_manager->get_info(dict, new_txn, 502);
+    ASSERT_EQ(0, new_txn.txn_rows());
+    ASSERT_EQ(501, new_txn.dictionary_version());
+
+    dictionary_cache_manager->clear(dict);
+    PProcessDictionaryCacheResult cleared;
+    dictionary_cache_manager->get_info(dict, cleared, 502);
+    ASSERT_EQ(-1, cleared.dictionary_version());
+    ASSERT_EQ(-1, cleared.txn_rows());
 }
 
 } // namespace starrocks
