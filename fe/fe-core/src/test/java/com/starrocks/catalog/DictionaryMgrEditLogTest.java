@@ -1203,6 +1203,25 @@ public class DictionaryMgrEditLogTest {
         Assertions.assertEquals(Dictionary.DictionaryState.CANCELLED, dictionary.getState());
     }
 
+    // A node left out at an earlier step, for example at BEGIN, can still run the sink fragment, so the old nodes
+    // left could hold part of the data even though every one of them answers the check.
+    @Test
+    public void testRowCheckLeavesOutOldNodesWhenANodeWasLeftOutEarlier() throws Exception {
+        List<PProcessDictionaryCacheRequest> requests = mockThreeNodesWithRows(Map.of(), Set.of());
+        Dictionary dictionary = createRefreshingDictionary("left_out_sink_dict", false);
+        DictionaryMgr.RefreshDictionaryCacheWorker worker = masterDictionaryMgr.new RefreshDictionaryCacheWorker(
+                dictionary, masterDictionaryMgr.getAndIncrementTxnIdUnlocked());
+        worker.begin();
+        worker.getBeNodes().remove(NODE_A);
+
+        worker.leaveOutNodesWithMissingRows();
+        worker.commit();
+        worker.finish();
+
+        Assertions.assertTrue(requests.stream().noneMatch(r -> r.type == PProcessDictionaryCacheRequestType.COMMIT));
+        Assertions.assertEquals(Dictionary.DictionaryState.CANCELLED, dictionary.getState());
+    }
+
     @Test
     public void testNoRowCheckWhenFailedNodesAreNotLeftOut() throws Exception {
         List<PProcessDictionaryCacheRequest> requests =

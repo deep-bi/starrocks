@@ -870,6 +870,8 @@ public class DictionaryMgr implements Writable, GsonPostProcessable {
         private long txnId;
         private List<TNetworkAddress> beNodes = Lists.newArrayList();
         private Map<TNetworkAddress, Long> nodeStartTimes = new HashMap<>();
+        // A node left out at any step can still run the sink fragment, so the row check must know about it.
+        private int initialNodeCount;
         private boolean error;
         private String errMsg;
         // Read once, so that every step of this refresh follows the same rule.
@@ -888,6 +890,7 @@ public class DictionaryMgr implements Writable, GsonPostProcessable {
 
         private void initializeBeNodesAddress() {
             fillBackendsOrComputeNodes(this.beNodes);
+            this.initialNodeCount = this.beNodes.size();
             this.nodeStartTimes = getAvailableNodeStartTimes();
         }
 
@@ -1091,12 +1094,13 @@ public class DictionaryMgr implements Writable, GsonPostProcessable {
                     rows.put(node, results.get(next++).txnRows);
                 }
             }
-            // An old BE does not report rows, so it cannot show that it got every chunk. Keep such nodes only when
-            // every node answered and none reports rows: then the sink is an old BE as well, which cancels on the
-            // first failed chunk, so no node can hold part of the data. A node that failed this check may be the new
-            // sink, so the old nodes are left out then too. A node without the txn reports -1, so it is below the
-            // others and is left out.
-            boolean onlyOldNodes = failedNodes.isEmpty() && rows.values().stream().allMatch(r -> r == null);
+            // An old BE does not report rows, so it cannot show that it got every chunk. Keep such nodes only when no
+            // node was left out at any step of this refresh and none reports rows: then the sink is an old BE as
+            // well, which cancels on the first failed chunk, so no node can hold part of the data. A node that was
+            // left out, or failed this check, may be a new sink, so the old nodes are left out then. A node without
+            // the txn reports -1, so it is below the others and is left out.
+            boolean onlyOldNodes = failedNodes.isEmpty() && beNodes.size() == initialNodeCount &&
+                    rows.values().stream().allMatch(r -> r == null);
             long maxRows = rows.values().stream().filter(r -> r != null).mapToLong(Long::longValue).max().orElse(0);
             for (Map.Entry<TNetworkAddress, Long> node : rows.entrySet()) {
                 Long nodeRows = node.getValue();
