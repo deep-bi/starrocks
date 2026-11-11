@@ -108,7 +108,8 @@ public class DictionaryMgr implements Writable, GsonPostProcessable {
     // Refreshes that CANCEL REFRESH stopped. They must not go on with the nodes that the cancel did not reach.
     private final Set<Long> cancelledRefreshTasks = Sets.newHashSet();
     // Refreshes that the scheduler started because a node had no copy. Kept until the refresh ends, so a
-    // refresh that is submitted again later is still an early refresh.
+    // refresh that is submitted again later is still an early refresh. The REFRESHING log entry carries the
+    // mark, so followers keep it too and a new leader that resumes the refresh still rolls it back on failure.
     private final Set<Long> earlyRefreshTasks = Sets.newHashSet();
     // Dictionaries with no record, for example on a new leader. The leader asks the nodes for their version.
     private final Set<Long> pendingNodeProbes = Sets.newHashSet();
@@ -132,7 +133,6 @@ public class DictionaryMgr implements Writable, GsonPostProcessable {
             }
 
             List<UpdateDictionaryLog> updateDictionaryLogList = Lists.newArrayList();
-            Set<Long> earlyRefreshes = Sets.newHashSet();
             long ts = System.currentTimeMillis();
             Map<TNetworkAddress, Long> availableNodes =
                     dictionariesMapById.isEmpty() ? Map.of() : getAvailableNodeStartTimes();
@@ -146,12 +146,11 @@ public class DictionaryMgr implements Writable, GsonPostProcessable {
                         (dictionary.isRefreshing() && !runningRefreshTasks.contains(id));
                 // a node has no copy of the current version
                 boolean early = !regular && needNodeResyncUnlocked(dictionary, availableNodes, ts);
-                if (early) {
-                    earlyRefreshes.add(id);
-                }
                 if (regular || early) {
                     UpdateDictionaryLog updateDictionaryLog = new UpdateDictionaryLog(id, ts);
                     updateDictionaryLog.setState(Dictionary.DictionaryState.REFRESHING);
+                    // A refresh that a new leader resumes stays an early refresh.
+                    updateDictionaryLog.setEarlyRefresh(early || earlyRefreshTasks.contains(id));
                     updateDictionaryLogList.add(updateDictionaryLog);
                 }
             }
@@ -164,7 +163,7 @@ public class DictionaryMgr implements Writable, GsonPostProcessable {
                                 Dictionary dict = dictionariesMapById.get(log.getDictionaryId());
                                 dict.setRefreshing(log.getTs());
                                 unfinishedRefreshTasks.add(dict.getDictionaryId());
-                                if (earlyRefreshes.contains(dict.getDictionaryId())) {
+                                if (log.isEarlyRefresh()) {
                                     earlyRefreshTasks.add(dict.getDictionaryId());
                                 }
                             }
@@ -593,6 +592,15 @@ public class DictionaryMgr implements Writable, GsonPostProcessable {
         }
     }
 
+    boolean isEarlyRefreshTask(long dictionaryId) {
+        lock.lock();
+        try {
+            return earlyRefreshTasks.contains(dictionaryId);
+        } finally {
+            lock.unlock();
+        }
+    }
+
     private boolean isRefreshCancelled(long dictionaryId) {
         lock.lock();
         try {
@@ -793,12 +801,17 @@ public class DictionaryMgr implements Writable, GsonPostProcessable {
                                     break;
                                 case FINISHED:
                                     dictionary.setFinished(dictionaryLog.getTs(), dictionaryLog.getLastSuccessVersion());
+                                    earlyRefreshTasks.remove(dictionaryLog.getDictionaryId());
                                     break;
                                 case CANCELLED:
                                     dictionary.setCancelled();
+                                    earlyRefreshTasks.remove(dictionaryLog.getDictionaryId());
                                     break;
                                 case REFRESHING:
                                     dictionary.setRefreshing(dictionaryLog.getTs());
+                                    if (dictionaryLog.isEarlyRefresh()) {
+                                        earlyRefreshTasks.add(dictionaryLog.getDictionaryId());
+                                    }
                                     break;
                                 default:
                                     break;
@@ -806,6 +819,7 @@ public class DictionaryMgr implements Writable, GsonPostProcessable {
                         }
                         if (dictionaryLog.isResetStateBeforeRefresh()) {
                             dictionary.resetStateBeforeRefresh();
+                            earlyRefreshTasks.remove(dictionaryLog.getDictionaryId());
                         }
                         if (dictionaryLog.getErrorMsg() != null) {
                             dictionary.setErrorMsg(dictionaryLog.getErrorMsg());
@@ -1077,15 +1091,18 @@ public class DictionaryMgr implements Writable, GsonPostProcessable {
                     rows.put(node, results.get(next++).txnRows);
                 }
             }
-            // An old BE does not report rows. Keep it, as before. A node without the txn reports -1, so it is
-            // below the others and is left out.
+            // An old BE does not report rows, so it cannot show that it got every chunk. Leave it out too. A node
+            // without the txn reports -1, so it is below the others and is left out.
             long maxRows = rows.values().stream().filter(r -> r != null).mapToLong(Long::longValue).max().orElse(0);
             for (Map.Entry<TNetworkAddress, Long> node : rows.entrySet()) {
-                if (node.getValue() != null && node.getValue() < maxRows) {
-                    failedNodes.add(node.getKey());
-                    if (reason.isEmpty()) {
-                        reason = "node " + node.getKey() + " has " + node.getValue() + " rows of " + maxRows;
-                    }
+                Long nodeRows = node.getValue();
+                if (nodeRows != null && nodeRows >= maxRows) {
+                    continue;
+                }
+                failedNodes.add(node.getKey());
+                if (reason.isEmpty()) {
+                    reason = nodeRows == null ? "node " + node.getKey() + " does not report its rows"
+                            : "node " + node.getKey() + " has " + nodeRows + " rows of " + maxRows;
                 }
             }
             if (!failedNodes.isEmpty()) {
