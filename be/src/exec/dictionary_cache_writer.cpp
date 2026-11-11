@@ -38,12 +38,30 @@ private:
     ChunkUniquePtr _chunk;
 };
 
+bool DictionaryCacheFailedNodes::is_failed(size_t node) {
+    std::lock_guard l(_lock);
+    return _failed[node];
+}
+
+bool DictionaryCacheFailedNodes::mark_failed(size_t node, bool* newly_failed) {
+    std::lock_guard l(_lock);
+    *newly_failed = !_failed[node];
+    if (*newly_failed) {
+        _failed[node] = true;
+        _num_failed++;
+    }
+    return _num_failed >= _failed.size();
+}
+
 DictionaryCacheWriter::DictionaryCacheWriter(const TDictionaryCacheSink& t_dictionary_cache_sink, RuntimeState* state,
-                                             starrocks::pipeline::FragmentContext* fragment_ctx)
+                                             starrocks::pipeline::FragmentContext* fragment_ctx,
+                                             std::shared_ptr<DictionaryCacheFailedNodes> failed_nodes)
         : _t_dictionary_cache_sink(t_dictionary_cache_sink),
           _state(state),
           _fragment_ctx(fragment_ctx),
-          _failed_nodes(t_dictionary_cache_sink.nodes.size(), false) {}
+          _failed_nodes(failed_nodes != nullptr
+                                ? std::move(failed_nodes)
+                                : std::make_shared<DictionaryCacheFailedNodes>(t_dictionary_cache_sink.nodes.size())) {}
 
 Status DictionaryCacheWriter::prepare() {
     if (_is_prepared.load(std::memory_order_acquire)) {
@@ -246,21 +264,19 @@ bool DictionaryCacheWriter::_skip_failed_nodes() const {
 }
 
 bool DictionaryCacheWriter::_is_node_failed(size_t node) {
-    std::lock_guard l(_failed_nodes_lock);
-    return _failed_nodes[node];
+    return _failed_nodes->is_failed(node);
 }
 
 bool DictionaryCacheWriter::_mark_node_failed(size_t node, const Status& st) {
-    std::lock_guard l(_failed_nodes_lock);
-    if (!_failed_nodes[node]) {
-        _failed_nodes[node] = true;
-        _num_failed_nodes++;
+    bool newly_failed = false;
+    const bool no_node_left = _failed_nodes->mark_failed(node, &newly_failed);
+    if (newly_failed) {
         const auto& address = _t_dictionary_cache_sink.nodes[node];
         LOG(WARNING) << "refreshing dictionary cache goes on without node " << address.hostname << ":" << address.port
                      << ", dictionary id: " << _t_dictionary_cache_sink.dictionary_id
                      << ", txn id: " << _t_dictionary_cache_sink.txn_id << ", err=" << st;
     }
-    return _num_failed_nodes >= _failed_nodes.size();
+    return no_node_left;
 }
 
 Status DictionaryCacheWriter::set_finishing() {

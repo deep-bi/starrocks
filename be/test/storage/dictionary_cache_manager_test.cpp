@@ -22,6 +22,8 @@
 
 #include "column/column_helper.h"
 #include "column/nullable_column.h"
+#include "exec/dictionary_cache_writer.h"
+#include "exec/pipeline/sink/dictionary_cache_sink_operator.h"
 #include "exec/tablet_info.h"
 #include "exprs/dictionary_get_expr.h"
 #include "exprs/mock_vectorized_expr.h"
@@ -443,6 +445,38 @@ TEST_F(DictionaryCacheManagerTest, statistic_reports_txn_rows_and_version) {
     dictionary_cache_manager->get_info(dict, cleared, 502);
     ASSERT_EQ(-1, cleared.dictionary_version());
     ASSERT_EQ(-1, cleared.txn_rows());
+}
+
+// Every sink driver gets its own writer. With one failed-node set per writer, a driver that lost node 0 and
+// another that lost node 1 would both go on, and both nodes would commit part of the data.
+TEST_F(DictionaryCacheManagerTest, test_sink_drivers_share_failed_nodes) {
+    TDictionaryCacheSink t_sink;
+    t_sink.nodes.resize(2);
+    t_sink.__set_skip_failed_nodes(true);
+    pipeline::DictionaryCacheSinkOperatorFactory factory(1, t_sink, nullptr);
+    auto driver0 = std::dynamic_pointer_cast<pipeline::DictionaryCacheSinkOperator>(factory.create(2, 0));
+    auto driver1 = std::dynamic_pointer_cast<pipeline::DictionaryCacheSinkOperator>(factory.create(2, 1));
+    ASSERT_NE(nullptr, driver0);
+    ASSERT_NE(nullptr, driver1);
+    ASSERT_NE(nullptr, driver0->_failed_nodes);
+    ASSERT_EQ(driver0->_failed_nodes.get(), driver1->_failed_nodes.get());
+
+    DictionaryCacheWriter writer0(t_sink, nullptr, nullptr, driver0->_failed_nodes);
+    DictionaryCacheWriter writer1(t_sink, nullptr, nullptr, driver1->_failed_nodes);
+    ASSERT_FALSE(writer0._mark_node_failed(0, Status::InternalError("node 0 down")));
+    ASSERT_TRUE(writer1._is_node_failed(0));
+    ASSERT_FALSE(writer1._is_node_failed(1));
+    // Node 0 is out for every driver, so losing node 1 in the other driver leaves no node.
+    ASSERT_TRUE(writer1._mark_node_failed(1, Status::InternalError("node 1 down")));
+    // Marking a node again neither double-counts it nor logs it again.
+    bool newly_failed = true;
+    ASSERT_TRUE(driver0->_failed_nodes->mark_failed(0, &newly_failed));
+    ASSERT_FALSE(newly_failed);
+
+    // A writer built without a shared set keeps its own.
+    DictionaryCacheWriter standalone(t_sink, nullptr, nullptr);
+    ASSERT_FALSE(standalone._is_node_failed(0));
+    ASSERT_FALSE(standalone._mark_node_failed(0, Status::InternalError("node 0 down")));
 }
 
 } // namespace starrocks
