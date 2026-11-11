@@ -1167,8 +1167,10 @@ public class DictionaryMgrEditLogTest {
         Assertions.assertEquals(Lists.newArrayList(NODE_A, NODE_C), worker.getBeNodes());
     }
 
+    // With only old nodes the sink is an old BE too, which ignores skip_failed_nodes and cancels on the first failed
+    // chunk, so no node can hold part of the data. Leaving them all out would fail every refresh.
     @Test
-    public void testRowCheckFailsTheRefreshWhenNoNodeReportsRows() throws Exception {
+    public void testRowCheckKeepsEveryNodeWhenNoNodeReportsRows() throws Exception {
         mockThreeNodesWithRows(Map.of(), Set.of());
         Dictionary dictionary = createRefreshingDictionary("only_old_nodes_dict", false);
         DictionaryMgr.RefreshDictionaryCacheWorker worker = masterDictionaryMgr.new RefreshDictionaryCacheWorker(
@@ -1180,7 +1182,7 @@ public class DictionaryMgrEditLogTest {
         worker.finish();
 
         Assertions.assertEquals(Lists.newArrayList(NODE_A, NODE_B, NODE_C), worker.getBeNodes());
-        Assertions.assertEquals(Dictionary.DictionaryState.CANCELLED, dictionary.getState());
+        Assertions.assertEquals(Dictionary.DictionaryState.FINISHED, dictionary.getState());
     }
 
     @Test
