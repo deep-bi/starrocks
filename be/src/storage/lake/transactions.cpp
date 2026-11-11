@@ -57,6 +57,29 @@ void release_publish_tablet(int64_t tablet_id) {
     tablet_txns.erase(tablet_id);
 }
 
+// The stored PK index points at a segment the tablet no longer has. Retrying gives the same error
+// forever, so ask the next attempt to rebuild the index from segments, as DROP PERSISTENT INDEX does.
+static void request_pk_index_rebuild_if_stale(TabletManager* tablet_mgr, const TabletMetadata& metadata,
+                                              int64_t base_version, const Status& st) {
+    if (!config::lake_pk_index_auto_rebuild_on_missing_rssid || tablet_mgr->update_mgr() == nullptr ||
+        !UpdateManager::is_missing_rssid_error(st) || metadata.schema().keys_type() != PRIMARY_KEYS ||
+        !metadata.enable_persistent_index() ||
+        metadata.persistent_index_type() != PersistentIndexTypePB::CLOUD_NATIVE) {
+        return;
+    }
+    if (!tablet_mgr->update_mgr()->request_pk_index_rebuild(metadata.id(), base_version)) {
+        return;
+    }
+    // The rebuild turns these sstables into orphan files, and they hold the stale entry.
+    std::stringstream sstables;
+    for (const auto& sstable : metadata.sstable_meta().sstables()) {
+        sstables << " " << sstable.filename() << "(max_rss_rowid=" << (sstable.max_rss_rowid() >> 32) << ":"
+                 << (sstable.max_rss_rowid() & 0xffffffff) << ")";
+    }
+    LOG(WARNING) << "PK index of tablet " << metadata.id() << " will be rebuilt from base version " << base_version
+                 << " after: " << st << ". Its sstables:" << sstables.str();
+}
+
 static void clear_remote_snapshot_async(TabletManager* tablet_mgr, int64_t tablet_id, int64_t txn_id,
                                         std::vector<std::string>* files_to_delete) {
     auto slog_path = tablet_mgr->txn_slog_location(tablet_id, txn_id);
@@ -408,8 +431,12 @@ StatusOr<TabletMetadataPtr> publish_version(TabletManager* tablet_mgr, const Pub
             // init log_applier
             DCHECK_EQ(base_version, base_metadata->version());
             new_metadata = std::make_shared<TabletMetadataPB>(*base_metadata);
+            const bool rebuild_pindex =
+                    txns[i].rebuild_pindex() || (tablet_mgr->update_mgr() != nullptr &&
+                                                 tablet_mgr->update_mgr()->take_pk_index_rebuild_request(
+                                                         tablet_info.get_tablet_id_in_metadata(), base_version));
             log_applier = new_txn_log_applier(Tablet(tablet_mgr, tablet_info.get_tablet_id_in_metadata()), new_metadata,
-                                              new_version, txns[i].rebuild_pindex(), skip_write_tablet_metadata);
+                                              new_version, rebuild_pindex, skip_write_tablet_metadata);
 
             if (new_metadata->compaction_inputs_size() > 0) {
                 new_metadata->mutable_compaction_inputs()->Clear();
@@ -469,6 +496,7 @@ StatusOr<TabletMetadataPtr> publish_version(TabletManager* tablet_mgr, const Pub
                 if (!st.ok()) {
                     LOG(WARNING) << "Fail to apply txn log : " << st << " tablet_info=" << tablet_info
                                  << " txn=" << txns[i].DebugString();
+                    request_pk_index_rebuild_if_stale(tablet_mgr, *base_metadata, base_version, st);
                     return st;
                 }
                 for (const auto& load_id : txns[i].load_ids()) {
@@ -497,6 +525,7 @@ StatusOr<TabletMetadataPtr> publish_version(TabletManager* tablet_mgr, const Pub
             if (!st.ok()) {
                 LOG(WARNING) << "Fail to apply txn log : " << st << " tablet_info=" << tablet_info
                              << " txn=" << txns[i].DebugString();
+                request_pk_index_rebuild_if_stale(tablet_mgr, *base_metadata, base_version, st);
                 return st;
             }
 
