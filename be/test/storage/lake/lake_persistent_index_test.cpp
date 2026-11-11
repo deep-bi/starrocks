@@ -1542,6 +1542,49 @@ TEST_F(LakePersistentIndexTest, test_compaction_strategy_picks_whole_filesets) {
         ASSERT_FALSE(merge_base_level);
         ASSERT_EQ((std::vector<std::string>{"middle1.sst", "middle2.sst", "middle3.sst"}), picked_names(sstables));
     }
+
+    // 5. A base merge whose next fileset is over the limit takes that fileset whole. Cutting back
+    //    to the base alone would merge nothing, and every later round would pick the same.
+    {
+        auto saved_limit = config::lake_pk_index_sst_max_compaction_versions;
+        config::lake_pk_index_sst_max_compaction_versions = 3;
+        DeferOp restore_config([&]() { config::lake_pk_index_sst_max_compaction_versions = saved_limit; });
+        PersistentIndexSstableMetaPB meta;
+        auto middle = UniqueId::gen_uid();
+        add_sstable(&meta, "base.sst", 1000, UniqueId::gen_uid());
+        add_sstable(&meta, "middle1.sst", 1000, middle);
+        add_sstable(&meta, "middle2.sst", 1000, middle);
+        add_sstable(&meta, "middle3.sst", 1000, middle);
+        add_sstable(&meta, "middle4.sst", 1000, middle);
+        add_sstable(&meta, "cumu.sst", 1000, UniqueId::gen_uid());
+        add_sstable(&meta, "active.sst", 1000, UniqueId::gen_uid());
+        sstables.clear();
+        LakePersistentIndex::pick_sstables_for_merge(meta, &sstables, &merge_base_level);
+        ASSERT_TRUE(merge_base_level);
+        ASSERT_EQ((std::vector<std::string>{"base.sst", "middle1.sst", "middle2.sst", "middle3.sst", "middle4.sst"}),
+                  picked_names(sstables));
+    }
+
+    // 6. The same for a cumulative merge that starts with a one-sstable fileset.
+    {
+        auto saved_limit = config::lake_pk_index_sst_max_compaction_versions;
+        config::lake_pk_index_sst_max_compaction_versions = 3;
+        DeferOp restore_config([&]() { config::lake_pk_index_sst_max_compaction_versions = saved_limit; });
+        PersistentIndexSstableMetaPB meta;
+        auto middle = UniqueId::gen_uid();
+        add_sstable(&meta, "base.sst", 1000000, UniqueId::gen_uid());
+        add_sstable(&meta, "cumu.sst", 1000, UniqueId::gen_uid());
+        add_sstable(&meta, "middle1.sst", 1000, middle);
+        add_sstable(&meta, "middle2.sst", 1000, middle);
+        add_sstable(&meta, "middle3.sst", 1000, middle);
+        add_sstable(&meta, "middle4.sst", 1000, middle);
+        add_sstable(&meta, "active.sst", 1000, UniqueId::gen_uid());
+        sstables.clear();
+        LakePersistentIndex::pick_sstables_for_merge(meta, &sstables, &merge_base_level);
+        ASSERT_FALSE(merge_base_level);
+        ASSERT_EQ((std::vector<std::string>{"cumu.sst", "middle1.sst", "middle2.sst", "middle3.sst", "middle4.sst"}),
+                  picked_names(sstables));
+    }
 }
 
 // The serial index compaction picks its inputs from the metadata of the compaction task, and

@@ -732,18 +732,24 @@ void LakePersistentIndex::pick_sstables_for_merge(const PersistentIndexSstableMe
         *merge_base_level = true;
     }
     // Limit max sstable count that can do merge, to avoid cost too much memory.
-    // Cut at a fileset edge. If one fileset alone is over the limit, take all of it.
+    // Cut at a fileset edge, keeping at least two filesets: a cut that leaves only the first one
+    // merges nothing, and the next round would pick the same. A fileset over the limit is then taken
+    // whole, as the parallel picker does.
     const size_t max_limit = std::max(config::lake_pk_index_sst_max_compaction_versions, 1);
     if (sstables->size() > max_limit) {
+        auto fileset_end = [&](size_t from) {
+            while (from < sstables->size() && same_fileset((*sstables)[from - 1], (*sstables)[from])) {
+                from++;
+            }
+            return from;
+        };
+        const size_t first_fileset_end = fileset_end(1);
         size_t cut = max_limit;
         while (cut > 0 && same_fileset((*sstables)[cut - 1], (*sstables)[cut])) {
             cut--;
         }
-        if (cut == 0) {
-            cut = max_limit;
-            while (cut < sstables->size() && same_fileset((*sstables)[cut - 1], (*sstables)[cut])) {
-                cut++;
-            }
+        if (cut <= first_fileset_end) {
+            cut = first_fileset_end < sstables->size() ? fileset_end(first_fileset_end + 1) : first_fileset_end;
         }
         sstables->resize(cut);
     }
