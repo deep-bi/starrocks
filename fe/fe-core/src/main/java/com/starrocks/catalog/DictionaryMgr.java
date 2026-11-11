@@ -869,7 +869,8 @@ public class DictionaryMgr implements Writable, GsonPostProcessable {
         private Dictionary dictionary;
         private long txnId;
         private List<TNetworkAddress> beNodes = Lists.newArrayList();
-        private Map<TNetworkAddress, Long> nodeStartTimes = new HashMap<>();        private boolean error;
+        private Map<TNetworkAddress, Long> nodeStartTimes = new HashMap<>();
+        private boolean error;
         private String errMsg;
         // Read once, so that every step of this refresh follows the same rule.
         private final boolean leaveOutFailedNodes;
