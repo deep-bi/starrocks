@@ -30,13 +30,16 @@
 #include "gutil/endian.h"
 #include "io/input_stream.h"
 #include "util/defer_op.h"
+#include "util/fips.h"
 
 namespace starrocks {
 
 bool openssl_supports_aesni() {
 #ifdef OPENSSL_INIT_ENGINE_ALL_BUILTIN
-    // Initialize ciphers and random engines
-    if (!OPENSSL_init_crypto(OPENSSL_INIT_ENGINE_ALL_BUILTIN | OPENSSL_INIT_ADD_ALL_CIPHERS, nullptr)) {
+    // Initialize ciphers and random engines. Not in FIPS mode: builtin engines can be registered as
+    // defaults (rdrand for RAND) and would serve crypto from outside the FIPS provider.
+    if (!is_fips_mode_enabled() &&
+        !OPENSSL_init_crypto(OPENSSL_INIT_ENGINE_ALL_BUILTIN | OPENSSL_INIT_ADD_ALL_CIPHERS, nullptr)) {
         LOG(FATAL) << "OpenSSL initialization failed";
     }
 #endif
@@ -68,24 +71,6 @@ const EVP_CIPHER* get_evp_cipher(const FileEncryptionInfo& info) {
     default:
         return nullptr;
     }
-}
-
-// copy from kudu/src/kudu/util/env_posix.cc
-// Copyright (c) 2011 The LevelDB Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style license that can be
-// found in the LICENSE file. See the AUTHORS file for names of contributors.
-
-std::string get_openssl_errors() {
-    std::ostringstream serr;
-    unsigned long l;
-    int line, flags;
-    const char *file, *data;
-    char buf[256];
-    while ((l = ERR_get_error_line_data(&file, &line, &data, &flags)) != 0) {
-        ERR_error_string_n(l, buf, sizeof(buf));
-        serr << " " << buf << ":" << file << ":" << line << ((flags & ERR_TXT_STRING) ? data : "");
-    }
-    return serr.str();
 }
 
 #define OPENSSL_RET_NOT_OK(call, msg)                                                  \

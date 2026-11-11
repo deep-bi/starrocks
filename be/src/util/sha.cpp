@@ -14,90 +14,91 @@
 
 #include "util/sha.h"
 
-#include <iomanip>
-#include <iostream>
+#include <glog/logging.h>
+
 #include <string>
 
 namespace starrocks {
 
-SHA224Digest::SHA224Digest() {
-    SHA224_Init(&_sha224_ctx);
+namespace detail {
+
+// a failure here means allocation failed or the provider is in its error state; a wrong digest
+// would be worse than stopping, since callers compare it with stored values or use it as a key
+template <size_t Size>
+EvpDigest<Size>::EvpDigest(const EVP_MD* md) : _ctx(EVP_MD_CTX_new()) {
+    CHECK(_ctx != nullptr) << "EVP_MD_CTX_new failed";
+    CHECK_EQ(EVP_DigestInit_ex(_ctx.get(), md, nullptr), 1) << "EVP_DigestInit_ex failed for " << EVP_MD_get0_name(md);
+    DCHECK_EQ(static_cast<size_t>(EVP_MD_CTX_get_size(_ctx.get())), Size);
 }
 
-void SHA224Digest::update(const void* data, size_t length) {
-    SHA224_Update(&_sha224_ctx, data, length);
+template <size_t Size>
+void EvpDigest<Size>::update(const void* data, size_t length) {
+    CHECK_EQ(EVP_DigestUpdate(_ctx.get(), data, length), 1) << "EVP_DigestUpdate failed";
 }
 
-void SHA224Digest::digest() {
-    SHA224_Final(_hash, &_sha224_ctx);
+template <size_t Size>
+void EvpDigest<Size>::digest() {
+    unsigned int len = 0;
+    CHECK_EQ(EVP_DigestFinal_ex(_ctx.get(), _hash, &len), 1) << "EVP_DigestFinal_ex failed";
+    DCHECK_EQ(len, Size);
 }
 
-std::string SHA224Digest::hex() const {
-    std::stringstream ss;
-    for (int i = 0; i < SHA224_DIGEST_LENGTH; i++) {
-        ss << std::hex << std::setw(2) << std::setfill('0') << (int)_hash[i];
+template <size_t Size>
+std::string EvpDigest<Size>::hex() const {
+    static constexpr char kHex[] = "0123456789abcdef";
+    std::string out(2 * Size, '\0');
+    for (size_t i = 0; i < Size; i++) {
+        out[2 * i] = kHex[_hash[i] >> 4];
+        out[2 * i + 1] = kHex[_hash[i] & 0x0F];
     }
-    return ss.str();
+    return out;
 }
 
-SHA256Digest::SHA256Digest() {
-    SHA256_Init(&_sha256_ctx);
+// Md5Digest, see util/md5.h
+template class EvpDigest<16>;
+template class EvpDigest<SHA224_DIGEST_LENGTH>;
+template class EvpDigest<SHA256_DIGEST_LENGTH>;
+template class EvpDigest<SHA384_DIGEST_LENGTH>;
+template class EvpDigest<SHA512_DIGEST_LENGTH>;
+
+} // namespace detail
+
+// fetched once, because a legacy EVP_shaXXX() handle makes every EVP_DigestInit_ex fetch again under
+// the method store lock, once per row in the SQL hash functions. The fetch uses the default
+// properties at the first call, which must come after init_fips_mode(); init_fips_mode() checks
+// that these come from the fips provider
+static const EVP_MD* fetch_sha(const char* name) {
+    EVP_MD* md = EVP_MD_fetch(nullptr, name, nullptr);
+    CHECK(md != nullptr) << "cannot fetch " << name;
+    return md;
 }
 
-void SHA256Digest::update(const void* data, size_t length) {
-    SHA256_Update(&_sha256_ctx, data, length);
+const EVP_MD* SHA224Digest::method() {
+    static const EVP_MD* md = fetch_sha("SHA2-224");
+    return md;
 }
 
-void SHA256Digest::digest() {
-    SHA256_Final(_hash, &_sha256_ctx);
+const EVP_MD* SHA256Digest::method() {
+    static const EVP_MD* md = fetch_sha("SHA2-256");
+    return md;
 }
 
-std::string SHA256Digest::hex() const {
-    std::stringstream ss;
-    for (int i = 0; i < SHA256_DIGEST_LENGTH; i++) {
-        ss << std::hex << std::setw(2) << std::setfill('0') << (int)_hash[i];
-    }
-    return ss.str();
+const EVP_MD* SHA384Digest::method() {
+    static const EVP_MD* md = fetch_sha("SHA2-384");
+    return md;
 }
 
-SHA384Digest::SHA384Digest() {
-    SHA384_Init(&_sha384_ctx);
+const EVP_MD* SHA512Digest::method() {
+    static const EVP_MD* md = fetch_sha("SHA2-512");
+    return md;
 }
 
-void SHA384Digest::update(const void* data, size_t length) {
-    SHA384_Update(&_sha384_ctx, data, length);
-}
+SHA224Digest::SHA224Digest() : EvpDigest(method()) {}
 
-void SHA384Digest::digest() {
-    SHA384_Final(_hash, &_sha384_ctx);
-}
+SHA256Digest::SHA256Digest() : EvpDigest(method()) {}
 
-std::string SHA384Digest::hex() const {
-    std::stringstream ss;
-    for (int i = 0; i < SHA384_DIGEST_LENGTH; i++) {
-        ss << std::hex << std::setw(2) << std::setfill('0') << (int)_hash[i];
-    }
-    return ss.str();
-}
+SHA384Digest::SHA384Digest() : EvpDigest(method()) {}
 
-SHA512Digest::SHA512Digest() {
-    SHA512_Init(&_sha512_ctx);
-}
-
-void SHA512Digest::update(const void* data, size_t length) {
-    SHA512_Update(&_sha512_ctx, data, length);
-}
-
-void SHA512Digest::digest() {
-    SHA512_Final(_hash, &_sha512_ctx);
-}
-
-std::string SHA512Digest::hex() const {
-    std::stringstream ss;
-    for (int i = 0; i < SHA512_DIGEST_LENGTH; i++) {
-        ss << std::hex << std::setw(2) << std::setfill('0') << (int)_hash[i];
-    }
-    return ss.str();
-}
+SHA512Digest::SHA512Digest() : EvpDigest(method()) {}
 
 } // namespace starrocks

@@ -91,10 +91,18 @@ LIBEVENT_SOURCE=libevent-24236aed01798303745470e6c498bf606e88724a
 LIBEVENT_MD5SUM="c6c4e7614f03754b8c67a17f68177649"
 
 # openssl
-OPENSSL_DOWNLOAD="https://github.com/openssl/openssl/archive/OpenSSL_1_1_1m.tar.gz"
-OPENSSL_NAME=openssl-OpenSSL_1_1_1m.tar.gz
-OPENSSL_SOURCE=openssl-OpenSSL_1_1_1m
-OPENSSL_MD5SUM="710c2368d28f1a25ab92e25b5b9b11ec"
+OPENSSL_DOWNLOAD="https://github.com/openssl/openssl/releases/download/openssl-3.5.7/openssl-3.5.7.tar.gz"
+OPENSSL_NAME=openssl-3.5.7.tar.gz
+OPENSSL_SOURCE=openssl-3.5.7
+OPENSSL_MD5SUM="36608cd5445f708d0c2200aea9682c35"
+
+# openssl fips provider (CMVP #4985), shipped in every BE package
+# 3.1.2 is the version validated under CMVP certificate #4985; the URL is the
+# one its security policy names. sha256 a0ce69b8b97ea6a35b96875235aa453b966ba3cba8af2de23657d8b6767d6539
+OPENSSL_FIPS_DOWNLOAD="https://www.openssl.org/source/openssl-3.1.2.tar.gz"
+OPENSSL_FIPS_NAME=openssl-3.1.2.tar.gz
+OPENSSL_FIPS_SOURCE=openssl-3.1.2
+OPENSSL_FIPS_MD5SUM="1d7861f969505e67b8677e205afd9ff4"
 
 # thrift
 THRIFT_DOWNLOAD="https://archive.apache.org/dist/thrift/0.24.0/thrift-0.24.0.tar.gz"
@@ -211,10 +219,10 @@ SASL_SOURCE=cyrus-sasl-2.1.28
 SASL_MD5SUM="7dcf3919b3085a1d09576438171bda91"
 
 # kerberos MIT
-KRB5_DOWNLOAD="https://kerberos.org/dist/krb5/1.19/krb5-1.19.4.tar.gz"
-KRB5_NAME=krb5-1.19.4.tar.gz
-KRB5_SOURCE=krb5-1.19.4
-KRB5_MD5SUM="ef76083e58f8c49066180642d7c2814a"
+KRB5_DOWNLOAD="https://kerberos.org/dist/krb5/1.21/krb5-1.21.3.tar.gz"
+KRB5_NAME=krb5-1.21.3.tar.gz
+KRB5_SOURCE=krb5-1.21.3
+KRB5_MD5SUM="beb34d1dfc72ba0571ce72bed03e06eb"
 
 # librdkafka
 LIBRDKAFKA_DOWNLOAD="https://github.com/confluentinc/librdkafka/archive/refs/tags/v2.11.0.tar.gz"
@@ -374,10 +382,10 @@ AVRO_SOURCE="avro-release-1.12.0"
 AVRO_MD5SUM="0657ab3ab89d264ccccbca317dbfa54b"
 
 # serdes
-SERDES_DOWNLOAD="https://github.com/confluentinc/libserdes/archive/refs/tags/v7.3.1.tar.gz"
-SERDES_NAME="libserdes-7.3.1.tar.gz"
-SERDES_SOURCE="libserdes-7.3.1"
-SERDES_MD5SUM="61012487a8845f37540710ac4ac2f7ab"
+SERDES_DOWNLOAD="https://github.com/deep-bi/libserdes/archive/refs/tags/v7.3.1-deepbi1.tar.gz"
+SERDES_NAME="libserdes-7.3.1-deepbi1.tar.gz"
+SERDES_SOURCE="libserdes-7.3.1-deepbi1"
+SERDES_MD5SUM="b61d161fc6f4d609cc5bc7db60695f60"
 
 # lzo
 LZO2_DOWNLOAD="http://www.oberhumer.com/opensource/lzo/download/lzo-2.10.tar.gz"
@@ -488,7 +496,7 @@ XXHASH_SOURCE=xxHash-0.8.3
 XXHASH_MD5SUM="599804eb9555e51c05f1b821f9212a07"
 
 # all thirdparties which need to be downloaded is set in array TP_ARCHIVES
-TP_ARCHIVES="CLUCENE LIBEVENT OPENSSL THRIFT PROTOBUF GFLAGS GLOG GTEST RAPIDJSON SIMDJSON SNAPPY GPERFTOOLS ZLIB LZ4 BZIP CURL \
+TP_ARCHIVES="CLUCENE LIBEVENT OPENSSL OPENSSL_FIPS THRIFT PROTOBUF GFLAGS GLOG GTEST RAPIDJSON SIMDJSON SNAPPY GPERFTOOLS ZLIB LZ4 BZIP CURL \
             RE2 BOOST LEVELDB BRPC ROCKSDB KRB5 SASL LIBRDKAFKA PULSAR FLATBUFFERS ARROW BROTLI ZSTD S2 BITSHUFFLE CROARINGBITMAP \
             JEMALLOC CCTZ FMT RYU BREAK_PAD HADOOPSRC JDK RAGEL HYPERSCAN MARIADB JINDOSDK AWS_SDK_CPP VPACK OPENTELEMETRY \
             BENCHMARK FAST_FLOAT STARCACHE STREAMVBYTE JANSSON AVRO SERDES GCS_CONNECTOR LZO2 DATASKETCHES \

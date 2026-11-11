@@ -17,29 +17,19 @@
 
 #include "util/md5.h"
 
+#include <glog/logging.h>
+
 namespace starrocks {
 
-Md5Digest::Md5Digest() {
-    MD5_Init(&_md5_ctx);
+// "fips=no" takes MD5 from the default provider, also when fips=yes is the default property, so
+// the result is the same with and without FIPS mode. the method is fetched once: MD5 never comes
+// from the fips provider, so the time of the first call doesn't matter.
+static const EVP_MD* md5_method() {
+    static EVP_MD* md = EVP_MD_fetch(nullptr, "MD5", "fips=no");
+    CHECK(md != nullptr) << "cannot fetch MD5 from the default OpenSSL provider";
+    return md;
 }
 
-void Md5Digest::update(const void* data, size_t length) {
-    MD5_Update(&_md5_ctx, data, length);
-}
-
-void Md5Digest::digest() {
-    unsigned char buf[MD5_DIGEST_LENGTH];
-    MD5_Final(buf, &_md5_ctx);
-
-    char hex_buf[2 * MD5_DIGEST_LENGTH];
-
-    static char dig_vec_lower[] = "0123456789abcdef";
-    char* to = hex_buf;
-    for (unsigned char i : buf) {
-        *to++ = dig_vec_lower[i >> 4];
-        *to++ = dig_vec_lower[i & 0x0F];
-    }
-    _hex.assign(hex_buf, 2 * MD5_DIGEST_LENGTH);
-}
+Md5Digest::Md5Digest() : EvpDigest(md5_method()) {}
 
 } // namespace starrocks
