@@ -1167,11 +1167,11 @@ public class DictionaryMgrEditLogTest {
         Assertions.assertEquals(Lists.newArrayList(NODE_A, NODE_C), worker.getBeNodes());
     }
 
-    // With only old nodes the sink is an old BE too, which ignores skip_failed_nodes and cancels on the first failed
-    // chunk, so no node can hold part of the data. Leaving them all out would fail every refresh.
+    // The FE cannot tell which node ran the sink, so nodes that report no rows never commit with leave-out on, even
+    // when every node is old: the refresh fails instead.
     @Test
-    public void testRowCheckKeepsEveryNodeWhenNoNodeReportsRows() throws Exception {
-        mockThreeNodesWithRows(Map.of(), Set.of());
+    public void testRowCheckFailsTheRefreshWhenNoNodeReportsRows() throws Exception {
+        List<PProcessDictionaryCacheRequest> requests = mockThreeNodesWithRows(Map.of(), Set.of());
         Dictionary dictionary = createRefreshingDictionary("only_old_nodes_dict", false);
         DictionaryMgr.RefreshDictionaryCacheWorker worker = masterDictionaryMgr.new RefreshDictionaryCacheWorker(
                 dictionary, masterDictionaryMgr.getAndIncrementTxnIdUnlocked());
@@ -1181,8 +1181,8 @@ public class DictionaryMgrEditLogTest {
         worker.commit();
         worker.finish();
 
-        Assertions.assertEquals(Lists.newArrayList(NODE_A, NODE_B, NODE_C), worker.getBeNodes());
-        Assertions.assertEquals(Dictionary.DictionaryState.FINISHED, dictionary.getState());
+        Assertions.assertTrue(requests.stream().noneMatch(r -> r.type == PProcessDictionaryCacheRequestType.COMMIT));
+        Assertions.assertEquals(Dictionary.DictionaryState.CANCELLED, dictionary.getState());
     }
 
     // A failed STATISTIC call can hide the new sink node, which honours skip_failed_nodes. The old nodes left
