@@ -552,8 +552,12 @@ TEST_F(JsonFlattenerTest, testMergerCheckInput) {
         auto* binary = down_cast<BinaryColumn*>(down_cast<NullableColumn*>(columns[1].get())->data_column().get());
         binary->get_offset().back() += 1;
         auto st = check_flat_json_columns(paths, true, columns);
+        auto merger_st = merger.check_input(columns);
+        // A debug build checks the last offset against the bytes when the column is destroyed, so put it back before
+        // any assertion can leave this block.
+        binary->get_offset().back() -= 1;
         ASSERT_TRUE(st.is_corruption()) << st;
-        ASSERT_OK(merger.check_input(columns));
+        ASSERT_OK(merger_st);
     }
 }
 
