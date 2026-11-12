@@ -1922,7 +1922,8 @@ TEST_F(FlatJsonColumnRWTest, testReadShortSubColumn) {
                 auto iter = new_iter();
                 ASSERT_OK(iter->seek_to_ordinal(0));
                 auto dst = new_dst();
-                ASSERT_OK(iter->next_batch(SparseRange<>(0, kRows - 1), dst.get())) << name;
+                auto st = iter->next_batch(SparseRange<>(0, kRows - 1), dst.get());
+                ASSERT_TRUE(st.ok()) << name << ": " << st;
                 ASSERT_EQ(kRows - 1, dst->size()) << name;
             }
             // a sequential read of every row
@@ -2068,7 +2069,8 @@ TEST_F(FlatJsonColumnRWTest, testFlatJsonInArray) {
             ASSERT_OK(iter->seek_to_first());
             auto dst = new_dst();
             size_t n = kRows;
-            ASSERT_OK(iter->next_batch(&n, dst.get())) << name;
+            auto st = iter->next_batch(&n, dst.get());
+            ASSERT_TRUE(st.ok()) << name << ": " << st;
             ASSERT_NO_FATAL_FAILURE(check(dst, {0, 1, 2, 3}, by_path, name));
         }
         // a range read of rows 0 and 3
@@ -2079,7 +2081,8 @@ TEST_F(FlatJsonColumnRWTest, testFlatJsonInArray) {
             auto iter = new_iter();
             ASSERT_OK(iter->seek_to_ordinal(range.begin()));
             auto dst = new_dst();
-            ASSERT_OK(iter->next_batch(range, dst.get())) << name;
+            auto st = iter->next_batch(range, dst.get());
+            ASSERT_TRUE(st.ok()) << name << ": " << st;
             ASSERT_NO_FATAL_FAILURE(check(dst, {0, 3}, by_path, name));
         }
         // a fetch of rows 0, 2 and 3: the elements of row 2 start before the element whose position is the segment's
@@ -2088,7 +2091,8 @@ TEST_F(FlatJsonColumnRWTest, testFlatJsonInArray) {
             auto iter = new_iter();
             auto dst = new_dst();
             rowid_t rowids[] = {0, 2, 3};
-            ASSERT_OK(iter->fetch_values_by_rowid(rowids, 3, dst.get())) << name;
+            auto st = iter->fetch_values_by_rowid(rowids, 3, dst.get());
+            ASSERT_TRUE(st.ok()) << name << ": " << st;
             ASSERT_NO_FATAL_FAILURE(check(dst, {0, 2, 3}, by_path, name));
         }
     }
