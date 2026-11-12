@@ -1119,6 +1119,55 @@ void JsonMerger::set_root_path(const std::string& base_path) {
     JsonFlatPath::set_root(base_path, _src_root.get());
 }
 
+Status check_flat_json_columns(const std::vector<std::string>& paths, bool has_remain, const Columns& columns,
+                               std::optional<size_t> expected_rows, bool check_offsets) {
+    const size_t expected = paths.size() + (has_remain ? 1 : 0);
+    if (columns.size() != expected) {
+        return Status::Corruption(fmt::format("flat json: got {} columns, expected {} ({} paths, remain: {})",
+                                              columns.size(), expected, paths.size(), has_remain));
+    }
+    // Don't call size() on a NullableColumn before its null flags are checked: it DCHECKs that they match.
+    std::optional<size_t> rows = expected_rows;
+    for (size_t i = 0; i < columns.size(); i++) {
+        const std::string_view name = i < paths.size() ? std::string_view(paths[i]) : "remain";
+        const Column* data = columns[i].get();
+        if (i < paths.size()) {
+            if (!data->is_nullable()) {
+                return Status::Corruption(fmt::format("flat json: column {} ({}) is not nullable", i, name));
+            }
+            const auto* nullable = down_cast<const NullableColumn*>(data);
+            data = nullable->data_column().get();
+            if (nullable->null_column()->size() != data->size()) {
+                return Status::Corruption(fmt::format("flat json: column {} ({}) has {} values and {} nulls",
+                                                      i, name, data->size(), nullable->null_column()->size()));
+            }
+        }
+        if (!rows.has_value()) {
+            rows = data->size();
+        }
+        if (data->size() != *rows) {
+            return Status::Corruption(fmt::format("flat json: column {} ({}) has {} rows, expected {}", i, name,
+                                                  data->size(), *rows));
+        }
+        if (check_offsets && data->is_binary()) {
+            const auto* binary = down_cast<const BinaryColumn*>(data);
+            const auto& offsets = binary->get_offset();
+            for (size_t row = 0; row < *rows; row++) {
+                if (UNLIKELY(offsets[row + 1] < offsets[row])) {
+                    return Status::Corruption(fmt::format(
+                            "flat json: column {} ({}) has a negative length at row {}", i, name, row));
+                }
+            }
+            if (offsets[0] != 0 || offsets[*rows] != binary->get_bytes().size()) {
+                return Status::Corruption(
+                        fmt::format("flat json: column {} ({}) has offsets from {} to {} over {} bytes", i, name,
+                                    offsets[0], offsets[*rows], binary->get_bytes().size()));
+            }
+        }
+    }
+    return Status::OK();
+}
+
 ColumnPtr JsonMerger::merge(const Columns& columns) {
     DCHECK_GE(columns.size(), 1);
     DCHECK(_src_columns.empty());
@@ -1715,6 +1764,7 @@ Status HyperJsonTransformer::_merge(const MergeTask& task, const Columns& column
     for (auto& index : task.src_index) {
         cols.emplace_back(columns[index]);
     }
+    RETURN_IF_ERROR(task.merger->check_input(cols));
     auto result = task.merger->merge(cols);
     if (task.need_cast) {
         return _cast(task, result);

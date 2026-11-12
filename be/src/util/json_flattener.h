@@ -21,6 +21,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <tuple>
@@ -103,6 +104,14 @@ public:
 
     static std::pair<std::string_view, std::string_view> split_path(const std::string_view& path);
 };
+
+// Check flat JSON sub-columns before they are used together: one nullable column per path in `paths`, then the remain
+// if `has_remain`, all with `expected_rows` rows (or the rows of the first column, if not given), and, if
+// `check_offsets`, string columns with valid offsets. Readers and JsonMerger index every sub-column by the rows of the
+// first one, so a damaged segment would make them read past the end of a shorter column. Checking the offsets takes a
+// pass over every string column, so only the readers do it, on what they read.
+Status check_flat_json_columns(const std::vector<std::string>& paths, bool has_remain, const Columns& columns,
+                               std::optional<size_t> expected_rows = std::nullopt, bool check_offsets = true);
 
 // to deriver json flatten path
 class JsonPathDeriver {
@@ -236,6 +245,12 @@ public:
     void add_level_paths(const std::vector<std::string>& level_paths);
 
     bool has_exclude_paths() const { return !_exclude_paths.empty(); }
+
+    // Check that `columns` line up for merging, see check_flat_json_columns(). merge() trusts its input, so callers
+    // check it first. The string offsets are skipped: the readers check them in every flat column they read.
+    Status check_input(const Columns& columns) const {
+        return check_flat_json_columns(_src_paths, _has_remain, columns, std::nullopt, false);
+    }
 
     // input nullable-json, output none null json
     ColumnPtr merge(const Columns& columns);

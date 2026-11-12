@@ -17,9 +17,12 @@
 #include <memory>
 #include <vector>
 
+#include "column/array_column.h"
 #include "column/column_access_path.h"
 #include "column/column_helper.h"
+#include "column/fixed_length_column.h"
 #include "column/json_column.h"
+#include "column/map_column.h"
 #include "column/nullable_column.h"
 #include "column/vectorized_fwd.h"
 #include "common/config.h"
@@ -104,6 +107,8 @@ protected:
             // close the file
             ASSERT_TRUE(wfile->close().ok());
         }
+        // a real segment takes its row count from the footer, and the flat JSON readers check reads against it
+        segment->set_num_rows(write_col->size());
 
         auto res = ColumnReader::create(_meta.get(), segment.get(), nullptr);
         ASSERT_TRUE(res.ok());
@@ -147,6 +152,42 @@ protected:
             return NullableColumn::create(std::move(json_col), std::move(null_col));
         }
         return json_col;
+    }
+
+    // The JSON objects {"a": i, "b": "str_i"} for i in [0, count).
+    static std::vector<std::string> ab_jsons(size_t count) {
+        std::vector<std::string> jsons;
+        for (size_t i = 0; i < count; i++) {
+            jsons.emplace_back("{\"a\": " + std::to_string(i) + ", \"b\": \"str_" + std::to_string(i) + "\"}");
+        }
+        return jsons;
+    }
+
+    static void init_column_meta(ColumnMetaPB* meta, LogicalType type, int32_t length, bool is_nullable) {
+        meta->set_column_id(0);
+        meta->set_unique_id(0);
+        meta->set_type(type);
+        meta->set_length(length);
+        meta->set_encoding(DEFAULT_ENCODING);
+        meta->set_compression(starrocks::LZ4_FRAME);
+        meta->set_is_nullable(is_nullable);
+    }
+
+    // Write `column` as the next column of `wfile`, its JSON as flat JSON. `meta` must be initialized, with the metas
+    // of the children of an ARRAY or MAP added.
+    void write_flat_column(WritableFile* wfile, ColumnMetaPB* meta, const TabletColumn& tablet_column,
+                           const Column& column) {
+        ColumnWriterOptions writer_opts;
+        writer_opts.meta = meta;
+        writer_opts.need_zone_map = false;
+        writer_opts.need_flat = true;
+
+        ASSIGN_OR_ABORT(auto writer, ColumnWriter::create(writer_opts, &tablet_column, wfile));
+        ASSERT_OK(writer->init());
+        ASSERT_OK(writer->append(column));
+        ASSERT_OK(writer->finish());
+        ASSERT_OK(writer->write_data());
+        ASSERT_OK(writer->write_ordinal_index());
     }
 
 private:
@@ -1785,6 +1826,406 @@ TEST_F(FlatJsonColumnRWTest, testGetIORangeVec) {
     auto status_or = iter->get_io_range_vec(range, read_col.get());
     ASSERT_TRUE(status_or.ok());
     ASSERT_EQ((*status_or).size(), 1);
+}
+
+// A damaged flat JSON segment can hold a sub-column, or the null stream, with fewer values than the segment has rows.
+// Path reads (JsonFlatColumnIterator) and whole JSON reads (JsonMergeIterator) must fail every read that reaches the
+// missing row with Corruption, and still read the rows before it. The damaged column is made of two flat JSON columns
+// written to one file, with N and N - 1 rows: one sub-column of the first is replaced by the same one of the second.
+TEST_F(FlatJsonColumnRWTest, testReadShortSubColumn) {
+    constexpr rowid_t kRows = 10;
+    std::vector<std::string> jsons;
+    for (rowid_t i = 0; i < kRows; i++) {
+        jsons.emplace_back("{\"a\": " + std::to_string(i) + ", \"b\": \"str_" + std::to_string(i) + "\"}");
+    }
+    const std::vector<std::string> short_jsons(jsons.begin(), jsons.end() - 1);
+
+    auto fs = std::make_shared<MemoryFileSystem>();
+    ASSERT_TRUE(fs->create_dir(TEST_DIR).ok());
+    const std::string fname = TEST_DIR + "/test_flat_json_short_sub_column.data";
+    TabletColumn json_tablet_column = create_with_default_value<TYPE_JSON>("");
+
+    ColumnMetaPB full_meta;
+    ColumnMetaPB short_meta;
+    {
+        ASSIGN_OR_ABORT(auto wfile, fs->new_writable_file(fname));
+        auto write = [&](ColumnMetaPB* meta, const std::vector<std::string>& rows) {
+            ColumnWriterOptions writer_opts;
+            writer_opts.meta = meta;
+            writer_opts.meta->set_column_id(0);
+            writer_opts.meta->set_unique_id(0);
+            writer_opts.meta->set_type(TYPE_JSON);
+            writer_opts.meta->set_length(0);
+            writer_opts.meta->set_encoding(DEFAULT_ENCODING);
+            writer_opts.meta->set_compression(starrocks::LZ4_FRAME);
+            writer_opts.meta->set_is_nullable(true);
+            writer_opts.need_zone_map = false;
+            writer_opts.need_flat = true;
+
+            ASSIGN_OR_ABORT(auto writer, ColumnWriter::create(writer_opts, &json_tablet_column, wfile.get()));
+            ASSERT_OK(writer->init());
+            auto column = create_json(rows, true);
+            ASSERT_OK(writer->append(*column));
+            ASSERT_OK(writer->finish());
+            ASSERT_OK(writer->write_data());
+            ASSERT_OK(writer->write_ordinal_index());
+        };
+        ASSERT_NO_FATAL_FAILURE(write(&full_meta, jsons));
+        ASSERT_NO_FATAL_FAILURE(write(&short_meta, short_jsons));
+        ASSERT_OK(wfile->close());
+    }
+    ASSERT_TRUE(full_meta.json_meta().is_flat());
+    ASSERT_EQ(full_meta.children_columns_size(), short_meta.children_columns_size());
+
+    auto segment = create_dummy_segment(fs, fname);
+    segment->set_num_rows(kRows);
+    ASSIGN_OR_ABORT(auto read_file, fs->new_random_access_file(fname));
+
+    ASSIGN_OR_ABORT(auto root_path, ColumnAccessPath::create(TAccessPathType::FIELD, "root", 0));
+    ASSIGN_OR_ABORT(auto a_path, ColumnAccessPath::create(TAccessPathType::FIELD, "root.a", 0));
+    ASSIGN_OR_ABORT(auto b_path, ColumnAccessPath::create(TAccessPathType::FIELD, "root.b", 0));
+    root_path->children().emplace_back(std::move(a_path));
+    root_path->children().emplace_back(std::move(b_path));
+
+    // A short column read first lowers the rows of every sequential read after it, so the columns agree with each
+    // other: only the rows asked for show that one is short.
+    for (const std::string short_child : {"nulls", "a", "b"}) {
+        ColumnMetaPB meta = full_meta;
+        int index = -1;
+        for (int i = 0; i < meta.children_columns_size(); i++) {
+            if (meta.children_columns(i).name() == short_child) {
+                index = i;
+            }
+        }
+        ASSERT_GE(index, 0) << short_child;
+        ASSERT_EQ(short_child, short_meta.children_columns(index).name());
+        *meta.mutable_children_columns(index) = short_meta.children_columns(index);
+        ASSIGN_OR_ABORT(auto reader, ColumnReader::create(&meta, segment.get(), nullptr));
+
+        for (ColumnAccessPath* path : {static_cast<ColumnAccessPath*>(nullptr), root_path.get()}) {
+            const std::string name = short_child + (path == nullptr ? " short, whole json" : " short, path");
+            OlapReaderStatistics stats;
+            ColumnIteratorOptions iter_opts;
+            iter_opts.stats = &stats;
+            iter_opts.read_file = read_file.get();
+            auto new_iter = [&]() {
+                ASSIGN_OR_ABORT(auto iter, reader->new_iterator(path));
+                EXPECT_OK(iter->init(iter_opts));
+                return iter;
+            };
+            auto new_dst = []() -> ColumnPtr {
+                return NullableColumn::create(JsonColumn::create(), NullColumn::create());
+            };
+
+            // the rows before the missing one are still readable
+            {
+                auto iter = new_iter();
+                ASSERT_OK(iter->seek_to_ordinal(0));
+                auto dst = new_dst();
+                ASSERT_OK(iter->next_batch(SparseRange<>(0, kRows - 1), dst.get())) << name;
+                ASSERT_EQ(kRows - 1, dst->size()) << name;
+            }
+            // a sequential read of every row
+            {
+                auto iter = new_iter();
+                ASSERT_OK(iter->seek_to_first());
+                auto dst = new_dst();
+                size_t n = kRows;
+                auto st = iter->next_batch(&n, dst.get());
+                ASSERT_TRUE(st.is_corruption()) << name << ": " << st;
+            }
+            // a range read of every row: the short column stops at its last value without an error
+            {
+                auto iter = new_iter();
+                ASSERT_OK(iter->seek_to_ordinal(0));
+                auto dst = new_dst();
+                auto st = iter->next_batch(SparseRange<>(0, kRows), dst.get());
+                ASSERT_TRUE(st.is_corruption()) << name << ": " << st;
+            }
+            // a fetch of the missing row
+            {
+                auto iter = new_iter();
+                auto dst = new_dst();
+                rowid_t rowids[] = {kRows - 1};
+                auto st = iter->fetch_values_by_rowid(rowids, 1, dst.get());
+                ASSERT_TRUE(st.is_corruption()) << name << ": " << st;
+            }
+        }
+    }
+}
+
+// A flat JSON column can be the element of an ARRAY. Its sub-columns then hold one value per element, not one per
+// segment row: here 4 rows hold 10 elements. Whole JSON reads (JsonMergeIterator) and path reads
+// (JsonFlatColumnIterator) of the elements must give every element in every read mode. A sub-column with fewer values
+// than the array's offsets ask for must still fail with Corruption.
+TEST_F(FlatJsonColumnRWTest, testFlatJsonInArray) {
+    constexpr rowid_t kRows = 4;
+    const std::vector<uint32_t> sizes = {3, 0, 2, 5};
+    // the element each row starts at
+    const std::vector<uint32_t> starts = {0, 3, 3, 5};
+    // the same arrays without the last element
+    const std::vector<uint32_t> short_sizes = {3, 0, 2, 4};
+
+    auto new_array = [&](const std::vector<uint32_t>& array_sizes) -> ArrayColumn::Ptr {
+        UInt32Column::Ptr offsets = UInt32Column::create();
+        offsets->append(0);
+        uint32_t end = 0;
+        for (uint32_t size : array_sizes) {
+            end += size;
+            offsets->append(end);
+        }
+        ColumnPtr elements = create_json(ab_jsons(end), true);
+        return ArrayColumn::create(elements, offsets);
+    };
+
+    TabletColumn array_column = create_array(0, false);
+    TabletColumn json_column = create_with_default_value<TYPE_JSON>("");
+    array_column.add_sub_column(json_column);
+
+    auto fs = std::make_shared<MemoryFileSystem>();
+    ASSERT_TRUE(fs->create_dir(TEST_DIR).ok());
+    const std::string fname = TEST_DIR + "/test_flat_json_in_array.data";
+
+    ArrayColumn::Ptr src = new_array(sizes);
+    ColumnMetaPB full_meta;
+    ColumnMetaPB short_meta;
+    {
+        ASSIGN_OR_ABORT(auto wfile, fs->new_writable_file(fname));
+        auto write = [&](ColumnMetaPB* meta, const std::vector<uint32_t>& array_sizes) {
+            init_column_meta(meta, TYPE_ARRAY, 0, false);
+            init_column_meta(meta->add_children_columns(), TYPE_JSON, 0, true);
+            ArrayColumn::Ptr column = new_array(array_sizes);
+            write_flat_column(wfile.get(), meta, array_column, *column);
+        };
+        ASSERT_NO_FATAL_FAILURE(write(&full_meta, sizes));
+        ASSERT_NO_FATAL_FAILURE(write(&short_meta, short_sizes));
+        ASSERT_OK(wfile->close());
+    }
+    // the elements are stored as flat JSON, with the same sub-columns in both arrays
+    ASSERT_TRUE(full_meta.children_columns(0).json_meta().is_flat());
+    ASSERT_EQ(full_meta.children_columns(0).children_columns_size(),
+              short_meta.children_columns(0).children_columns_size());
+
+    auto segment = create_dummy_segment(fs, fname);
+    segment->set_num_rows(kRows);
+    ASSIGN_OR_ABORT(auto read_file, fs->new_random_access_file(fname));
+
+    // the array -> all its elements -> the JSON paths a and b
+    ASSIGN_OR_ABORT(auto root_path, ColumnAccessPath::create(TAccessPathType::ROOT, "root", 0));
+    ASSIGN_OR_ABORT(auto all_path, ColumnAccessPath::create(TAccessPathType::ALL, "root.all", 0));
+    ASSIGN_OR_ABORT(auto a_path, ColumnAccessPath::create(TAccessPathType::FIELD, "root.all.a", 0));
+    ASSIGN_OR_ABORT(auto b_path, ColumnAccessPath::create(TAccessPathType::FIELD, "root.all.b", 0));
+    all_path->children().emplace_back(std::move(a_path));
+    all_path->children().emplace_back(std::move(b_path));
+    root_path->children().emplace_back(std::move(all_path));
+
+    OlapReaderStatistics stats;
+    ColumnIteratorOptions iter_opts;
+    iter_opts.stats = &stats;
+    iter_opts.read_file = read_file.get();
+    auto new_dst = []() -> ArrayColumn::Ptr {
+        UInt32Column::Ptr offsets = UInt32Column::create();
+        NullableColumn::Ptr elements = NullableColumn::create(JsonColumn::create(), NullColumn::create());
+        return ArrayColumn::create(elements, offsets);
+    };
+    // `dst` must hold the rows `rows` of the array written
+    auto check = [&](ArrayColumn::Ptr& dst, const std::vector<rowid_t>& rows, bool by_path, const std::string& name) {
+        ASSERT_EQ(rows.size(), dst->size()) << name;
+        if (!by_path) {
+            for (size_t i = 0; i < rows.size(); i++) {
+                ASSERT_EQ(src->debug_item(rows[i]), dst->debug_item(i)) << name;
+            }
+            return;
+        }
+        // a path read gives flat JSON: the value of the path a is the position of the element in the column
+        auto* elements = down_cast<NullableColumn*>(dst->elements_column().get());
+        auto* json = down_cast<JsonColumn*>(elements->data_column().get());
+        ASSERT_TRUE(json->is_flat_json()) << name;
+        size_t pos = 0;
+        for (rowid_t row : rows) {
+            for (uint32_t i = 0; i < sizes[row]; i++, pos++) {
+                ASSERT_LT(pos, json->size()) << name;
+                ASSERT_EQ(std::to_string(starts[row] + i), json->get_flat_field("a")->debug_item(pos)) << name;
+            }
+        }
+        ASSERT_EQ(pos, json->size()) << name;
+    };
+
+    for (ColumnAccessPath* path : {static_cast<ColumnAccessPath*>(nullptr), root_path.get()}) {
+        const bool by_path = path != nullptr;
+        const std::string name = by_path ? "path" : "whole json";
+        ColumnMetaPB meta = full_meta;
+        ASSIGN_OR_ABORT(auto reader, ColumnReader::create(&meta, segment.get(), nullptr));
+        auto new_iter = [&]() {
+            ASSIGN_OR_ABORT(auto iter, reader->new_iterator(path));
+            EXPECT_OK(iter->init(iter_opts));
+            return iter;
+        };
+
+        // a sequential read of every row: it asks for more elements than the segment has rows
+        {
+            auto iter = new_iter();
+            ASSERT_OK(iter->seek_to_first());
+            auto dst = new_dst();
+            size_t n = kRows;
+            ASSERT_OK(iter->next_batch(&n, dst.get())) << name;
+            ASSERT_NO_FATAL_FAILURE(check(dst, {0, 1, 2, 3}, by_path, name));
+        }
+        // a range read of rows 0 and 3
+        {
+            SparseRange<> range;
+            range.add(Range<>(0, 1));
+            range.add(Range<>(3, 4));
+            auto iter = new_iter();
+            ASSERT_OK(iter->seek_to_ordinal(range.begin()));
+            auto dst = new_dst();
+            ASSERT_OK(iter->next_batch(range, dst.get())) << name;
+            ASSERT_NO_FATAL_FAILURE(check(dst, {0, 3}, by_path, name));
+        }
+        // a fetch of rows 0, 2 and 3: the elements of row 2 start before the element whose position is the segment's
+        // row count, and end after it
+        {
+            auto iter = new_iter();
+            auto dst = new_dst();
+            rowid_t rowids[] = {0, 2, 3};
+            ASSERT_OK(iter->fetch_values_by_rowid(rowids, 3, dst.get())) << name;
+            ASSERT_NO_FATAL_FAILURE(check(dst, {0, 2, 3}, by_path, name));
+        }
+    }
+
+    // The sub-column a of the elements has one value less than the array's offsets ask for.
+    {
+        ColumnMetaPB meta = full_meta;
+        ColumnMetaPB* json_meta = meta.mutable_children_columns(0);
+        const ColumnMetaPB& short_json_meta = short_meta.children_columns(0);
+        int index = -1;
+        for (int i = 0; i < json_meta->children_columns_size(); i++) {
+            if (json_meta->children_columns(i).name() == "a") {
+                index = i;
+            }
+        }
+        ASSERT_GE(index, 0);
+        ASSERT_EQ("a", short_json_meta.children_columns(index).name());
+        *json_meta->mutable_children_columns(index) = short_json_meta.children_columns(index);
+        ASSIGN_OR_ABORT(auto reader, ColumnReader::create(&meta, segment.get(), nullptr));
+        auto new_iter = [&]() {
+            ASSIGN_OR_ABORT(auto iter, reader->new_iterator());
+            EXPECT_OK(iter->init(iter_opts));
+            return iter;
+        };
+
+        // the rows before the missing element are still readable
+        {
+            auto iter = new_iter();
+            ASSERT_OK(iter->seek_to_ordinal(0));
+            auto dst = new_dst();
+            ASSERT_OK(iter->next_batch(SparseRange<>(0, kRows - 1), dst.get()));
+            ASSERT_NO_FATAL_FAILURE(check(dst, {0, 1, 2}, false, "short a"));
+        }
+        // a sequential read of every row
+        {
+            auto iter = new_iter();
+            ASSERT_OK(iter->seek_to_first());
+            auto dst = new_dst();
+            size_t n = kRows;
+            auto st = iter->next_batch(&n, dst.get());
+            ASSERT_TRUE(st.is_corruption()) << st;
+        }
+        // a fetch of the row with the missing element
+        {
+            auto iter = new_iter();
+            auto dst = new_dst();
+            rowid_t rowids[] = {kRows - 1};
+            auto st = iter->fetch_values_by_rowid(rowids, 1, dst.get());
+            ASSERT_TRUE(st.is_corruption()) << st;
+        }
+    }
+}
+
+// The same for a flat JSON column that is the value of a MAP: 3 rows hold 6 values.
+TEST_F(FlatJsonColumnRWTest, testFlatJsonInMap) {
+    constexpr rowid_t kRows = 3;
+    const std::vector<uint32_t> sizes = {2, 0, 4};
+
+    TabletColumn map_column = create_map(0, false);
+    TabletColumn key_column = create_int_value(1, STORAGE_AGGREGATE_NONE, true);
+    TabletColumn value_column = create_with_default_value<TYPE_JSON>("");
+    map_column.add_sub_column(key_column);
+    map_column.add_sub_column(value_column);
+
+    UInt32Column::Ptr src_offsets = UInt32Column::create();
+    NullableColumn::Ptr src_keys = NullableColumn::create(Int32Column::create(), NullColumn::create());
+    src_offsets->append(0);
+    uint32_t end = 0;
+    for (uint32_t size : sizes) {
+        for (uint32_t i = 0; i < size; i++, end++) {
+            src_keys->append_datum(static_cast<int32_t>(end));
+        }
+        src_offsets->append(end);
+    }
+    ColumnPtr src_values = create_json(ab_jsons(end), true);
+    MapColumn::Ptr src = MapColumn::create(src_keys, src_values, src_offsets);
+
+    auto fs = std::make_shared<MemoryFileSystem>();
+    ASSERT_TRUE(fs->create_dir(TEST_DIR).ok());
+    const std::string fname = TEST_DIR + "/test_flat_json_in_map.data";
+
+    ColumnMetaPB map_meta;
+    {
+        ASSIGN_OR_ABORT(auto wfile, fs->new_writable_file(fname));
+        init_column_meta(&map_meta, TYPE_MAP, 0, false);
+        init_column_meta(map_meta.add_children_columns(), TYPE_INT, key_column.length(), false);
+        init_column_meta(map_meta.add_children_columns(), TYPE_JSON, 0, true);
+        ASSERT_NO_FATAL_FAILURE(write_flat_column(wfile.get(), &map_meta, map_column, *src));
+        ASSERT_OK(wfile->close());
+    }
+    // the values are stored as flat JSON
+    ASSERT_TRUE(map_meta.children_columns(1).json_meta().is_flat());
+
+    auto segment = create_dummy_segment(fs, fname);
+    segment->set_num_rows(kRows);
+    ASSIGN_OR_ABORT(auto read_file, fs->new_random_access_file(fname));
+    ASSIGN_OR_ABORT(auto reader, ColumnReader::create(&map_meta, segment.get(), nullptr));
+
+    OlapReaderStatistics stats;
+    ColumnIteratorOptions iter_opts;
+    iter_opts.stats = &stats;
+    iter_opts.read_file = read_file.get();
+    auto new_iter = [&]() {
+        ASSIGN_OR_ABORT(auto iter, reader->new_iterator());
+        EXPECT_OK(iter->init(iter_opts));
+        return iter;
+    };
+    auto new_dst = []() -> MapColumn::Ptr {
+        UInt32Column::Ptr offsets = UInt32Column::create();
+        NullableColumn::Ptr keys = NullableColumn::create(Int32Column::create(), NullColumn::create());
+        NullableColumn::Ptr values = NullableColumn::create(JsonColumn::create(), NullColumn::create());
+        return MapColumn::create(keys, values, offsets);
+    };
+
+    // a sequential read of every row: it asks for more values than the segment has rows
+    {
+        auto iter = new_iter();
+        ASSERT_OK(iter->seek_to_first());
+        auto dst = new_dst();
+        size_t n = kRows;
+        ASSERT_OK(iter->next_batch(&n, dst.get()));
+        ASSERT_EQ(kRows, dst->size());
+        for (rowid_t row = 0; row < kRows; row++) {
+            ASSERT_EQ(src->debug_item(row), dst->debug_item(row));
+        }
+    }
+    // a fetch of rows 0 and 2: the values of row 2 start before the value whose position is the segment's row count,
+    // and end after it
+    {
+        auto iter = new_iter();
+        auto dst = new_dst();
+        rowid_t rowids[] = {0, 2};
+        ASSERT_OK(iter->fetch_values_by_rowid(rowids, 2, dst.get()));
+        ASSERT_EQ(2, dst->size());
+        ASSERT_EQ(src->debug_item(0), dst->debug_item(0));
+        ASSERT_EQ(src->debug_item(2), dst->debug_item(1));
+    }
 }
 
 } // namespace starrocks

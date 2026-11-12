@@ -28,6 +28,7 @@
 #include <string>
 #include <vector>
 
+#include "column/binary_column.h"
 #include "column/column.h"
 #include "column/const_column.h"
 #include "column/json_column.h"
@@ -484,6 +485,155 @@ TEST_F(JsonFlattenerTest, testClean) {
         EXPECT_EQ(std::vector<std::string>{"fixkey"}, jf.flat_paths());
         EXPECT_EQ(std::vector<LogicalType>{TYPE_VARCHAR}, jf.flat_types());
         EXPECT_EQ(nullptr, jf.remain_fitler());
+    }
+}
+
+// JsonMerger::merge() trusts its input. A damaged flat JSON segment can hold sub-columns of different lengths or
+// string offsets that go backwards, which made merging read past the end of a column. check_input() must reject
+// columns that don't line up with an error before merge() runs. The offsets are checked by the readers, with
+// check_flat_json_columns(), and check_input() skips them.
+TEST_F(JsonFlattenerTest, testMergerCheckInput) {
+    std::vector<std::string> inputs = {
+            R"({"a": "a1", "b": "b1", "x": {"y": "y1"}})",
+            R"({"a": "a2", "b": "b2", "x": {"y": "y2"}})",
+            R"({"a": "a3", "b": "b3", "x": {"y": "y3"}})",
+            R"({"a": "a4", "b": "b4", "x": {"y": "y4"}})",
+    };
+    std::vector<std::string> paths = {"a", "b"};
+    std::vector<LogicalType> types = {TYPE_VARCHAR, TYPE_VARCHAR};
+    JsonMerger merger(paths, types, true);
+
+    // consistent input
+    {
+        auto columns = test_json(inputs, paths, types, true);
+        ASSERT_OK(merger.check_input(columns));
+    }
+    // wrong number of columns
+    {
+        auto columns = test_json(inputs, paths, types, true);
+        columns.pop_back();
+        auto st = merger.check_input(columns);
+        ASSERT_TRUE(st.is_corruption()) << st;
+    }
+    // a sub-column shorter than the first one
+    {
+        auto columns = test_json(inputs, paths, types, true);
+        columns[1]->resize(columns[1]->size() - 1);
+        auto st = merger.check_input(columns);
+        ASSERT_TRUE(st.is_corruption()) << st;
+    }
+    // the remain shorter than the sub-columns
+    {
+        auto columns = test_json(inputs, paths, types, true);
+        columns.back()->resize(columns.back()->size() - 1);
+        auto st = merger.check_input(columns);
+        ASSERT_TRUE(st.is_corruption()) << st;
+    }
+    // null flags and values of the first sub-column disagree: the check must not take the row count from it first
+    {
+        auto columns = test_json(inputs, paths, types, true);
+        down_cast<NullableColumn*>(columns[0].get())->null_column()->resize(inputs.size() - 1);
+        auto st = merger.check_input(columns);
+        ASSERT_TRUE(st.is_corruption()) << st;
+    }
+    // string offsets that go backwards
+    {
+        auto columns = test_json(inputs, paths, types, true);
+        auto* binary = down_cast<BinaryColumn*>(down_cast<NullableColumn*>(columns[1].get())->data_column().get());
+        auto& offsets = binary->get_offset();
+        std::swap(offsets[1], offsets[2]);
+        auto st = check_flat_json_columns(paths, true, columns);
+        ASSERT_TRUE(st.is_corruption()) << st;
+        ASSERT_OK(merger.check_input(columns));
+    }
+    // string offsets that end past the bytes
+    {
+        auto columns = test_json(inputs, paths, types, true);
+        auto* binary = down_cast<BinaryColumn*>(down_cast<NullableColumn*>(columns[1].get())->data_column().get());
+        binary->get_offset().back() += 1;
+        auto st = check_flat_json_columns(paths, true, columns);
+        auto merger_st = merger.check_input(columns);
+        // A debug build checks the last offset against the bytes when the column is destroyed, so put it back before
+        // any assertion can leave this block.
+        binary->get_offset().back() -= 1;
+        ASSERT_TRUE(st.is_corruption()) << st;
+        ASSERT_OK(merger_st);
+    }
+}
+
+// Path reads (JsonFlatColumnIterator) check the sub-columns they read with the same function, including layouts
+// without a remain.
+TEST_F(JsonFlattenerTest, testCheckFlatJsonColumnsWithoutRemain) {
+    std::vector<std::string> inputs = {
+            R"({"a": "a1", "b": "b1"})",
+            R"({"a": "a2", "b": "b2"})",
+            R"({"a": "a3", "b": "b3"})",
+    };
+    std::vector<std::string> paths = {"a", "b"};
+    std::vector<LogicalType> types = {TYPE_VARCHAR, TYPE_VARCHAR};
+    {
+        auto columns = test_json(inputs, paths, types, false);
+        ASSERT_OK(check_flat_json_columns(paths, false, columns));
+        // the same columns do not fit a layout with a remain
+        auto st = check_flat_json_columns(paths, true, columns);
+        ASSERT_TRUE(st.is_corruption()) << st;
+    }
+    {
+        auto columns = test_json(inputs, paths, types, false);
+        columns[0]->resize(columns[0]->size() - 1);
+        auto st = check_flat_json_columns(paths, false, columns);
+        ASSERT_TRUE(st.is_corruption()) << st;
+    }
+    // A read of one short sub-column, or of sub-columns that all stopped early, agrees with itself. Readers pass the
+    // rows they asked for, so the check still fails.
+    {
+        std::vector<std::string> one_path = {"a"};
+        std::vector<LogicalType> one_type = {TYPE_VARCHAR};
+        auto columns = test_json(inputs, one_path, one_type, false);
+        ASSERT_OK(check_flat_json_columns(one_path, false, columns, inputs.size()));
+        columns[0]->resize(columns[0]->size() - 1);
+        ASSERT_OK(check_flat_json_columns(one_path, false, columns));
+        auto st = check_flat_json_columns(one_path, false, columns, inputs.size());
+        ASSERT_TRUE(st.is_corruption()) << st;
+    }
+    {
+        auto columns = test_json(inputs, paths, types, false);
+        for (auto& column : columns) {
+            column->resize(column->size() - 1);
+        }
+        auto st = check_flat_json_columns(paths, false, columns, inputs.size());
+        ASSERT_TRUE(st.is_corruption()) << st;
+    }
+}
+
+// Compaction merges sub-columns that leave the flat layout back into the remain. A sub-column shorter than the
+// others must fail the transform with an error instead of merging past its end.
+TEST_F(JsonFlattenerTest, testCompactionTransformRejectsInconsistentInput) {
+    std::vector<std::string> inputs = {
+            R"({"a": "a1", "c": "c1", "x": 1})",
+            R"({"a": "a2", "c": "c2", "x": 2})",
+            R"({"a": "a3", "c": "c3", "x": 3})",
+    };
+    std::vector<std::string> src_paths = {"a", "c"};
+    std::vector<LogicalType> src_types = {TYPE_VARCHAR, TYPE_VARCHAR};
+
+    // "c" is not in the output layout, so compaction merges it into the remain.
+    std::vector<std::string> dst_paths = {"a", "b"};
+    std::vector<LogicalType> dst_types = {TYPE_VARCHAR, TYPE_VARCHAR};
+
+    {
+        auto src = test_json(inputs, src_paths, src_types, true);
+        HyperJsonTransformer transformer(dst_paths, dst_types, true);
+        transformer.init_compaction_task(src_paths, src_types, true);
+        ASSERT_OK(transformer.trans(src));
+    }
+    {
+        auto src = test_json(inputs, src_paths, src_types, true);
+        src[1]->resize(src[1]->size() - 1);
+        HyperJsonTransformer transformer(dst_paths, dst_types, true);
+        transformer.init_compaction_task(src_paths, src_types, true);
+        auto st = transformer.trans(src);
+        ASSERT_TRUE(st.is_corruption()) << st;
     }
 }
 
