@@ -37,8 +37,10 @@ Status MapColumnIterator::init(const ColumnIteratorOptions& opts) {
         RETURN_IF_ERROR(_nulls->init(opts));
     }
     RETURN_IF_ERROR(_offsets->init(opts));
-    RETURN_IF_ERROR(_keys->init(opts));
-    RETURN_IF_ERROR(_values->init(opts));
+    ColumnIteratorOptions element_opts = opts;
+    element_opts.is_collection_element = true;
+    RETURN_IF_ERROR(_keys->init(element_opts));
+    RETURN_IF_ERROR(_values->init(element_opts));
 
     if (_path == nullptr || _path->children().empty()) {
         _access_keys = true;
