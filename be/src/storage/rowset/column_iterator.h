@@ -80,6 +80,11 @@ struct ColumnIteratorOptions {
     ReaderType reader_type = READER_QUERY;
     int chunk_size = DEFAULT_CHUNK_SIZE;
     bool has_preaggregation = true;
+
+    // Set by the ARRAY and MAP iterators for the iterators of their elements. An element column holds one value per
+    // element, not one per segment row, and a next_batch(n) on it asks for exactly the elements that the offsets of
+    // the ARRAY or MAP give.
+    bool is_collection_element = false;
 };
 
 // Base iterator to read one column data

@@ -63,6 +63,19 @@ Status flat_json_read_error(const ColumnIteratorOptions& opts, const Status& st)
     return st.clone_and_append(fmt::format("segment: {}", file));
 }
 
+// The rows a next_batch(n) on a flat JSON column must give. The null stream and every sub-iterator stop at the end of
+// their own column and lower `n`, so a short column would shorten the reads after it too: the count has to come from
+// outside them.
+// - A JSON column that is an element of an ARRAY or MAP: exactly `n`, the elements that the offsets of the ARRAY or
+//   MAP give. `num_rows` and `ordinal` cannot be compared here: one counts segment rows, the other elements.
+// - Any other JSON column has one value per segment row, and a read may ask for more rows than the segment has left.
+size_t json_rows_to_read(const ColumnIteratorOptions& opts, size_t n, ordinal_t num_rows, ordinal_t ordinal) {
+    if (opts.is_collection_element) {
+        return n;
+    }
+    return std::min<size_t>(n, num_rows - ordinal);
+}
+
 // Read the segment's null stream into the output null column via `read_nulls`.
 // The segment's stored nullability and the output column's nullability can
 // legitimately differ after fast schema evolution, so mismatches must not crash:
@@ -267,9 +280,7 @@ Status JsonFlatColumnIterator::_read(JsonColumn* json_column, size_t rows, FUNC 
 
 Status JsonFlatColumnIterator::next_batch(size_t* n, Column* dst) {
     auto [json_column, null_column] = extract_json_output(dst);
-    // The null stream and every sub-iterator stop at the end of their own column and lower `n`, so a short column
-    // would shorten the reads after it too. Check against the rows left in the segment instead.
-    const size_t rows = std::min<size_t>(*n, num_rows() - get_current_ordinal());
+    const size_t rows = json_rows_to_read(_opts, *n, num_rows(), get_current_ordinal());
 
     // 1. Read null column
     RETURN_IF_ERROR(read_json_null_stream(_opts, dst, null_column, _null_iter.get(), rows,
@@ -588,9 +599,7 @@ Status JsonMergeIterator::_merge(JsonColumn* dst, size_t rows, FUNC func) {
 
 Status JsonMergeIterator::next_batch(size_t* n, Column* dst) {
     auto [json_column, null_column] = extract_json_output(dst);
-    // The null stream and every sub-iterator stop at the end of their own column and lower `n`, so a short column
-    // would shorten the reads after it too. Check against the rows left in the segment instead.
-    const size_t rows = std::min<size_t>(*n, num_rows() - get_current_ordinal());
+    const size_t rows = json_rows_to_read(_opts, *n, num_rows(), get_current_ordinal());
 
     // 1. Read null column
     RETURN_IF_ERROR(read_json_null_stream(_opts, dst, null_column, _null_iter.get(), rows,

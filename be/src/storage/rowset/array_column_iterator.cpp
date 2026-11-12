@@ -36,7 +36,9 @@ Status ArrayColumnIterator::init(const ColumnIteratorOptions& opts) {
         RETURN_IF_ERROR(_null_iterator->init(opts));
     }
     RETURN_IF_ERROR(_array_size_iterator->init(opts));
-    RETURN_IF_ERROR(_element_iterator->init(opts));
+    ColumnIteratorOptions element_opts = opts;
+    element_opts.is_collection_element = true;
+    RETURN_IF_ERROR(_element_iterator->init(element_opts));
 
     // only offset
     if (_path != nullptr && _path->children().size() == 1 && _path->children()[0]->is_offset()) {
