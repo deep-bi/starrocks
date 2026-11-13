@@ -18,7 +18,13 @@
 
 #include "column/datum_tuple.h"
 #include "exec/exec_node.h"
+#include "exec/pipeline/pipeline_metrics.h"
+#include "exec/pipeline/query_context.h"
+#include "exec/pipeline/scan/chunk_buffer_limiter.h"
+#include "exec/pipeline/scan/connector_scan_operator.h"
 #include "exec/pipeline/scan/morsel.h"
+#include "exec/workgroup/scan_executor.h"
+#include "exec/workgroup/scan_task_queue.h"
 #include "gen_cpp/PlanNodes_types.h"
 #include "runtime/descriptor_helper.h"
 #include "runtime/exec_env.h"
@@ -26,6 +32,8 @@
 #include "runtime/stream_load/load_stream_mgr.h"
 #include "runtime/stream_load/stream_load_pipe.h"
 #include "testutil/assert.h"
+#include "util/defer_op.h"
+#include "util/threadpool.h"
 
 namespace starrocks {
 
@@ -563,6 +571,163 @@ TEST_F(ConnectorScanNodeTest, test_exec_factory_mysql_scan_node) {
     ASSERT_NE(nullptr, root);
     auto* scan = static_cast<ConnectorScanNode*>(root);
     ASSERT_EQ("mysql", scan->catalog_type());
+}
+
+// These controls exercise registration boundaries with prepared operators and empty real queues.
+class ConnectorInputScopeTest : public ConnectorScanNodeTest {
+protected:
+    void init(bool shared_output = false, bool shared_queue = false, bool random_split = false) {
+        TQueryOptions options;
+        options.__set_connector_io_tasks_per_scan_operator(2);
+        state = create_runtime_state(options);
+        query = std::make_shared<pipeline::QueryContext>();
+        _mem_tracker = std::make_shared<MemTracker>(2L << 30, "connector input scope parent");
+        query->init_mem_tracker(1L << 30, _mem_tracker.get());
+        query->extend_query_lifetime();
+        state->set_query_ctx(query.get());
+        auto* desc = create_table_desc(state.get(), {TypeDescriptor(TYPE_BIGINT)});
+        auto plan = create_tplan_node_cloud();
+        node = std::make_shared<ConnectorScanNode>(state->obj_pool(), *plan, *desc);
+        ASSERT_OK(node->init(*plan, state.get()));
+        node->enable_shared_scan(shared_output); // Buffer routing is fixed by the factory constructor.
+        if (shared_queue) {
+            queues = std::make_unique<pipeline::SharedMorselQueueFactory>(
+                    std::make_unique<pipeline::DynamicMorselQueue>(pipeline::Morsels{}, false), 2);
+        } else {
+            std::map<int, pipeline::MorselQueuePtr> individual_queues;
+            for (int driver = 0; driver < 2; ++driver) {
+                individual_queues[driver] = std::make_unique<pipeline::DynamicMorselQueue>(pipeline::Morsels{}, false);
+            }
+            queues = std::make_unique<pipeline::IndividualMorselQueueFactory>(std::move(individual_queues),
+                                                                              random_split, random_split);
+        }
+        factory = std::make_shared<pipeline::ConnectorScanOperatorFactory>(
+                1, node.get(), state.get(), 2,
+                std::make_unique<pipeline::DynamicChunkBufferLimiter>(64, 64, 1L << 26, 1));
+        factory->set_morsel_queue_factory(queues.get());
+        factory->set_degree_of_parallelism(2);
+        auto* arb = query->connector_scan_operator_mem_share_arbitrator();
+        factory->set_mem_share_arb(arb);
+        factory->set_scan_mem_limit(arb->scan_mem_limit);
+        factory->set_data_source_mem_bytes(connector::DataSourceProvider::MIN_DATA_SOURCE_MEM_BYTES);
+        factory->set_chunk_source_mem_bytes(connector::DataSourceProvider::MIN_DATA_SOURCE_MEM_BYTES);
+        ASSERT_OK(factory->prepare(state.get()));
+        std::unique_ptr<ThreadPool> pool;
+        ASSERT_OK(ThreadPoolBuilder("connector_input_scope").set_min_threads(0).set_max_threads(1).build(&pool));
+        executor = std::make_unique<workgroup::ScanExecutor>(
+                std::move(pool), std::make_unique<workgroup::PriorityScanTaskQueue>(100), &metrics);
+        executor->initialize(1);
+        op = std::static_pointer_cast<pipeline::ConnectorScanOperator>(factory->create(2, 1));
+        op->add_morsel_queue(queues->create(1));
+        op->set_scan_executor(executor.get());
+        op->set_query_ctx(query);
+        ASSERT_OK(op->prepare(state.get()));
+        ASSERT_TRUE(queues->create(1)->empty());
+        ASSERT_FALSE(queues->create(1)->has_more());
+        ASSERT_EQ(0, op->_num_running_io_tasks.load());
+        ASSERT_TRUE(op->_get_scan_status().ok());
+        ASSERT_TRUE(factory->get_chunk_buffer().empty(1));
+        ASSERT_TRUE(op->is_finished());
+    }
+    void TearDown() override {
+        if (executor != nullptr) executor->close();
+        if (op != nullptr) {
+            ASSERT_OK(op->set_finishing(state.get()));
+            op->close(state.get());
+        }
+        op.reset();
+        if (factory != nullptr) {
+            EXPECT_TRUE(factory->get_active_inputs().empty());
+            factory->close(state.get());
+        }
+        if (query != nullptr) {
+            EXPECT_EQ(0, query->connector_scan_mem_tracker()->consumption());
+            EXPECT_EQ(0, query->mem_tracker()->consumption());
+        }
+        factory.reset();
+        queues.reset();
+        ConnectorScanNodeTest::TearDown();
+    }
+    void check_foreign_source() {
+        factory->attach_shared_input(0, 0);
+        {
+            DeferOp detach([&] { factory->detach_shared_input(0, 0); });
+            EXPECT_FALSE(op->is_finished());
+        }
+        EXPECT_TRUE(op->is_finished());
+    }
+
+    std::shared_ptr<RuntimeState> state;
+    pipeline::QueryContextPtr query;
+    std::shared_ptr<ConnectorScanNode> node;
+    pipeline::MorselQueueFactoryPtr queues;
+    std::shared_ptr<pipeline::ConnectorScanOperatorFactory> factory;
+    pipeline::ScanExecutorMetrics metrics;
+    std::unique_ptr<workgroup::ScanExecutor> executor;
+    std::shared_ptr<pipeline::ConnectorScanOperator> op;
+};
+
+// A driver whose own queue is empty (more drivers than tablets) must finish while another
+// driver's reader is still registered: nothing that reader produces can reach this operator.
+TEST_F(ConnectorInputScopeTest, EmptyIndividualQueueDoesNotWaitForForeignSource) {
+    init();
+    ASSERT_FALSE(HasFatalFailure());
+    factory->attach_shared_input(0, 0);
+    DeferOp detach([&] { factory->detach_shared_input(0, 0); });
+    EXPECT_TRUE(op->is_finished());
+}
+
+TEST_F(ConnectorInputScopeTest, OwnRegisteredSourcePreventsEos) {
+    init();
+    ASSERT_FALSE(HasFatalFailure());
+    const int last_slot = node->io_tasks_per_scan_operator() - 1;
+    factory->attach_shared_input(1, last_slot);
+    {
+        DeferOp detach([&] { factory->detach_shared_input(1, last_slot); });
+        EXPECT_FALSE(op->is_finished());
+    }
+    EXPECT_TRUE(op->is_finished());
+}
+
+TEST_F(ConnectorInputScopeTest, DirectOutputSharedQueueWaitsForForeignSource) {
+    init(false, true);
+    ASSERT_FALSE(HasFatalFailure());
+    check_foreign_source();
+}
+
+TEST_F(ConnectorInputScopeTest, SharedOutputWaitsForForeignSource) {
+    init(true, true);
+    ASSERT_FALSE(HasFatalFailure());
+    check_foreign_source();
+}
+
+TEST_F(ConnectorInputScopeTest, RandomSplitRoutingWaitsForForeignSource) {
+    init(false, false, true);
+    ASSERT_FALSE(HasFatalFailure());
+    check_foreign_source();
+}
+
+TEST_F(ConnectorInputScopeTest, UnknownQueueFactoryWaitsForForeignSource) {
+    init();
+    ASSERT_FALSE(HasFatalFailure());
+    factory->set_morsel_queue_factory(nullptr);
+    DeferOp restore([&] { factory->set_morsel_queue_factory(queues.get()); });
+    check_foreign_source();
+}
+
+TEST_F(ConnectorInputScopeTest, EmptyFinalChunkPreventsEos) {
+    init();
+    ASSERT_FALSE(HasFatalFailure());
+    auto final_chunk = std::make_shared<Chunk>();
+    final_chunk->owner_info().set_owner_id(77, true);
+    ASSERT_TRUE(factory->get_chunk_buffer().put(1, final_chunk, nullptr));
+    EXPECT_FALSE(op->is_finished());
+    auto result = op->pull_chunk(state.get());
+    ASSERT_TRUE(result.ok()) << result.status();
+    ASSERT_NE(nullptr, result.value());
+    EXPECT_TRUE(result.value()->is_empty());
+    EXPECT_TRUE(result.value()->owner_info().is_last_chunk());
+    EXPECT_TRUE(op->is_finished());
 }
 
 } // namespace starrocks
