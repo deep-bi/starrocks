@@ -201,7 +201,7 @@ This topic introduces the following types of BE configurations:
 - Type: Boolean
 - Unit: -
 - Is mutable: No
-- Description: When this item is set to `true`, the BE HTTP server on `be_http_port` serves HTTPS only, with TLS 1.2 or later. It uses the certificate and private key specified by `ssl_certificate_path` and `ssl_private_key_path`. Plain HTTP connections to this port are refused, and the BE fails to start if the certificate or key cannot be loaded. This item is independent of `enable_https`, which applies to `brpc_port` only. Clients of `be_http_port` must use `https`, including Stream Load clients and metrics scrapers. Internal callers that build `http` URLs to this port do not switch to `https`: tablet clone and replication between BEs, the FE's Stream Load redirect, and load error log links.
+- Description: When this item is set to `true`, the BE HTTP server on `be_http_port` serves HTTPS only, with TLS 1.2 or later. It uses the certificate and private key specified by `ssl_certificate_path` and `ssl_private_key_path`. Plain HTTP connections to this port are refused, and the BE fails to start if the certificate or key cannot be loaded. This item is independent of `enable_https`, which applies to `brpc_port` only. Clients of `be_http_port` must use `https`, including Stream Load clients and metrics scrapers. Set the FE item `be_https_enabled` to `true` as well, so that the FE redirects Stream Load requests to `https`. Internal callers that build `http` URLs to this port do not switch to `https`: tablet clone and replication between BEs, and load error log links.
 - Introduced in: -
 
 ### be_port

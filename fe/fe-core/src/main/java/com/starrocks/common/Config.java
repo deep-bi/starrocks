@@ -831,6 +831,14 @@ public class Config extends ConfigBase {
     public static boolean enable_https = false;
 
     /**
+     * Whether BEs and CNs serve their HTTP port over TLS (BE config be_http_ssl_enable).
+     * It must match be_http_ssl_enable, which must be the same on all BEs and CNs.
+     */
+    @ConfField(comment = "Set to true when BEs and CNs serve their HTTP port over TLS (be_http_ssl_enable = true). " +
+            "FE then redirects Stream Load, batch write and transaction load requests to https://<backend>.")
+    public static boolean be_https_enabled = false;
+
+    /**
      *  Property to whitelist ssl cipher suites, comma separated list, with regex support.
      *  If both whitelist and blacklist are set, blacklist takes precedence.
      *  The alias keeps fe.conf files from the 3.5 deepbi releases working.

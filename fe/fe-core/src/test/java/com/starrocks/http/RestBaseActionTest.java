@@ -20,6 +20,7 @@ import com.starrocks.common.Pair;
 import com.starrocks.ha.FrontendNodeType;
 import com.starrocks.http.rest.RestBaseAction;
 import com.starrocks.server.GlobalStateMgr;
+import com.starrocks.server.NodeMgr;
 import com.starrocks.system.Frontend;
 import com.starrocks.thrift.TNetworkAddress;
 import io.netty.channel.ChannelHandlerContext;
@@ -39,8 +40,10 @@ import org.junit.jupiter.api.Test;
 import java.net.URI;
 import java.util.List;
 
+import static org.mockito.Mockito.anyString;
 import static org.mockito.Mockito.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -95,6 +98,58 @@ public class RestBaseActionTest {
 
         restBaseAction.redirectTo(mockRequest, mockResponse, mockAddr);
         verify(mockResponse).updateHeader(HttpHeaderNames.LOCATION.toString(), asciiUri);
+    }
+
+    @Test
+    public void testRedirectToUsesHttpsWhenBackendsServeTls() throws Exception {
+        URI expectedUri = new URI("https", null, "127.0.0.1", 8030, "/api/mydb/testStreamLoad测试/_stream_load", null, null);
+
+        boolean original = Config.be_https_enabled;
+        Config.be_https_enabled = true;
+        try {
+            restBaseAction.redirectTo(mockRequest, mockResponse, mockAddr);
+        } finally {
+            Config.be_https_enabled = original;
+        }
+        verify(mockResponse).updateHeader(HttpHeaderNames.LOCATION.toString(), expectedUri.toASCIIString());
+    }
+
+    @Test
+    public void testRedirectToLeaderDoesNotFollowBeHttpsEnabled() throws Exception {
+        mockLeader(false);
+        URI expectedUri = new URI("http", null, "10.0.0.1", 8030, "/api/mydb/testStreamLoad测试/_stream_load", null, null);
+
+        boolean original = Config.be_https_enabled;
+        Config.be_https_enabled = true;
+        try {
+            Assertions.assertTrue(restBaseAction.redirectToLeader(mockRequest, mockResponse));
+        } finally {
+            Config.be_https_enabled = original;
+        }
+        verify(mockResponse).updateHeader(HttpHeaderNames.LOCATION.toString(), expectedUri.toASCIIString());
+    }
+
+    @Test
+    public void testRedirectToLeaderOnLeader() throws Exception {
+        mockLeader(true);
+
+        Assertions.assertFalse(restBaseAction.redirectToLeader(mockRequest, mockResponse));
+        verify(mockResponse, never()).updateHeader(anyString(), anyString());
+    }
+
+    private static void mockLeader(boolean isLeader) {
+        new MockUp<GlobalStateMgr>() {
+            @Mock
+            public boolean isLeader() {
+                return isLeader;
+            }
+        };
+        new MockUp<NodeMgr>() {
+            @Mock
+            public Pair<String, Integer> getLeaderIpAndHttpPort() {
+                return new Pair<>("10.0.0.1", 8030);
+            }
+        };
     }
 
 

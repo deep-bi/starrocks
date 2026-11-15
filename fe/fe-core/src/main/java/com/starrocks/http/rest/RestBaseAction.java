@@ -242,15 +242,23 @@ public class RestBaseAction extends BaseAction {
         sendResult(request, response);
     }
 
+    /**
+     * Redirects the client to a backend (BE or CN). The scheme follows {@link Config#be_https_enabled},
+     * because a backend serves its HTTP port either in plain text or over TLS, never both.
+     */
     public void redirectTo(BaseRequest request, BaseResponse response, TNetworkAddress addr)
+            throws DdlException {
+        redirect(request, response, Config.be_https_enabled ? "https" : "http", addr.getHostname(), addr.getPort());
+    }
+
+    private void redirect(BaseRequest request, BaseResponse response, String scheme, String host, int port)
             throws DdlException {
         String urlStr = request.getRequest().uri();
         URI urlObj;
         URI resultUriObj;
         try {
             urlObj = new URI(urlStr);
-            resultUriObj = new URI("http", null, addr.getHostname(),
-                    addr.getPort(), urlObj.getPath(), urlObj.getQuery(), null);
+            resultUriObj = new URI(scheme, null, host, port, urlObj.getPath(), urlObj.getQuery(), null);
         } catch (URISyntaxException e) {
             LOG.warn(e.getMessage(), e);
             throw new DdlException(e.getMessage());
@@ -265,8 +273,8 @@ public class RestBaseAction extends BaseAction {
             return false;
         }
         Pair<String, Integer> leaderIpAndPort = globalStateMgr.getNodeMgr().getLeaderIpAndHttpPort();
-        redirectTo(request, response,
-                new TNetworkAddress(leaderIpAndPort.first, leaderIpAndPort.second));
+        // The leader's port is its plain HTTP port, so the scheme does not follow be_https_enabled.
+        redirect(request, response, "http", leaderIpAndPort.first, leaderIpAndPort.second);
         return true;
     }
 
