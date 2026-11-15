@@ -38,12 +38,14 @@ import com.google.common.base.Strings;
 import com.google.common.collect.Maps;
 import com.starrocks.common.DdlException;
 import io.netty.channel.ChannelHandlerContext;
+import io.netty.channel.ChannelPipeline;
 import io.netty.handler.codec.http.FullHttpRequest;
 import io.netty.handler.codec.http.HttpHeaderNames;
 import io.netty.handler.codec.http.HttpRequest;
 import io.netty.handler.codec.http.QueryStringDecoder;
 import io.netty.handler.codec.http.cookie.ClientCookieDecoder;
 import io.netty.handler.codec.http.cookie.Cookie;
+import io.netty.handler.ssl.SslHandler;
 
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
@@ -70,6 +72,15 @@ public class BaseRequest {
 
     public void setContext(ChannelHandlerContext context) {
         this.context = context;
+    }
+
+    /**
+     * Whether the request arrived over TLS, that is, on the HTTPS listener. Only that listener
+     * puts an {@link SslHandler} into the channel pipeline.
+     */
+    public boolean isSecure() {
+        ChannelPipeline pipeline = context == null ? null : context.pipeline();
+        return pipeline != null && pipeline.get(SslHandler.class) != null;
     }
 
     public HttpRequest getRequest() {

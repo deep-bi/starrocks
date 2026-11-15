@@ -130,6 +130,37 @@ public class RestBaseActionTest {
     }
 
     @Test
+    public void testRedirectToLeaderKeepsHttpsForTlsClient() throws Exception {
+        mockLeader(false);
+        when(mockRequest.isSecure()).thenReturn(true);
+        URI expectedUri = new URI("https", null, "10.0.0.1", 8444, "/api/mydb/testStreamLoad测试/_stream_load", null, null);
+
+        int original = Config.https_port;
+        Config.https_port = 8444;
+        try {
+            Assertions.assertTrue(restBaseAction.redirectToLeader(mockRequest, mockResponse));
+        } finally {
+            Config.https_port = original;
+        }
+        verify(mockResponse).updateHeader(HttpHeaderNames.LOCATION.toString(), expectedUri.toASCIIString());
+    }
+
+    @Test
+    public void testRedirectToLeaderKeepsHttpForPlainClientWhenHttpsIsEnabled() throws Exception {
+        mockLeader(false);
+        URI expectedUri = new URI("http", null, "10.0.0.1", 8030, "/api/mydb/testStreamLoad测试/_stream_load", null, null);
+
+        boolean original = Config.enable_https;
+        Config.enable_https = true;
+        try {
+            Assertions.assertTrue(restBaseAction.redirectToLeader(mockRequest, mockResponse));
+        } finally {
+            Config.enable_https = original;
+        }
+        verify(mockResponse).updateHeader(HttpHeaderNames.LOCATION.toString(), expectedUri.toASCIIString());
+    }
+
+    @Test
     public void testRedirectToLeaderOnLeader() throws Exception {
         mockLeader(true);
 
