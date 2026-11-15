@@ -69,7 +69,9 @@ import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.util.ArrayList;
 import java.util.Collections;
+import java.util.List;
 
 public class HeartbeatMgrTest {
 
@@ -104,6 +106,35 @@ public class HeartbeatMgrTest {
                 result = Pair.create("192.168.1.3", 9010); // not self
             }
         };
+    }
+
+    @Test
+    public void testFrontendHbHandlerUsesTheOpenListener() {
+        List<String> urls = new ArrayList<>();
+        new MockUp<Util>() {
+            @Mock
+            public String getResultForUrl(String urlStr, String encodedAuthInfo, int connectTimeoutMs,
+                                          int readTimeoutMs) {
+                urls.add(urlStr);
+                return "{\"replayedJournalId\":0,\"queryPort\":0,\"rpcPort\":0,\"status\":\"FAILED\",\"msg\":\"not ready\"}";
+            }
+        };
+        Frontend fe = new Frontend(FrontendNodeType.FOLLOWER, "test", "192.168.1.1", 9010);
+        FrontendHeartbeatHandler handler = new FrontendHeartbeatHandler(fe, 12345, "abcd");
+
+        boolean originalEnableHttp = Config.enable_http;
+        try {
+            Config.enable_http = true;
+            handler.call();
+            Config.enable_http = false;
+            handler.call();
+        } finally {
+            Config.enable_http = originalEnableHttp;
+        }
+
+        Assertions.assertEquals(List.of(
+                "http://192.168.1.1:" + Config.http_port + "/api/bootstrap?cluster_id=12345&token=abcd",
+                "https://192.168.1.1:" + Config.https_port + "/api/bootstrap?cluster_id=12345&token=abcd"), urls);
     }
 
     @Test

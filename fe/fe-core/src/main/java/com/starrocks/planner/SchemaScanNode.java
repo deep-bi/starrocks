@@ -39,8 +39,8 @@ import com.google.common.collect.Lists;
 import com.starrocks.analysis.TupleDescriptor;
 import com.starrocks.authentication.UserIdentityUtils;
 import com.starrocks.catalog.system.SystemTable;
-import com.starrocks.common.Config;
 import com.starrocks.common.StarRocksException;
+import com.starrocks.http.FrontendHttpEndpoint;
 import com.starrocks.qe.ConnectContext;
 import com.starrocks.server.GlobalStateMgr;
 import com.starrocks.server.RunMode;
@@ -334,7 +334,7 @@ public class SchemaScanNode extends ScanNode {
             TFrontend feInfo = new TFrontend();
             feInfo.setId(fe.getNodeName());
             feInfo.setIp(fe.getHost());
-            feInfo.setHttp_port(Config.http_port);
+            feInfo.setHttp_port(FrontendHttpEndpoint.getAnnouncedPort());
             frontends.add(feInfo);
         }
     }

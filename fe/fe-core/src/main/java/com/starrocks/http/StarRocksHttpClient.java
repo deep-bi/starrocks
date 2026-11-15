@@ -32,10 +32,14 @@ import io.netty.handler.codec.http.HttpRequest;
 import io.netty.handler.codec.http.HttpResponse;
 import io.netty.handler.codec.http.HttpResponseStatus;
 import io.netty.handler.codec.http.LastHttpContent;
+import io.netty.handler.ssl.SslHandler;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import java.nio.charset.StandardCharsets;
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.SSLEngine;
+import javax.net.ssl.SSLParameters;
 
 public class StarRocksHttpClient extends SimpleChannelInboundHandler<HttpObject> {
     private static final Logger LOG = LogManager.getLogger(StarRocksHttpClient.class);
@@ -93,6 +97,16 @@ public class StarRocksHttpClient extends SimpleChannelInboundHandler<HttpObject>
     }
 
     public static String redirect(String host, int port, HttpRequest request) {
+        return redirect(host, port, false, request);
+    }
+
+    /**
+     * Sends the request to another FE and returns the response body.
+     *
+     * @param useTls whether the target port serves HTTPS. The server certificate is then checked against
+     *               the JVM default trust store, and its host name against {@code host}.
+     */
+    public static String redirect(String host, int port, boolean useTls, HttpRequest request) {
         Preconditions.checkNotNull(request);
         StringBuilder responseContent = new StringBuilder();
         try {
@@ -102,7 +116,10 @@ public class StarRocksHttpClient extends SimpleChannelInboundHandler<HttpObject>
                     .channel(NioSocketChannel.class)
                     .handler(new ChannelInitializer<>() {
                         @Override
-                        protected void initChannel(Channel ch) {
+                        protected void initChannel(Channel ch) throws Exception {
+                            if (useTls) {
+                                ch.pipeline().addLast(newTlsHandler(host, port));
+                            }
                             ch.pipeline().addLast(new HttpClientCodec())
                                     .addLast(new HttpObjectAggregator(8192))
                                     .addLast(client);
@@ -115,5 +132,15 @@ public class StarRocksHttpClient extends SimpleChannelInboundHandler<HttpObject>
             responseContent.append(e.getMessage());
         }
         return responseContent.toString();
+    }
+
+    private static SslHandler newTlsHandler(String host, int port) throws Exception {
+        SSLEngine engine = SSLContext.getDefault().createSSLEngine(host, port);
+        engine.setUseClientMode(true);
+        // An SSLEngine does not check the server's host name unless it is told to.
+        SSLParameters parameters = engine.getSSLParameters();
+        parameters.setEndpointIdentificationAlgorithm("HTTPS");
+        engine.setSSLParameters(parameters);
+        return new SslHandler(engine);
     }
 }

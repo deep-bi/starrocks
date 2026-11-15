@@ -51,6 +51,7 @@ import com.starrocks.http.ActionController;
 import com.starrocks.http.BaseAction;
 import com.starrocks.http.BaseRequest;
 import com.starrocks.http.BaseResponse;
+import com.starrocks.http.FrontendHttpEndpoint;
 import com.starrocks.http.HttpConnectContext;
 import com.starrocks.http.HttpUtils;
 import com.starrocks.http.WebUtils;
@@ -362,7 +363,8 @@ public class RestBaseAction extends BaseAction {
                 .put(HttpHeaders.AUTHORIZATION, authorization).build();
         List<String> result = Lists.newArrayList();
         for (Pair<String, Integer> front : frontends) {
-            String url = String.format("http://%s:%d%s", front.first, front.second, queryPath);
+            String url = String.format("%s://%s:%d%s", FrontendHttpEndpoint.getScheme(), front.first, front.second,
+                    queryPath);
             try {
                 String data = null;
                 if (method == HttpMethod.GET) {
@@ -393,7 +395,7 @@ public class RestBaseAction extends BaseAction {
                     .getAllFrontends()
                     .stream()
                     .filter(Frontend::isAlive)
-                    .map(fe -> new Pair<>(fe.getHost(), Config.http_port))
+                    .map(fe -> new Pair<>(fe.getHost(), FrontendHttpEndpoint.getPort()))
                     .collect(Collectors.toList());
         }
     }

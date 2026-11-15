@@ -41,6 +41,7 @@ import com.starrocks.common.Pair;
 import com.starrocks.common.util.NetUtils;
 import com.starrocks.common.util.TimeUtils;
 import com.starrocks.ha.FrontendNodeType;
+import com.starrocks.http.FrontendHttpEndpoint;
 import com.starrocks.server.GlobalStateMgr;
 import com.starrocks.system.Frontend;
 import org.apache.commons.validator.routines.InetAddressValidator;
@@ -108,7 +109,7 @@ public class FrontendsProcNode implements ProcNodeInterface {
             info.add(fe.getHost());
 
             info.add(Integer.toString(fe.getEditLogPort()));
-            info.add(Integer.toString(Config.http_port));
+            info.add(Integer.toString(FrontendHttpEndpoint.getAnnouncedPort()));
 
             if (fe.getHost().equals(globalStateMgr.getNodeMgr().getSelfNode().first)) {
                 info.add(Integer.toString(Config.query_port));

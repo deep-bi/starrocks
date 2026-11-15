@@ -49,6 +49,7 @@ import com.starrocks.ha.BDBHA;
 import com.starrocks.ha.FrontendNodeType;
 import com.starrocks.ha.HAProtocol;
 import com.starrocks.ha.LeaderInfo;
+import com.starrocks.http.FrontendHttpEndpoint;
 import com.starrocks.http.meta.MetaBaseAction;
 import com.starrocks.leader.MetaHelper;
 import com.starrocks.persist.ImageWriter;
@@ -439,8 +440,7 @@ public class NodeMgr {
                     isVersionFileChanged = true;
                 }
                 try {
-                    URL idURL = new URL("http://" + NetUtils.getHostPortInAccessibleFormat(
-                            rightHelperNode.first, Config.http_port) + "/check");
+                    URL idURL = new URL(FrontendHttpEndpoint.getUrlPrefix(rightHelperNode.first) + "/check");
                     HttpURLConnection conn = null;
                     conn = (HttpURLConnection) idURL.openConnection();
                     conn.setConnectTimeout(2 * 1000);
@@ -521,10 +521,9 @@ public class NodeMgr {
         Pair<String, Integer> rightHelperNode = null;
         for (Pair<String, Integer> helperNode : helperNodes) {
             try {
-                String accessibleHostPort = NetUtils.getHostPortInAccessibleFormat(helperNode.first, Config.http_port);
                 String encodedAddress = URLEncoder.encode(selfNode.first,
                         StandardCharsets.UTF_8.toString());
-                URL url = new URL("http://" + accessibleHostPort + "/role?host=" + encodedAddress +
+                URL url = new URL(FrontendHttpEndpoint.getUrlPrefix(helperNode.first) + "/role?host=" + encodedAddress +
                         "&port=" + selfNode.second);
                 HttpURLConnection conn = null;
                 conn = (HttpURLConnection) url.openConnection();
@@ -559,7 +558,8 @@ public class NodeMgr {
                 continue;
             }
 
-            LOG.info("get fe node type {}, name {} from {}:{}", role, nodeName, helperNode.first, Config.http_port);
+            LOG.info("get fe node type {}, name {} from {}:{}", role, nodeName, helperNode.first,
+                    FrontendHttpEndpoint.getPort());
             rightHelperNode = helperNode;
             break;
         }
@@ -688,8 +688,7 @@ public class NodeMgr {
     }
 
     private boolean getVersionFileFromHelper(Pair<String, Integer> helperNode) throws IOException {
-        String url = "http://" + NetUtils.getHostPortInAccessibleFormat(
-                helperNode.first, Config.http_port) + "/version";
+        String url = FrontendHttpEndpoint.getUrlPrefix(helperNode.first) + "/version";
         LOG.info("Downloading version file from {}", url);
         try {
             File dir = new File(GlobalStateMgr.getImageDirPath());
@@ -713,12 +712,12 @@ public class NodeMgr {
         Storage storage = new Storage(imageFileDir);
         long localImageJournalId = storage.getImageJournalId();
 
-        String accessibleHostPort = NetUtils.getHostPortInAccessibleFormat(helperNode.first, Config.http_port);
-        URL infoUrl = new URL("http://" + accessibleHostPort + "/info?subdir=" + subDir);
+        String urlPrefix = FrontendHttpEndpoint.getUrlPrefix(helperNode.first);
+        URL infoUrl = new URL(urlPrefix + "/info?subdir=" + subDir);
         StorageInfo remoteStorageInfo = getStorageInfo(infoUrl);
         long remoteImageJournalId = remoteStorageInfo.getImageJournalId();
         if (remoteImageJournalId > localImageJournalId) {
-            String url = "http://" + accessibleHostPort + "/image?"
+            String url = urlPrefix + "/image?"
                     + "version=" + remoteImageJournalId
                     + "&subdir=" + subDir
                     + "&image_format_version=" + remoteStorageInfo.getImageFormatVersion();
