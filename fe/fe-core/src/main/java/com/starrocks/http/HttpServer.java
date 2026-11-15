@@ -171,13 +171,19 @@ public class HttpServer {
         return port;
     }
 
+    public boolean isHttps() {
+        return enableHttps;
+    }
+
     public void setup() throws IllegalArgException {
         registerActions();
         GlobalStateMgr.getCurrentState().getConfigRefreshDaemon().registerListener(() ->
                 ThreadPoolManager.setCacheThreadPoolSize(asyncExecutor, Config.http_async_threads_num));
         try {
-            if (enableHttps) {
-                HttpSSLContextLoader.getSslContext();
+            if (enableHttps && HttpSSLContextLoader.getSslContext() == null) {
+                // Without a TLS context the listener would serve plain HTTP on the HTTPS port.
+                throw new IllegalStateException("no keystore is configured: enable_https must be true and "
+                        + "ssl_keystore_location must be set");
             }
         } catch (Exception e) {
             throw new IllegalArgException("Failed to create SSL context. Please check your " +

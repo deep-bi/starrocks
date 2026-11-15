@@ -14,6 +14,7 @@
 
 package com.starrocks.http;
 
+import com.google.common.base.Strings;
 import com.starrocks.common.Config;
 import com.starrocks.common.util.NetUtils;
 
@@ -29,6 +30,24 @@ public final class FrontendHttpEndpoint {
     private static final String HTTPS = "https";
 
     private FrontendHttpEndpoint() {
+    }
+
+    /**
+     * Checks the listener settings when the FE starts.
+     *
+     * @throws IllegalArgumentException if the FE would serve no HTTP listener at all, or would serve
+     *                                  the HTTPS port without a keystore, that is, in plain text
+     */
+    public static void checkConfig() {
+        if (!Config.enable_http && !Config.enable_https) {
+            throw new IllegalArgumentException("enable_http and enable_https are both false. The FE needs at least "
+                    + "one HTTP listener: set enable_http = true, or set enable_https = true and configure a keystore.");
+        }
+        if (Config.enable_https && Strings.isNullOrEmpty(Config.ssl_keystore_location)) {
+            throw new IllegalArgumentException("enable_https is true but ssl_keystore_location is not set. "
+                    + "Configure ssl_keystore_location, ssl_keystore_password and ssl_key_password, "
+                    + "or set enable_https = false.");
+        }
     }
 
     /**
