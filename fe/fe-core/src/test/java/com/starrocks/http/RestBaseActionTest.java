@@ -257,6 +257,16 @@ public class RestBaseActionTest {
         Assertions.assertEquals(1, result.size());
         Assertions.assertEquals(frontend.getHost(), result.get(0).first);
         Assertions.assertEquals(Config.http_port, result.get(0).second);
+
+        // With the plain listener off, the other FEs are reached on the HTTPS listener.
+        boolean original = Config.enable_http;
+        Config.enable_http = false;
+        try {
+            result = restBaseAction.getAllAliveFe();
+        } finally {
+            Config.enable_http = original;
+        }
+        Assertions.assertEquals(Config.https_port, result.get(0).second);
     }
 
 }

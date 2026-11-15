@@ -28,28 +28,21 @@ import org.apache.http.config.Registry;
 import org.apache.http.config.RegistryBuilder;
 import org.apache.http.conn.socket.ConnectionSocketFactory;
 import org.apache.http.conn.socket.PlainConnectionSocketFactory;
-import org.apache.http.conn.ssl.NoopHostnameVerifier;
 import org.apache.http.conn.ssl.SSLConnectionSocketFactory;
-import org.apache.http.conn.ssl.TrustSelfSignedStrategy;
 import org.apache.http.entity.AbstractHttpEntity;
 import org.apache.http.impl.client.CloseableHttpClient;
 import org.apache.http.impl.client.DefaultHttpRequestRetryHandler;
 import org.apache.http.impl.client.HttpClients;
 import org.apache.http.impl.conn.PoolingHttpClientConnectionManager;
-import org.apache.http.ssl.SSLContextBuilder;
 import org.apache.http.util.EntityUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
-import java.security.KeyManagementException;
-import java.security.KeyStoreException;
-import java.security.NoSuchAlgorithmException;
 import java.util.Arrays;
 import java.util.Map;
 import java.util.Objects;
-import javax.net.ssl.SSLContext;
 
 public class HttpUtils {
 
@@ -87,28 +80,16 @@ public class HttpUtils {
     }
 
     static {
-        PoolingHttpClientConnectionManager poolingHttpClientConnectionManager = null;
-        try {
-            SSLContextBuilder builder = new SSLContextBuilder();
-            builder.loadTrustMaterial(null, new TrustSelfSignedStrategy());
-            SSLContext sslContext = builder.build();
-            SSLConnectionSocketFactory socketFactory = new SSLConnectionSocketFactory(sslContext, NoopHostnameVerifier.INSTANCE);
-            Registry<ConnectionSocketFactory> socketFactoryRegistry =
-                    RegistryBuilder.<ConnectionSocketFactory>create()
-                            .register("http", PlainConnectionSocketFactory.getSocketFactory())
-                            .register("https", socketFactory)
-                            .build();
-            poolingHttpClientConnectionManager = new PoolingHttpClientConnectionManager(socketFactoryRegistry);
-            poolingHttpClientConnectionManager.setDefaultMaxPerRoute(50);
-            poolingHttpClientConnectionManager.setMaxTotal(100);
-
-        } catch (NoSuchAlgorithmException e) {
-            LOG.error("Got NoSuchAlgorithmException when SSLContext init", e);
-        } catch (KeyManagementException e) {
-            LOG.error("Got KeyManagementException when SSLContext init", e);
-        } catch (KeyStoreException e) {
-            LOG.error("Got KeyStoreException when SSLContext init", e);
-        }
+        // HTTPS uses the JVM default TLS settings: its trust store, with the server's host name checked.
+        Registry<ConnectionSocketFactory> socketFactoryRegistry =
+                RegistryBuilder.<ConnectionSocketFactory>create()
+                        .register("http", PlainConnectionSocketFactory.getSocketFactory())
+                        .register("https", SSLConnectionSocketFactory.getSystemSocketFactory())
+                        .build();
+        PoolingHttpClientConnectionManager poolingHttpClientConnectionManager =
+                new PoolingHttpClientConnectionManager(socketFactoryRegistry);
+        poolingHttpClientConnectionManager.setDefaultMaxPerRoute(50);
+        poolingHttpClientConnectionManager.setMaxTotal(100);
         CLIENT_CONNECTION_MANAGER = poolingHttpClientConnectionManager;
         LOG.info(" initial http client successfully");
     }

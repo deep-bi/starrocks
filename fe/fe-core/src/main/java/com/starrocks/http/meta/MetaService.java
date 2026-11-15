@@ -34,13 +34,14 @@
 
 package com.starrocks.http.meta;
 
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Strings;
 import com.google.gson.Gson;
-import com.starrocks.common.util.NetUtils;
 import com.starrocks.ha.FrontendNodeType;
 import com.starrocks.http.ActionController;
 import com.starrocks.http.BaseRequest;
 import com.starrocks.http.BaseResponse;
+import com.starrocks.http.FrontendHttpEndpoint;
 import com.starrocks.http.IllegalArgException;
 import com.starrocks.leader.MetaHelper;
 import com.starrocks.persist.ImageFormatVersion;
@@ -207,6 +208,19 @@ public class MetaService {
             controller.registerHandler(HttpMethod.GET, "/put", new PutAction(controller));
         }
 
+        /**
+         * The host to download the image from. The request gives only the address of the FE that sent it.
+         * Over HTTPS the name must match that FE's certificate, so use the name the FE is registered with.
+         */
+        @VisibleForTesting
+        static String imageSourceHost(String clientHost) {
+            if (!FrontendHttpEndpoint.useHttps()) {
+                return clientHost;
+            }
+            Frontend frontend = GlobalStateMgr.getCurrentState().getNodeMgr().getFeByHost(clientHost);
+            return frontend == null ? clientHost : frontend.getHost();
+        }
+
         @Override
         public void executeGet(BaseRequest request, BaseResponse response) {
             String machine = request.getHostString();
@@ -266,7 +280,7 @@ public class MetaService {
                 imageFormatVersion = ImageFormatVersion.valueOf(formatStr);
             }
 
-            String url = "http://" + NetUtils.getHostPortInAccessibleFormat(machine, Integer.parseInt(portStr)) + 
+            String url = FrontendHttpEndpoint.getUrlPrefix(imageSourceHost(machine), Integer.parseInt(portStr)) +
                     "/image?version=" + versionStr
                     + "&subdir=" + subDirStr
                     + "&image_format_version=" + imageFormatVersion;
