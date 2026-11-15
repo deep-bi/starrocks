@@ -816,6 +816,14 @@ public class Config extends ConfigBase {
     public static int http_port = 8030;
 
     /**
+     * Whether the FE serves plain HTTP on http_port. If false, the FE serves only HTTPS on https_port
+     * (enable_https must be true), and the FEs call each other over HTTPS. All FEs must use the same value.
+     */
+    @ConfField(comment = "Whether the FE serves plain HTTP on http_port. Set it to false to serve only HTTPS, " +
+            "which requires enable_https = true. FEs then call each other over HTTPS. Must be the same on all FEs.")
+    public static boolean enable_http = true;
+
+    /**
      * Fe https port
      * Currently, all FEs' https port must be the same.
      */

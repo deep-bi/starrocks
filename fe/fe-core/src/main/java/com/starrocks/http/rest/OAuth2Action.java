@@ -19,10 +19,10 @@ import com.starrocks.authentication.AuthenticationException;
 import com.starrocks.authentication.OAuth2Context;
 import com.starrocks.authentication.OAuth2ResultMessage;
 import com.starrocks.authentication.OpenIdConnectVerifier;
-import com.starrocks.common.Config;
 import com.starrocks.http.ActionController;
 import com.starrocks.http.BaseRequest;
 import com.starrocks.http.BaseResponse;
+import com.starrocks.http.FrontendHttpEndpoint;
 import com.starrocks.http.IllegalArgException;
 import com.starrocks.http.StarRocksHttpClient;
 import com.starrocks.qe.ConnectContext;
@@ -78,7 +78,8 @@ public class OAuth2Action extends RestBaseAction {
         Frontend frontend = GlobalStateMgr.getCurrentState().getNodeMgr().getFrontend(fid);
         if (!nodeMgr.getMySelf().getNodeName().equals(frontend.getNodeName())) {
             String responseContent =
-                    StarRocksHttpClient.redirect(frontend.getHost(), Config.http_port, request.getRequest());
+                    StarRocksHttpClient.redirect(frontend.getHost(), FrontendHttpEndpoint.getPort(),
+                            FrontendHttpEndpoint.useHttps(), request.getRequest());
             response.appendContent(responseContent);
             sendResult(request, response);
             return;
