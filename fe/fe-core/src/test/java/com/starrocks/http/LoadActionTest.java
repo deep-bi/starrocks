@@ -16,12 +16,14 @@ package com.starrocks.http;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.starrocks.common.Config;
+import com.starrocks.common.Pair;
 import com.starrocks.load.batchwrite.BatchWriteMgr;
 import com.starrocks.load.batchwrite.RequestCoordinatorBackendResult;
 import com.starrocks.load.batchwrite.TableId;
 import com.starrocks.load.streamload.StreamLoadKvParams;
 import com.starrocks.qe.SimpleScheduler;
 import com.starrocks.server.GlobalStateMgr;
+import com.starrocks.server.NodeMgr;
 import com.starrocks.server.RunMode;
 import com.starrocks.system.Backend;
 import com.starrocks.system.ComputeNode;
@@ -152,6 +154,34 @@ public class LoadActionTest extends StarRocksHttpTestCase {
             assertRedirectLocation(buildRequest(headers), getLoadUrl("https", "192.0.0.1", 8040));
         } finally {
             Config.be_https_enabled = original;
+        }
+    }
+
+    @Test
+    public void testBatchWriteRedirectsPlainClientToLeaderOverHttp() throws Exception {
+        new MockUp<GlobalStateMgr>() {
+            @Mock
+            public boolean isLeader() {
+                return false;
+            }
+        };
+        new MockUp<NodeMgr>() {
+            @Mock
+            public Pair<String, Integer> getLeaderIpAndHttpPort() {
+                return new Pair<>("192.0.0.9", 8030);
+            }
+        };
+
+        Map<String, String> headers = new HashMap<>();
+        headers.put(HTTP_ENABLE_BATCH_WRITE, "true");
+
+        // The request arrives on the plain listener, so enable_https must not switch the redirect to https.
+        boolean original = Config.enable_https;
+        Config.enable_https = true;
+        try {
+            assertRedirectLocation(buildRequest(headers), getLoadUrl("192.0.0.9", 8030));
+        } finally {
+            Config.enable_https = original;
         }
     }
 

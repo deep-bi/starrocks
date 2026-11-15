@@ -274,8 +274,13 @@ public class RestBaseAction extends BaseAction {
             return false;
         }
         Pair<String, Integer> leaderIpAndPort = globalStateMgr.getNodeMgr().getLeaderIpAndHttpPort();
-        // The leader's port is its plain HTTP port, so the scheme does not follow be_https_enabled.
-        redirect(request, response, "http", leaderIpAndPort.first, leaderIpAndPort.second);
+        if (request.isSecure()) {
+            // Keep the client on HTTPS. The leader publishes only its plain HTTP port,
+            // and all FEs must use the same https_port.
+            redirect(request, response, "https", leaderIpAndPort.first, Config.https_port);
+        } else {
+            redirect(request, response, "http", leaderIpAndPort.first, leaderIpAndPort.second);
+        }
         return true;
     }
 
