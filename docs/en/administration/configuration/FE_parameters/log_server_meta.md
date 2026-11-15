@@ -720,7 +720,7 @@ This topic introduces the following types of FE configurations:
 - Type: Boolean
 - Unit: -
 - Is mutable: No
-- Description: Whether to enable HTTPS server alongside HTTP server in FE nodes.
+- Description: Whether to enable HTTPS server alongside HTTP server in FE nodes. When a follower FE redirects a request to the leader FE, the request keeps its scheme. A request received over HTTPS goes to `https_port` on the leader, and a request received over HTTP goes to `http_port`. Use the same value on all FEs.
 - Introduced in: v4.0
 
 ### `frontend_address`
@@ -810,7 +810,7 @@ This topic introduces the following types of FE configurations:
 - Type: Int
 - Unit: -
 - Is mutable: No
-- Description: The port on which the HTTPS server in the FE node listens.
+- Description: The port on which the HTTPS server in the FE node listens. It must be the same on all FEs.
 - Introduced in: v4.0
 
 ### `ssl_keystore_type`
