@@ -15,6 +15,7 @@
 package com.starrocks.http;
 
 import com.fasterxml.jackson.core.type.TypeReference;
+import com.starrocks.common.Config;
 import com.starrocks.load.batchwrite.BatchWriteMgr;
 import com.starrocks.load.batchwrite.RequestCoordinatorBackendResult;
 import com.starrocks.load.batchwrite.TableId;
@@ -100,6 +101,68 @@ public class LoadActionTest extends StarRocksHttpTestCase {
     }
 
     @Test
+    public void testStreamLoadRedirectsToHttpsBackend() throws Exception {
+        ComputeNode node = new ComputeNode(1, "192.0.0.1", 9050);
+        node.setHttpPort(8040);
+
+        new MockUp<SystemInfoService>() {
+            @Mock
+            public List<Backend> getAvailableBackends() {
+                Backend backend = new Backend();
+                backend.setId(1L);
+                return List.of(backend);
+            }
+
+            @Mock
+            public ComputeNode getBackendOrComputeNode(long nodeId) {
+                return node;
+            }
+        };
+
+        assertRedirectLocation(buildRequest(new HashMap<>()), getLoadUrl("192.0.0.1", 8040));
+
+        boolean original = Config.be_https_enabled;
+        Config.be_https_enabled = true;
+        try {
+            assertRedirectLocation(buildRequest(new HashMap<>()), getLoadUrl("https", "192.0.0.1", 8040));
+        } finally {
+            Config.be_https_enabled = original;
+        }
+    }
+
+    @Test
+    public void testBatchWriteRedirectsToHttpsBackend() throws Exception {
+        ComputeNode node = new ComputeNode(1, "192.0.0.1", 9050);
+        node.setHttpPort(8040);
+
+        new MockUp<BatchWriteMgr>() {
+            @Mock
+            public RequestCoordinatorBackendResult requestCoordinatorBackends(
+                    TableId tableId, StreamLoadKvParams params, String user) {
+                return new RequestCoordinatorBackendResult(new TStatus(TStatusCode.OK), List.of(node));
+            }
+        };
+
+        Map<String, String> headers = new HashMap<>();
+        headers.put(HTTP_ENABLE_BATCH_WRITE, "true");
+
+        boolean original = Config.be_https_enabled;
+        Config.be_https_enabled = true;
+        try {
+            assertRedirectLocation(buildRequest(headers), getLoadUrl("https", "192.0.0.1", 8040));
+        } finally {
+            Config.be_https_enabled = original;
+        }
+    }
+
+    private void assertRedirectLocation(Request request, String expectedLocation) throws Exception {
+        try (Response response = noRedirectClient.newCall(request).execute()) {
+            assertEquals(307, response.code(), response.message());
+            assertEquals(expectedLocation, response.header("Location"));
+        }
+    }
+
+    @Test
     public void testBatchWriteStreamLoadFailure() throws Exception {
         Map<String, String> map = new HashMap<>();
         map.put(HTTP_ENABLE_BATCH_WRITE, "true");
@@ -150,7 +213,11 @@ public class LoadActionTest extends StarRocksHttpTestCase {
     }
 
     private String getLoadUrl(String host, int port) {
-        return String.format("http://%s:%d/api/%s/%s/_stream_load", host, port, DB_NAME, TABLE_NAME);
+        return getLoadUrl("http", host, port);
+    }
+
+    private String getLoadUrl(String scheme, String host, int port) {
+        return String.format("%s://%s:%d/api/%s/%s/_stream_load", scheme, host, port, DB_NAME, TABLE_NAME);
     }
 
     @Test

@@ -624,6 +624,15 @@ This topic introduces the following types of FE configurations:
 
 <EditionSpecificFEItem />
 
+### `be_https_enabled`
+
+- Default: false
+- Type: Boolean
+- Unit: -
+- Is mutable: No
+- Description: Whether BEs and CNs serve `be_http_port` over HTTPS. Set this item to `true` when the BE item `be_http_ssl_enable` is `true`. The FE then redirects Stream Load, batch write, and Stream Load transaction requests to `https://<backend_host>:<be_http_port>`. Otherwise it redirects them to `http`. A BE or CN serves this port either as plain HTTP or as HTTPS, so the setting applies to all BEs and CNs. It must be the same on all FEs. It does not change the redirect from a follower FE to the leader FE.
+- Introduced in: 3.5.5-deepbi2, 4.0.16-deepbi1
+
 ### `brpc_idle_wait_max_time`
 
 - Default: 10000
