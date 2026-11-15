@@ -34,6 +34,7 @@
 
 package com.starrocks;
 
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Charsets;
 import com.google.common.base.Strings;
 import com.starrocks.common.CommandLineOptions;
@@ -44,6 +45,7 @@ import com.starrocks.common.Version;
 import com.starrocks.failpoint.FailPoint;
 import com.starrocks.ha.FrontendNodeType;
 import com.starrocks.ha.StateChangeExecutor;
+import com.starrocks.http.FrontendHttpEndpoint;
 import com.starrocks.http.HttpServer;
 import com.starrocks.journal.Journal;
 import com.starrocks.journal.bdbje.BDBEnvironment;
@@ -79,8 +81,8 @@ import java.io.IOException;
 import java.io.RandomAccessFile;
 import java.lang.management.ManagementFactory;
 import java.nio.channels.FileLock;
+import java.util.ArrayList;
 import java.util.List;
-import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 
 public class StarRocksFE {
@@ -97,6 +99,22 @@ public class StarRocksFE {
 
 
     // entrance for starrocks frontend
+    /**
+     * The FE HTTP listeners to serve: plain HTTP on http_port if enable_http is set, and HTTPS on https_port
+     * if enable_https is set. {@link FrontendHttpEndpoint#checkConfig()} ensures there is at least one.
+     */
+    @VisibleForTesting
+    static List<HttpServer> createHttpServers() {
+        List<HttpServer> httpServers = new ArrayList<>();
+        if (Config.enable_http) {
+            httpServers.add(new HttpServer(Config.http_port));
+        }
+        if (Config.enable_https) {
+            httpServers.add(new HttpServer(Config.https_port, true));
+        }
+        return httpServers;
+    }
+
     public static void start(String starRocksDir, String pidDir, String[] args) {
         if (Strings.isNullOrEmpty(starRocksDir)) {
             System.err.println("env STARROCKS_HOME is not set.");
@@ -127,6 +145,9 @@ public class StarRocksFE {
             // We have already output the caffine's error message to Log4j2.
             // we turn off the java.util.logging.Logger of caffine to reduce the output log of the console
             java.util.logging.Logger.getLogger("com.github.benmanes.caffeine").setLevel(java.util.logging.Level.OFF);
+
+            // fail before any metadata is loaded if the FE would serve no HTTP listener, or HTTPS without TLS
+            FrontendHttpEndpoint.checkConfig();
 
             // set dns cache ttl
             java.security.Security.setProperty("networkaddress.cache.ttl", String.valueOf(Config.dns_cache_ttl_seconds));
@@ -173,24 +194,20 @@ public class StarRocksFE {
             // init and start:
             // 1. QeService for MySQL Server
             // 2. FrontendThriftServer for Thrift Server
-            // 3. HttpServer for HTTP Server and optionally for HTTPS Server
+            // 3. HttpServer for the HTTP listener (enable_http) and the HTTPS listener (enable_https)
             // 4. ArrowFlightSqlService for Arrow Flight SQL Server
             QeService qeService = new QeService(Config.query_port, ExecuteEnv.getInstance().getScheduler());
             FrontendThriftServer frontendThriftServer = new FrontendThriftServer(Config.rpc_port);
-            HttpServer httpServer = new HttpServer(Config.http_port);
-            Optional<HttpServer> httpsServer = Optional.ofNullable(
-                    Config.enable_https ? new HttpServer(Config.https_port, true) : null);
+            List<HttpServer> httpServers = createHttpServers();
             ArrowFlightSqlService arrowFlightSqlService = new ArrowFlightSqlService(Config.arrow_flight_port);
-            // Setup HTTP and HTTPS (optional).
-            httpServer.setup();
-            if (httpsServer.isPresent()) {
-                httpsServer.get().setup();
+            // Setup the HTTP and HTTPS listeners that are enabled.
+            for (HttpServer httpServer : httpServers) {
+                httpServer.setup();
             }
             frontendThriftServer.start();
-            // Start HTTP and HTTPS (optional).
-            httpServer.start();
-            if (httpsServer.isPresent()) {
-                httpsServer.get().start();
+            // Start the HTTP and HTTPS listeners that are enabled.
+            for (HttpServer httpServer : httpServers) {
+                httpServer.start();
             }
             qeService.start();
             arrowFlightSqlService.start();

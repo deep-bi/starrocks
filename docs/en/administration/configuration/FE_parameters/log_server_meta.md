@@ -696,6 +696,25 @@ This topic introduces the following types of FE configurations:
 - Description: DNS cache TTL (Time-To-Live) in seconds for successful DNS lookups. This sets the Java security property `networkaddress.cache.ttl` which controls how long the JVM caches successful DNS lookups. Set this item to `-1` to allow the system to always cache the infomration, or `0` to disable caching. This is particularly useful in environments where IP addresses change frequently, such as Kubernetes deployments or when dynamic DNS is used.
 - Introduced in: v3.5.11, v4.0.4
 
+### `enable_http`
+
+- Default: true
+- Type: Boolean
+- Unit: -
+- Is mutable: No
+- Description: Whether the FE serves plain HTTP on `http_port`. Set this item to `false` to serve HTTPS only. That requires `enable_https` to be `true`, and the FE refuses to start when both items are `false`. Use the same value on all FEs. When this item is `false`:
+  - FEs call each other over HTTPS on `https_port`. This covers the FE heartbeat, checkpoints, image transfer, a new FE joining the cluster, and OAuth2 forwarding. Each FE checks the certificate of the other FE against the trust store of its JVM, and checks the host name. The certificate of every FE must be trusted by the JVMs of all FEs. It must also cover the host name or IP address with which the FE was added to the cluster.
+  - BEs and CNs receive `https_port` as the HTTP port of the FE, but they cannot call the FE over HTTPS yet. Files created with `CREATE FILE` cannot be downloaded, and `information_schema.fe_metrics` cannot be queried. A BE that is shutting down also cannot redirect Stream Load clients to the leader FE.
+  - Health checks, load balancers, and monitoring that use `http_port` must move to `https_port`.
+
+  To move a running cluster to HTTPS only:
+  1. Set `enable_https` to `true` and configure the keystore on all FEs. Restart the FEs one at a time.
+  2. Move all clients to `https_port`.
+  3. Set `enable_http` to `false` on all FEs. Restart the FEs one at a time. Until the last FE restarts, the FEs that still serve plain HTTP cannot reach the FEs already switched. The leader FE reports those FEs as not alive, and checkpoints and `ADMIN SET FRONTEND CONFIG` skip them.
+
+  In the 3.5.x-deepbi releases, `enable_https` replaced the HTTP listener. In this release it adds the HTTPS listener next to it. If you upgrade a cluster that ran with `enable_https` set to `true`, add `enable_http = false` to keep the FEs on HTTPS only.
+- Introduced in: 4.0.16-deepbi1
+
 ### `enable_http_async_handler`
 
 - Default: true
@@ -720,7 +739,7 @@ This topic introduces the following types of FE configurations:
 - Type: Boolean
 - Unit: -
 - Is mutable: No
-- Description: Whether to enable HTTPS server alongside HTTP server in FE nodes. When a follower FE redirects a request to the leader FE, the request keeps its scheme. A request received over HTTPS goes to `https_port` on the leader, and a request received over HTTP goes to `http_port`. Use the same value on all FEs.
+- Description: Whether to enable HTTPS server alongside HTTP server in FE nodes. When a follower FE redirects a request to the leader FE, the request keeps its scheme. A request received over HTTPS goes to `https_port` on the leader, and a request received over HTTP goes to `http_port`. Use the same value on all FEs. The FE refuses to start if this item is `true` and `ssl_keystore_location` is not set. To serve HTTPS only, also set `enable_http` to `false`.
 - Introduced in: v4.0
 
 ### `frontend_address`
@@ -783,7 +802,7 @@ This topic introduces the following types of FE configurations:
 - Type: Int
 - Unit: -
 - Is mutable: No
-- Description: The port on which the HTTP server in the FE node listens.
+- Description: The port on which the HTTP server in the FE node listens. The FE serves it only when `enable_http` is `true`.
 - Introduced in: -
 
 ### `http_web_page_display_hardware`

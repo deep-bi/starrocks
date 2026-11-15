@@ -832,10 +832,11 @@ public class Config extends ConfigBase {
 
     /**
      *  https enable flag. false by default.
-     *  If the value is false, http is supported. Otherwise, https is supported.
+     *  If true, the FE serves HTTPS on https_port, which requires ssl_keystore_location.
+     *  Plain HTTP on http_port is controlled separately by enable_http.
      */
-    @ConfField(comment = "enable https flag. false by default. If true then http " +
-            "and https are both enabled on different ports. Otherwise, only http is enabled.")
+    @ConfField(comment = "enable https flag. false by default. If true, the FE serves HTTPS on https_port, " +
+            "which requires ssl_keystore_location. Plain HTTP on http_port is controlled by enable_http.")
     public static boolean enable_https = false;
 
     /**
