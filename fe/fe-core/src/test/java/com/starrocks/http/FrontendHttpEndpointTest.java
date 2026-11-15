@@ -26,6 +26,7 @@ public class FrontendHttpEndpointTest {
     private boolean originalEnableHttps;
     private int originalHttpPort;
     private int originalHttpsPort;
+    private String originalKeystoreLocation;
 
     @BeforeEach
     public void setUp() {
@@ -33,6 +34,7 @@ public class FrontendHttpEndpointTest {
         originalEnableHttps = Config.enable_https;
         originalHttpPort = Config.http_port;
         originalHttpsPort = Config.https_port;
+        originalKeystoreLocation = Config.ssl_keystore_location;
         Config.http_port = 18030;
         Config.https_port = 18443;
     }
@@ -43,6 +45,7 @@ public class FrontendHttpEndpointTest {
         Config.enable_https = originalEnableHttps;
         Config.http_port = originalHttpPort;
         Config.https_port = originalHttpsPort;
+        Config.ssl_keystore_location = originalKeystoreLocation;
     }
 
     @Test
@@ -86,5 +89,44 @@ public class FrontendHttpEndpointTest {
 
         Assertions.assertEquals("https://[fe80::1]:18443", FrontendHttpEndpoint.getUrlPrefix("fe80::1"));
         Assertions.assertEquals("https://10.0.0.1:9443", FrontendHttpEndpoint.getUrlPrefix("10.0.0.1", 9443));
+    }
+
+    @Test
+    public void testCheckConfigAcceptsEachListenerSetup() {
+        Config.ssl_keystore_location = "";
+        Config.enable_http = true;
+        Config.enable_https = false;
+        Assertions.assertDoesNotThrow(FrontendHttpEndpoint::checkConfig);
+
+        Config.ssl_keystore_location = "/path/to/keystore.p12";
+        Config.enable_https = true;
+        Assertions.assertDoesNotThrow(FrontendHttpEndpoint::checkConfig);
+
+        Config.enable_http = false;
+        Assertions.assertDoesNotThrow(FrontendHttpEndpoint::checkConfig);
+    }
+
+    @Test
+    public void testCheckConfigRejectsNoListener() {
+        Config.enable_http = false;
+        Config.enable_https = false;
+
+        IllegalArgumentException e =
+                Assertions.assertThrows(IllegalArgumentException.class, FrontendHttpEndpoint::checkConfig);
+        Assertions.assertTrue(e.getMessage().contains("enable_http and enable_https are both false"), e.getMessage());
+    }
+
+    @Test
+    public void testCheckConfigRejectsHttpsWithoutKeystore() {
+        // Without a keystore the HTTPS port would serve plain HTTP.
+        Config.ssl_keystore_location = "";
+        Config.enable_https = true;
+
+        for (boolean enableHttp : new boolean[] {true, false}) {
+            Config.enable_http = enableHttp;
+            IllegalArgumentException e =
+                    Assertions.assertThrows(IllegalArgumentException.class, FrontendHttpEndpoint::checkConfig);
+            Assertions.assertTrue(e.getMessage().contains("ssl_keystore_location is not set"), e.getMessage());
+        }
     }
 }

@@ -14,8 +14,12 @@
 package com.starrocks;
 
 import com.starrocks.common.CommandLineOptions;
+import com.starrocks.common.Config;
+import com.starrocks.http.HttpServer;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
+
+import java.util.List;
 
 public class StarRocksFETest {
 
@@ -41,5 +45,36 @@ public class StarRocksFETest {
         Assertions.assertNotNull(options.getBdbToolOpts());
         options = StarRocksFE.parseArgs(new String[] {"-bdb", "-l"});
         Assertions.assertNotNull(options.getBdbToolOpts());
+    }
+
+    @Test
+    public void testCreateHttpServersFollowsListenerSwitches() {
+        boolean originalEnableHttp = Config.enable_http;
+        boolean originalEnableHttps = Config.enable_https;
+        try {
+            Config.enable_http = true;
+            Config.enable_https = false;
+            List<HttpServer> servers = StarRocksFE.createHttpServers();
+            Assertions.assertEquals(1, servers.size());
+            Assertions.assertFalse(servers.get(0).isHttps());
+            Assertions.assertEquals(Config.http_port, servers.get(0).getPort());
+
+            Config.enable_https = true;
+            servers = StarRocksFE.createHttpServers();
+            Assertions.assertEquals(2, servers.size());
+            Assertions.assertFalse(servers.get(0).isHttps());
+            Assertions.assertTrue(servers.get(1).isHttps());
+            Assertions.assertEquals(Config.https_port, servers.get(1).getPort());
+
+            // With enable_http off, the FE serves the HTTPS listener only.
+            Config.enable_http = false;
+            servers = StarRocksFE.createHttpServers();
+            Assertions.assertEquals(1, servers.size());
+            Assertions.assertTrue(servers.get(0).isHttps());
+            Assertions.assertEquals(Config.https_port, servers.get(0).getPort());
+        } finally {
+            Config.enable_http = originalEnableHttp;
+            Config.enable_https = originalEnableHttps;
+        }
     }
 }
