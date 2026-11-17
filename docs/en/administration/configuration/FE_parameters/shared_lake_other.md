@@ -714,7 +714,7 @@ This topic introduces the following types of FE configurations:
 - Unit: -
 - Is mutable: Yes
 - Description: How many rejected credentials `authentication_failure_cache_ttl_second` remembers at most. It bounds the memory a client - or an attacker cycling usernames - can occupy; the oldest entries are evicted first.
-- Introduced in: 3.5.21-deepbi1
+- Introduced in: 3.5.21-deepbi1, 4.0.16-deepbi1
 
 ### `authentication_failure_cache_ttl_second`
 
@@ -723,7 +723,7 @@ This topic introduces the following types of FE configurations:
 - Unit: Seconds
 - Is mutable: Yes
 - Description: How long a credential rejected by the security integration chain is remembered, so that a client retrying the same wrong password does not produce one LDAP bind per attempt - which is what drives Active Directory's `badPwdCount` toward locking the account out. The cache key includes a hash of the credential, so correcting the password takes effect immediately instead of after the TTL, and a failure caused by the directory being unreachable is never cached. Set to `0` to disable.
-- Introduced in: 3.5.21-deepbi1
+- Introduced in: 3.5.21-deepbi1, 4.0.16-deepbi1
 
 ### `authentication_ldap_simple_auth_success_cache_capacity`
 
@@ -732,7 +732,7 @@ This topic introduces the following types of FE configurations:
 - Unit: -
 - Is mutable: Yes
 - Description: How many users `authentication_ldap_simple_auth_success_cache_ttl_second` remembers at most on each FE. When the cache is full, the oldest entries are evicted first. A different value discards all entries at the next LDAP login on each FE.
-- Introduced in: 3.5.21-deepbi2
+- Introduced in: 3.5.21-deepbi2, 4.0.16-deepbi1
 
 ### `authentication_ldap_simple_auth_success_cache_ttl_second`
 
@@ -741,7 +741,7 @@ This topic introduces the following types of FE configurations:
 - Unit: Seconds
 - Is mutable: Yes
 - Description: How long each FE remembers a successful LDAP bind of an `authentication_ldap_simple` user. It covers users created with `IDENTIFIED WITH authentication_ldap_simple` and users of a security integration of that type. Until the entry expires, a login with the same user name and password is accepted without contacting the LDAP server. Stream Load authenticates at the FE HTTP endpoint and again when the BE begins and commits the transaction, so without this cache every load means three LDAP logins. An entry expires this many seconds after the bind that created it, however often it is used. After a password change or an account lock on the LDAP server, the old credential keeps working on that FE for up to that long. Keep the value within what your security policy allows. Any other password, including a wrong one, goes through the normal LDAP check. An empty password is still refused, and a failed bind is never cached. Each entry holds the user name, the DN and a salted PBKDF2 hash of the password, in memory only. Entries made under other LDAP settings or another user DN are never reused. A new value takes effect at the next LDAP login on each FE, and a different value discards all entries before they are used again. Set to `0` to stop using the cache at once. If you set it back to the same value before any LDAP login on that FE, the old entries are kept and expire at their original time.
-- Introduced in: 3.5.21-deepbi2
+- Introduced in: 3.5.21-deepbi2, 4.0.16-deepbi1
 
 ### `authentication_ldap_simple_bind_base_dn`
 
@@ -785,7 +785,7 @@ This topic introduces the following types of FE configurations:
 - Unit: Milliseconds
 - Is mutable: Yes
 - Description: Socket read timeout for the LDAP bind performed by `authentication_ldap_simple`. See `authentication_ldap_simple_conn_timeout_ms`.
-- Introduced in: 3.5.21-deepbi1
+- Introduced in: 3.5.21-deepbi1, 4.0.16-deepbi1
 
 ### `authentication_ldap_simple_conn_timeout_ms`
 
@@ -794,7 +794,7 @@ This topic introduces the following types of FE configurations:
 - Unit: Milliseconds
 - Is mutable: Yes
 - Description: TCP connect timeout for the LDAP bind performed by `authentication_ldap_simple`. Without it the bind falls back to the operating system's TCP timeout, which can hold the thread serving the request - an HTTP worker or a Thrift handler, now that a security integration also authenticates those channels - for minutes when the directory is unreachable. Lower it if authentication has to fail fast.
-- Introduced in: 3.5.21-deepbi1
+- Introduced in: 3.5.21-deepbi1, 4.0.16-deepbi1
 
 ### `authentication_ldap_simple_server_host`
 
