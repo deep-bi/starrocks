@@ -46,6 +46,7 @@
 #ifndef __APPLE__
 #include <aws/core/Aws.h>
 
+#include "fs/s3/aws_md5_hash.h"
 #include "fs/s3/poco_http_client_factory.h"
 #endif
 
@@ -72,6 +73,7 @@
 #include "storage/storage_engine.h"
 #include "util/debug_util.h"
 #include "util/failpoint/fail_point.h"
+#include "util/fips.h"
 #include "util/logging.h"
 #include "util/thrift_rpc_helper.h"
 #include "util/thrift_server.h"
@@ -193,6 +195,17 @@ int main(int argc, char** argv) {
         return -1;
     }
 
+    // before curl_global_init and Aws::InitAPI below, which both initialise OpenSSL. Never fall
+    // back to non-FIPS mode: an operator who asked for FIPS must not get a silently non-compliant node.
+    if (starrocks::config::enable_fips_mode) {
+        auto fips_status = starrocks::init_fips_mode();
+        if (!fips_status.ok()) {
+            fprintf(stderr, "%s\n", fips_status.to_string().c_str());
+            exit(-1);
+        }
+        fprintf(stderr, "FIPS mode enabled: %s\n", starrocks::fips_mode_description().c_str());
+    }
+
     starrocks::init_roaring_hook();
 
 #ifdef FIU_ENABLE
@@ -226,7 +239,16 @@ int main(int argc, char** argv) {
     if (starrocks::config::aws_sdk_enable_compliant_rfc3986_encoding) {
         aws_sdk_options.httpOptions.compliantRfc3986Encoding = true;
     }
+    // the sdk's own md5 is refused in FIPS mode and it ignores the error; set in both modes so
+    // Content-MD5 is computed the same way whether or not enable_fips_mode is on
+    aws_sdk_options.cryptoOptions.md5Factory_create_fn = [] {
+        return std::make_shared<starrocks::s3::AwsMd5HashFactory>();
+    };
     Aws::InitAPI(aws_sdk_options);
+    if (auto st = starrocks::restore_fips_rand(); !st.ok()) {
+        fprintf(stderr, "%s\n", st.to_string().c_str());
+        exit(-1);
+    }
     if (starrocks::config::enable_poco_client_for_aws_sdk) {
         Aws::Http::SetHttpClientFactory(std::make_shared<starrocks::poco::PocoHttpClientFactory>());
     }

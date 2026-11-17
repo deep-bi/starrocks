@@ -15,7 +15,7 @@
 #include "llm_cache.h"
 
 #include "util/lru_cache.h"
-#include "util/md5.h"
+#include "util/sha.h"
 
 namespace starrocks {
 
@@ -28,7 +28,7 @@ std::string generate_cache_key(const std::string& prompt, const ModelConfig& con
 
     std::string full_content = CACHE_PREFIX + "|" + config_stream.str() + "|" + prompt;
 
-    Md5Digest digest;
+    SHA256Digest digest;
     digest.update(full_content.c_str(), full_content.length());
     digest.digest();
     return digest.hex();

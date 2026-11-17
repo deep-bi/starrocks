@@ -62,6 +62,7 @@
 #include "util/cpu_info.h"
 #include "util/debug_util.h"
 #include "util/disk_info.h"
+#include "util/fips.h"
 #include "util/logging.h"
 #include "util/mem_info.h"
 #include "util/memory_lock.h"
@@ -381,6 +382,7 @@ void Daemon::init(bool as_cn, const std::vector<StorePath>& paths) {
     LOG(INFO) << MemInfo::debug_string();
     LOG(INFO) << base::CPU::instance()->debug_string();
     LOG(INFO) << "openssl aesni support: " << openssl_supports_aesni();
+    LOG(INFO) << "FIPS mode: " << fips_mode_description();
     auto unsupported_flags = CpuInfo::unsupported_cpu_flags_from_current_env();
     if (!unsupported_flags.empty()) {
         LOG(FATAL) << fmt::format(

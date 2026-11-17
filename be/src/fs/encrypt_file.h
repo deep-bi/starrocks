@@ -17,13 +17,13 @@
 #include "fs/fs.h"
 #include "fs/writable_file_wrapper.h"
 #include "io/input_stream.h"
+#include "util/openssl_errors.h"
 
 namespace starrocks {
 
 class EVPCipher;
 
 bool openssl_supports_aesni();
-std::string get_openssl_errors();
 
 class EncryptWritableFile : public WritableFileWrapper {
 public:

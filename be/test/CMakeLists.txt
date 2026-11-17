@@ -57,10 +57,12 @@ set(EXEC_FILES
         ./fs/fs_memory_test.cpp
         ./fs/fs_s3_test.cpp
         ./fs/fs_test.cpp
+        ./fs/fs_util_test.cpp
         ./fs/encrypt_file_test.cpp
         ./fs/key_cache_test.cpp
         ./fs/output_stream_wrapper_test.cpp
         ./fs/poco_http_client_test.cpp
+        ./fs/aws_md5_hash_test.cpp
         ./fs/bundle_file_test.cpp
         ./exec/column_value_range_test.cpp
         ./exec/range_router_test.cpp
@@ -419,11 +421,13 @@ set(EXEC_FILES
         ./util/faststring_test.cpp
         ./util/file_util_test.cpp
         ./util/filesystem_util_test.cpp
+        ./util/fips_test.cpp
         ./util/frame_of_reference_coding_test.cpp
         ./util/hash_util_test.cpp
         ./util/json_util_test.cpp
         ./util/json_flattener_test.cpp
         ./util/md5_test.cpp
+        ./util/sha_test.cpp
         ./util/mem_info_test.cpp
         ./util/memcmp_test.cpp
         ./util/metrics/file_scan_metrics_test.cpp
