@@ -34,6 +34,7 @@
 
 package com.starrocks.connector.iceberg.io;
 
+import com.starrocks.common.util.CryptoUtils;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.Path;
 import org.apache.iceberg.hadoop.HadoopInputFile;
@@ -60,7 +61,7 @@ public class IOUtil {
     public static final String SLASH_STRING = "/";
     public static final Configuration DEFAULT_CONF = new Configuration();
 
-    public static SecureRandom rand = new SecureRandom();
+    public static SecureRandom rand = CryptoUtils.secureRandom();
 
     // not meant to be instantiated
     private IOUtil() {

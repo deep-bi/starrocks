@@ -3,4 +3,26 @@
       <name>fs.s3.impl</name>
       <value>org.apache.hadoop.fs.s3a.S3AFileSystem</value>
    </property>
+  <!-- Java FIPS defaults. HadoopExt also rejects incompatible catalog/JNI overrides. -->
+  <property>
+    <name>hadoop.security.crypto.codec.classes.aes.ctr.nopadding</name>
+    <value>com.starrocks.connector.share.security.FipsAesCtrCryptoCodec</value>
+  </property>
+  <property>
+    <name>hadoop.security.crypto.codec.classes.sm4.ctr.nopadding</name>
+    <!-- Hadoop ignores an empty XML value; whitespace disables the codec list. -->
+    <value> </value>
+  </property>
+  <property>
+    <name>hadoop.security.crypto.jce.provider</name>
+    <value>BCFIPS</value>
+  </property>
+  <property>
+    <name>hadoop.security.crypto.jce.provider.auto-add</name>
+    <value>false</value>
+  </property>
+  <property>
+    <name>hadoop.security.java.secure.random.algorithm</name>
+    <value>DEFAULT</value>
+  </property>
 </configuration>

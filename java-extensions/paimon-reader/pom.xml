@@ -13,7 +13,7 @@
 
     <properties>
         <java-extensions.home>${basedir}/../</java-extensions.home>
-        <paimon.version>1.4.2-deepbi3</paimon.version>
+        <paimon.version>1.4.2-fips-deepbi1</paimon.version>
     </properties>
 
     <repositories>

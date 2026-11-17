@@ -15,6 +15,8 @@
 package com.starrocks.http;
 
 import com.starrocks.common.Config;
+import com.starrocks.common.util.CryptoUtils;
+import com.starrocks.common.util.TlsUtils;
 import com.starrocks.http.rest.HttpSSLContextLoader;
 import io.netty.handler.ssl.SslContext;
 import io.netty.handler.ssl.SslContextBuilder;
@@ -25,16 +27,16 @@ import org.mockito.MockedStatic;
 
 import java.io.File;
 import java.lang.reflect.Field;
-import java.security.KeyStore;
 import java.util.List;
 import javax.net.ssl.KeyManagerFactory;
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.SSLParameters;
 import javax.net.ssl.SSLServerSocketFactory;
+import javax.net.ssl.TrustManagerFactory;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
-import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.RETURNS_SELF;
-import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.verify;
@@ -64,29 +66,25 @@ class HttpSslContextBuilderTest {
         String[] supported = {"TLS_AES_256_GCM_SHA384", "TLS_RSA_WITH_AES_128_CBC_SHA"};
         String[] filtered  = {"TLS_AES_256_GCM_SHA384"};
 
-        KeyStore ks = mock(KeyStore.class);
         KeyManagerFactory kmf = mock(KeyManagerFactory.class);
-        SSLServerSocketFactory ssf = mock(SSLServerSocketFactory.class);
-        when(ssf.getSupportedCipherSuites()).thenReturn(supported);
+        SSLContext sslContext = mock(SSLContext.class);
+        SSLParameters parameters = new SSLParameters(supported);
+        when(sslContext.getDefaultSSLParameters()).thenReturn(parameters);
 
         SslContextBuilder builder = mock(SslContextBuilder.class, RETURNS_SELF);
         SslContext ctx = mock(SslContext.class);
         when(builder.build()).thenReturn(ctx);
 
-        try (MockedStatic<KeyStore> ksStatic = mockStatic(KeyStore.class);
-                MockedStatic<KeyManagerFactory> kmfStatic = mockStatic(KeyManagerFactory.class);
-                MockedStatic<SSLServerSocketFactory> ssfStatic = mockStatic(SSLServerSocketFactory.class);
+        try (MockedStatic<TlsUtils> tls = mockStatic(TlsUtils.class);
+                MockedStatic<SSLContext> contextStatic = mockStatic(SSLContext.class);
                 MockedStatic<SslUtil> sslUtilStatic = mockStatic(SslUtil.class);
                 MockedStatic<SslContextBuilder> scbStatic = mockStatic(SslContextBuilder.class)) {
 
-            ksStatic.when(() -> KeyStore.getInstance("JKS")).thenReturn(ks);
-            doNothing().when(ks).load(any(), any());
+            tls.when(() -> TlsUtils.keyManagers(Config.ssl_keystore_location, Config.ssl_keystore_type,
+                    Config.ssl_keystore_password, Config.ssl_key_password)).thenReturn(kmf);
+            tls.when(() -> TlsUtils.trustManagers(null)).thenReturn(mock(TrustManagerFactory.class));
 
-            kmfStatic.when(KeyManagerFactory::getDefaultAlgorithm).thenReturn("SunX509");
-            kmfStatic.when(() -> KeyManagerFactory.getInstance("SunX509")).thenReturn(kmf);
-            doNothing().when(kmf).init(any(KeyStore.class), any());
-
-            ssfStatic.when(SSLServerSocketFactory::getDefault).thenReturn(ssf);
+            contextStatic.when(() -> SSLContext.getInstance("TLS", CryptoUtils.jsseProvider())).thenReturn(sslContext);
 
             sslUtilStatic.when(() -> SslUtil.filterCipherSuites(supported)).thenReturn(filtered);
 

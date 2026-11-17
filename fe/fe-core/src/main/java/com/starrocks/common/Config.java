@@ -2329,6 +2329,9 @@ public class Config extends ConfigBase {
     @ConfField(mutable = true, comment = "ldap ssl trust store file path, supports perm and jks formats")
     public static String authentication_ldap_simple_ssl_conn_trust_store_path = "";
 
+    @ConfField(mutable = true, comment = "LDAP trust store type, FIPS requires explicit BCFKS, JKS or PEM")
+    public static String authentication_ldap_simple_ssl_conn_trust_store_type = "";
+
     @ConfField(mutable = true, comment = "LDAP SSL trust store file password; " +
             "no password is required for files in PEM format.")
     public static String authentication_ldap_simple_ssl_conn_trust_store_pwd = "";
@@ -3944,6 +3947,9 @@ public class Config extends ConfigBase {
     @ConfField
     public static String ssl_keystore_location = "";
 
+    @ConfField(comment = "Private-key store type for MySQL TLS and HTTPS, must be BCFKS")
+    public static String ssl_keystore_type = "BCFKS";
+
     /**
      * the password of keystore file
      */
@@ -3961,6 +3967,9 @@ public class Config extends ConfigBase {
      */
     @ConfField
     public static String ssl_truststore_location = "";
+
+    @ConfField(comment = "Certificate trust store type, separate from the private-key store")
+    public static String ssl_truststore_type = "JKS";
 
     /**
      * the password of truststore file

@@ -102,6 +102,7 @@ dependencies {
     implementation("com.google.protobuf:protobuf-java")
     implementation("com.google.protobuf:protobuf-java-util")
     implementation("com.microsoft.sqlserver:mssql-jdbc")
+    testImplementation("com.mysql:mysql-connector-j:8.2.0")
     testImplementation("com.mockrunner:mockrunner-jdbc") {
         exclude(group = "xerces", module = "xercesImpl")
         exclude(group = "junit", module = "junit")
@@ -109,8 +110,6 @@ dependencies {
     implementation("com.opencsv:opencsv")
     implementation("com.oracle.database.jdbc:ojdbc10")
     implementation("com.oracle.database.nls:orai18n")
-    implementation("com.qcloud.cos:hadoop-cos")
-    implementation("com.qcloud:chdfs_hadoop_plugin_network")
     implementation("com.squareup.okhttp3:okhttp")
     implementation("com.squareup.okio:okio")
     implementation("com.starrocks:spark-dpp")

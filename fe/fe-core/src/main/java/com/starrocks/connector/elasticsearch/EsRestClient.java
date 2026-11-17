@@ -39,7 +39,10 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.MapperFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.common.collect.ImmutableList;
+import com.starrocks.common.util.CryptoUtils;
+import com.starrocks.common.util.TlsUtils;
 import com.starrocks.connector.exception.StarRocksConnectorException;
+import okhttp3.ConnectionSpec;
 import okhttp3.Credentials;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
@@ -50,9 +53,7 @@ import org.apache.logging.log4j.Logger;
 import org.apache.logging.log4j.util.Strings;
 
 import java.io.IOException;
-import java.security.SecureRandom;
-import java.security.cert.CertificateException;
-import java.security.cert.X509Certificate;
+import java.security.GeneralSecurityException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -65,10 +66,7 @@ import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
-import javax.net.ssl.HostnameVerifier;
 import javax.net.ssl.SSLContext;
-import javax.net.ssl.SSLSession;
-import javax.net.ssl.SSLSocketFactory;
 import javax.net.ssl.TrustManager;
 import javax.net.ssl.X509TrustManager;
 
@@ -87,6 +85,8 @@ public class EsRestClient {
 
     private static final OkHttpClient NETWORK_CLIENT = new OkHttpClient.Builder()
             .readTimeout(10, TimeUnit.SECONDS)
+            .connectionSpecs(Collections.singletonList(ConnectionSpec.CLEARTEXT))
+            .followSslRedirects(false)
             .build();
 
     private static OkHttpClient sslNetworkClient;
@@ -219,12 +219,6 @@ public class EsRestClient {
      */
     String execute(String path) throws StarRocksConnectorException {
         StarRocksConnectorException scratchExceptionForThrow = null;
-        OkHttpClient client;
-        if (sslEnabled) {
-            client = getOrCreateSSLClient();
-        } else {
-            client = NETWORK_CLIENT;
-        }
         // Start from the node that served the last successful request and wrap around,
         // so a dead node[0] does not make every request wait for its timeout first.
         int startIndex = currentNodeIndex.get();
@@ -248,6 +242,7 @@ public class EsRestClient {
             Request request = localBuilder.get()
                     .url(node + "/" + path)
                     .build();
+            OkHttpClient client = sslEnabled || request.isHttps() ? getOrCreateSSLClient() : NETWORK_CLIENT;
             Response response = null;
             if (LOG.isTraceEnabled()) {
                 LOG.trace("es rest client request URL: {}", node + "/" + path);
@@ -294,45 +289,26 @@ public class EsRestClient {
         return (T) (key != null ? map.get(key) : map);
     }
 
-    private synchronized OkHttpClient getOrCreateSSLClient() {
+    private static synchronized OkHttpClient getOrCreateSSLClient() {
         if (sslNetworkClient == null) {
-            sslNetworkClient = new OkHttpClient.Builder()
-                    .readTimeout(10, TimeUnit.SECONDS)
-                    .sslSocketFactory(createSSLSocketFactory(), new TrustAllCerts())
-                    .hostnameVerifier(new TrustAllHostnameVerifier())
-                    .build();
+            try {
+                X509TrustManager trustManager = Arrays.stream(TlsUtils.trustManagers(null).getTrustManagers())
+                        .filter(X509TrustManager.class::isInstance)
+                        .map(X509TrustManager.class::cast)
+                        .findFirst()
+                        .orElseThrow(() -> new GeneralSecurityException("BCJSSE X509 trust manager is unavailable"));
+                SSLContext context = CryptoUtils.sslContext("TLS");
+                context.init(null, new TrustManager[] {trustManager}, CryptoUtils.secureRandom());
+                sslNetworkClient = new OkHttpClient.Builder()
+                        .readTimeout(10, TimeUnit.SECONDS)
+                        .sslSocketFactory(context.getSocketFactory(), trustManager)
+                        .followSslRedirects(false)
+                        .build();
+            } catch (GeneralSecurityException | IOException | IllegalStateException e) {
+                throw new StarRocksConnectorException("Failed to configure Elasticsearch TLS", e);
+            }
         }
         return sslNetworkClient;
-    }
-
-    private static class TrustAllCerts implements X509TrustManager {
-        public void checkClientTrusted(X509Certificate[] chain, String authType) throws CertificateException {
-        }
-
-        public void checkServerTrusted(X509Certificate[] chain, String authType) throws CertificateException {
-        }
-
-        public X509Certificate[] getAcceptedIssuers() {
-            return new X509Certificate[0];
-        }
-    }
-
-    private static class TrustAllHostnameVerifier implements HostnameVerifier {
-        public boolean verify(String hostname, SSLSession session) {
-            return true;
-        }
-    }
-
-    private static SSLSocketFactory createSSLSocketFactory() {
-        SSLSocketFactory ssfFactory;
-        try {
-            SSLContext sc = SSLContext.getInstance("TLS");
-            sc.init(null, new TrustManager[] {new TrustAllCerts()}, new SecureRandom());
-            ssfFactory = sc.getSocketFactory();
-        } catch (Exception e) {
-            throw new StarRocksConnectorException("Errors happens when create ssl socket");
-        }
-        return ssfFactory;
     }
 
     public static class EsIndex {

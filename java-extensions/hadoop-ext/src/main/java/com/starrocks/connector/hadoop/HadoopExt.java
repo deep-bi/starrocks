@@ -14,6 +14,7 @@
 
 package com.starrocks.connector.hadoop;
 
+import com.starrocks.connector.share.security.FipsAesCtrCryptoCodec;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.security.UserGroupInformation;
@@ -38,6 +39,7 @@ public class HadoopExt {
     }
 
     public void rewriteConfiguration(Configuration conf) {
+        FipsAesCtrCryptoCodec.configure(conf);
     }
 
     public FileSystem bindUGIToFileSystem(FileSystem fs, UserGroupInformation ugi) {

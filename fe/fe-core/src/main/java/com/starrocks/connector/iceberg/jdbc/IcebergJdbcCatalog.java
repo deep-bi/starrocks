@@ -26,12 +26,12 @@ import com.starrocks.connector.iceberg.IcebergCatalogType;
 import com.starrocks.connector.iceberg.cost.IcebergMetricsReporter;
 import com.starrocks.connector.iceberg.io.IcebergCachingFileIO;
 import com.starrocks.connector.share.iceberg.IcebergAwsClientFactory;
+import com.starrocks.connector.share.security.FipsTlsCryptoProvider;
 import com.starrocks.qe.ConnectContext;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.iceberg.CatalogProperties;
-import org.apache.iceberg.CatalogUtil;
 import org.apache.iceberg.PartitionSpec;
 import org.apache.iceberg.Schema;
 import org.apache.iceberg.SortOrder;
@@ -40,10 +40,12 @@ import org.apache.iceberg.aws.AwsProperties;
 import org.apache.iceberg.catalog.Namespace;
 import org.apache.iceberg.catalog.TableIdentifier;
 import org.apache.iceberg.jdbc.JdbcCatalog;
+import org.apache.iceberg.jdbc.JdbcClientPool;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import java.net.URI;
+import java.sql.Connection;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -93,7 +95,17 @@ public class IcebergJdbcCatalog implements IcebergCatalog {
                     ICEBERG_CUSTOM_PROPERTIES_PREFIX + WAREHOUSE_LOCATION));
         }
 
-        this.delegate = (JdbcCatalog) CatalogUtil.loadCatalog(JdbcCatalog.class.getName(), name, copiedProperties, conf);
+        FipsTlsCryptoProvider.checkReady();
+        this.delegate = new JdbcCatalog(null, poolProperties ->
+                new JdbcClientPool(poolProperties.get(CatalogProperties.URI), poolProperties) {
+                    @Override
+                    protected Connection newClient() {
+                        FipsTlsCryptoProvider.checkReady();
+                        return super.newClient();
+                    }
+                }, true);
+        this.delegate.setConf(conf);
+        this.delegate.initialize(name, copiedProperties);
 
     }
 

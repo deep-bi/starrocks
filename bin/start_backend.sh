@@ -96,6 +96,11 @@ if [ -e $STARROCKS_HOME/conf/hadoop_env.sh ]; then
     source $STARROCKS_HOME/conf/hadoop_env.sh
 fi
 
+if [ -n "$JAVA_HOME" ] && [ "$RUN_META_TOOL" -eq 0 ]; then
+    python3 "$STARROCKS_HOME/security/check-java-fips.py" \
+        --home "$STARROCKS_HOME" --component backend --preflight >/dev/null || exit 1
+fi
+
 # NOTE: JAVA_HOME must be configed if using hdfs scan, like hive external table
 jvm_arch="amd64"
 if [[ "${MACHINE_TYPE}" == "aarch64" ]]; then
@@ -146,6 +151,11 @@ export LIBHDFS_OPTS="$LIBHDFS_OPTS -Xrs"
 # HADOOP_CLASSPATH defined in $STARROCKS_HOME/conf/hadoop_env.sh
 # put $STARROCKS_HOME/conf ahead of $HADOOP_CLASSPATH so that custom config can replace the config in $HADOOP_CLASSPATH
 export CLASSPATH=${STARROCKS_HOME}/lib/jni-packages/starrocks-hadoop-ext.jar:$STARROCKS_HOME/conf:$STARROCKS_HOME/lib/jni-packages/*:$HADOOP_CLASSPATH:$CLASSPATH
+
+if [ -n "$JAVA_HOME" ] && [ "$RUN_META_TOOL" -eq 0 ]; then
+    python3 "$STARROCKS_HOME/security/check-java-fips.py" \
+        --home "$STARROCKS_HOME" --component backend --options="$LIBHDFS_OPTS" || exit 1
+fi
 
 
 # ================= native section =====================

@@ -15,8 +15,6 @@
 package com.starrocks.http;
 
 import com.starrocks.common.Config;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
 
 import java.util.Arrays;
 import java.util.Collections;
@@ -27,7 +25,6 @@ import java.util.regex.Pattern;
 
 public class SslUtil {
 
-    private static final Logger LOG = LogManager.getLogger(SslUtil.class);
     private static final Pattern COMMA = Pattern.compile("\\s*,\\s*");
 
     private static List<Pattern> parsePatterns(String cfg) {
@@ -50,10 +47,16 @@ public class SslUtil {
     }
 
     public static String[] filterCipherSuites(String[] defaults) {
+        // Limit the profile to AEAD AES suites, excluding CCM while its advisory remains open.
+        defaults = Arrays.stream(defaults).filter(c -> c.matches("TLS_AES_(128|256)_GCM_SHA(256|384)"
+                + "|TLS_ECDHE_(RSA|ECDSA)_WITH_AES_(128|256)_GCM_SHA(256|384)")).toArray(String[]::new);
         List<Pattern> whitelist = parsePatterns(Config.ssl_cipher_whitelist);
         List<Pattern> blacklist = parsePatterns(Config.ssl_cipher_blacklist);
 
         if (whitelist.isEmpty() && blacklist.isEmpty()) {
+            if (defaults.length == 0) {
+                throw new IllegalArgumentException("No permitted TLS cipher suites");
+            }
             return defaults;
         }
 
@@ -67,7 +70,7 @@ public class SslUtil {
                 .toArray(String[]::new);
 
         if (filtered.length == 0) {
-            LOG.warn("No cipher suites left, please check your whitelist and blacklist settings.");
+            throw new IllegalArgumentException("No permitted TLS cipher suites after filtering");
         }
         return filtered;
     }

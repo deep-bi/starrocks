@@ -30,8 +30,8 @@ class SslUtilTest {
             // TLS 1.3
             "TLS_AES_128_GCM_SHA256", "TLS_AES_256_GCM_SHA384", "TLS_CHACHA20_POLY1305_SHA256",
             // TLS 1.2
-            "ECDHE-RSA-AES128-GCM-SHA256", "ECDHE-RSA-AES256-GCM-SHA384",
-            "ECDHE-RSA-CHACHA20-POLY1305", "AES128-GCM-SHA256", "AES256-GCM-SHA384",
+            "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256", "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384",
+            "ECDHE-RSA-CHACHA20-POLY1305", "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256", "TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384",
             "AES128-SHA", "AES256-SHA"
     };
 
@@ -43,10 +43,10 @@ class SslUtilTest {
 
     @Test
     void whitelistRegexOnlyGcmEcdheRsa() {
-        Config.ssl_cipher_whitelist = "^ECDHE-RSA-.*-GCM-.*$";
+        Config.ssl_cipher_whitelist = "^TLS_ECDHE_RSA_WITH_.*_GCM_.*$";
         String[] out = SslUtil.filterCipherSuites(DEFAULTS);
         assertArrayEquals(
-                new String[] {"ECDHE-RSA-AES128-GCM-SHA256", "ECDHE-RSA-AES256-GCM-SHA384"},
+                new String[] {"TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256", "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384"},
                 out
         );
     }
@@ -58,8 +58,8 @@ class SslUtilTest {
         assertFalse(Arrays.asList(out).contains("AES128-SHA"));
         assertFalse(Arrays.asList(out).contains("AES256-SHA"));
 
-        assertTrue(Arrays.asList(out).contains("AES128-GCM-SHA256"));
-        assertTrue(Arrays.asList(out).contains("AES256-GCM-SHA384"));
+        assertTrue(Arrays.asList(out).contains("TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256"));
+        assertTrue(Arrays.asList(out).contains("TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384"));
     }
 
     @Test
@@ -67,7 +67,7 @@ class SslUtilTest {
         Config.ssl_cipher_blacklist = "TLS_AES_128_GCM_SHA256,TLS_AES_256_GCM_SHA384,TLS_CHACHA20_POLY1305_SHA256";
         String[] out = SslUtil.filterCipherSuites(DEFAULTS);
         for (String s : out) {
-            assertFalse(s.startsWith("TLS_"));
+            assertFalse(s.startsWith("TLS_AES_"));
         }
     }
 

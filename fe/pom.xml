@@ -79,7 +79,7 @@ under the License.
         <dnsjava.version>3.6.3</dnsjava.version>
         <nimbusds.version>9.37.2</nimbusds.version>
         <protobuf-java.version>3.25.5</protobuf-java.version>
-        <paimon.version>1.4.2-deepbi2</paimon.version>
+        <paimon.version>1.4.2-fips-deepbi1</paimon.version>
         <delta-kernel.version>4.0.0rc1</delta-kernel.version>
         <iceberg.version>1.10.0</iceberg.version>
         <staros.version>4.1.4</staros.version>
@@ -95,7 +95,6 @@ under the License.
         <lz4-java.version>1.11.4</lz4-java.version>
         <async-profiler.version>4.0</async-profiler.version>
         <maven.surefire.plugin.version>3.2.5</maven.surefire.plugin.version>
-        <bouncycastle.version>1.86</bouncycastle.version>
         <thrift.version>0.24.0</thrift.version>
         <httpclient5.version>5.6.4</httpclient5.version>
         <httpcore5.version>5.4.3</httpcore5.version>
@@ -194,8 +193,51 @@ under the License.
         </profile>
     </profiles>
 
+    <dependencies>
+        <dependency>
+            <groupId>org.bouncycastle</groupId>
+            <artifactId>bc-fips</artifactId>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.bouncycastle</groupId>
+            <artifactId>bcutil-fips</artifactId>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.bouncycastle</groupId>
+            <artifactId>bctls-fips</artifactId>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.bouncycastle</groupId>
+            <artifactId>bcpkix-fips</artifactId>
+            <scope>provided</scope>
+        </dependency>
+    </dependencies>
+
     <dependencyManagement>
         <dependencies>
+            <dependency>
+                <groupId>org.bouncycastle</groupId>
+                <artifactId>bc-fips</artifactId>
+                <version>2.1.1</version>
+            </dependency>
+            <dependency>
+                <groupId>org.bouncycastle</groupId>
+                <artifactId>bcutil-fips</artifactId>
+                <version>2.1.8</version>
+            </dependency>
+            <dependency>
+                <groupId>org.bouncycastle</groupId>
+                <artifactId>bctls-fips</artifactId>
+                <version>2.1.25</version>
+            </dependency>
+            <dependency>
+                <groupId>org.bouncycastle</groupId>
+                <artifactId>bcpkix-fips</artifactId>
+                <version>2.1.13</version>
+            </dependency>
 
             <!-- internal modules unified -->
             <dependency>
@@ -923,6 +965,15 @@ under the License.
                 <version>${hadoop.version}</version>
                 <exclusions>
                     <exclusion>
+                        <groupId>org.bouncycastle</groupId>
+                        <artifactId>*</artifactId>
+                    </exclusion>
+                    <!-- Hadoop TLS must use BCJSSE, including ABFS's default mode. -->
+                    <exclusion>
+                        <groupId>org.wildfly.openssl</groupId>
+                        <artifactId>wildfly-openssl</artifactId>
+                    </exclusion>
+                    <exclusion>
                         <artifactId>zookeeper</artifactId>
                         <groupId>org.apache.zookeeper</groupId>
                     </exclusion>
@@ -1088,6 +1139,10 @@ under the License.
                         <groupId>org.apache.hadoop</groupId>
                         <artifactId>hadoop-common</artifactId>
                     </exclusion>
+                    <exclusion>
+                        <groupId>org.wildfly.openssl</groupId>
+                        <artifactId>wildfly-openssl</artifactId>
+                    </exclusion>
                 </exclusions>
             </dependency>
 
@@ -1114,38 +1169,17 @@ under the License.
                 </exclusions>
             </dependency>
 
-            <!-- https://mvnrepository.com/artifact/com.qcloud.cos/hadoop-cos -->
-            <dependency>
-                <groupId>com.qcloud.cos</groupId>
-                <artifactId>hadoop-cos</artifactId>
-                <version>3.3.0-8.3.2</version>
-            </dependency>
-
-            <!-- hadoop-cos pulls tencentcloud-sdk 3.1.213 whose okhttp 2.7.5 is EOL;
-                 3.1.1471+ ships okhttp3, keeping COS client-side encryption usable -->
-            <dependency>
-                <groupId>com.tencentcloudapi</groupId>
-                <artifactId>tencentcloud-sdk-java-kms</artifactId>
-                <version>3.1.1471</version>
-            </dependency>
-            <dependency>
-                <groupId>com.tencentcloudapi</groupId>
-                <artifactId>tencentcloud-sdk-java-common</artifactId>
-                <version>3.1.1471</version>
-            </dependency>
-
-            <!-- https://mvnrepository.com/artifact/com.qcloud/chdfs_hadoop_plugin_network -->
-            <dependency>
-                <groupId>com.qcloud</groupId>
-                <artifactId>chdfs_hadoop_plugin_network</artifactId>
-                <version>3.2</version>
-            </dependency>
-
             <!-- https://mvnrepository.com/artifact/org.apache.hadoop/hadoop-azure-datalake -->
             <dependency>
                 <groupId>org.apache.hadoop</groupId>
                 <artifactId>hadoop-azure-datalake</artifactId>
                 <version>${hadoop.version}</version>
+                <exclusions>
+                    <exclusion>
+                        <groupId>org.wildfly.openssl</groupId>
+                        <artifactId>wildfly-openssl</artifactId>
+                    </exclusion>
+                </exclusions>
             </dependency>
 
             <!-- https://mvnrepository.com/artifact/org.apache.hadoop/hadoop-azure -->
@@ -1153,6 +1187,12 @@ under the License.
                 <groupId>org.apache.hadoop</groupId>
                 <artifactId>hadoop-azure</artifactId>
                 <version>${hadoop.version}</version>
+                <exclusions>
+                    <exclusion>
+                        <groupId>org.wildfly.openssl</groupId>
+                        <artifactId>wildfly-openssl</artifactId>
+                    </exclusion>
+                </exclusions>
             </dependency>
 
             <!-- https://mvnrepository.com/artifact/com.google.cloud.bigdataoss/gcs-connector -->
@@ -1274,21 +1314,6 @@ under the License.
                 <version>42.7.12</version>
             </dependency>
 
-            <dependency>
-                <groupId>org.bouncycastle</groupId>
-                <artifactId>bcprov-jdk18on</artifactId>
-                <version>${bouncycastle.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>org.bouncycastle</groupId>
-                <artifactId>bcpkix-jdk18on</artifactId>
-                <version>${bouncycastle.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>org.bouncycastle</groupId>
-                <artifactId>bcutil-jdk18on</artifactId>
-                <version>${bouncycastle.version}</version>
-            </dependency>
 
             <!-- https://mvnrepository.com/artifact/com.clickhouse/clickhouse-jdbc -->
             <!-- we need clickhouse driver for jdbc connector -->
@@ -1387,8 +1412,7 @@ under the License.
                         <groupId>org.lz4</groupId>
                         <artifactId>lz4-pure-java</artifactId>
                     </exclusion>
-                    <!-- aliyun-java-auth drags in bcprov-jdk15on 1.70 (multiple CVEs);
-                         bcprov-jdk18on 1.86 on the classpath provides the same packages -->
+                    <!-- Use the JVM BCFIPS provider. ODPS HMAC-SM3 remains unsupported. -->
                     <exclusion>
                         <groupId>org.bouncycastle</groupId>
                         <artifactId>bcprov-jdk15on</artifactId>
@@ -1751,6 +1775,31 @@ under the License.
                 <version>3.5.0</version>
                 <executions>
                     <execution>
+                        <id>ban-ordinary-bouncycastle</id>
+                        <goals>
+                            <goal>enforce</goal>
+                        </goals>
+                        <configuration>
+                            <rules>
+                                <bannedDependencies>
+                                    <excludes>
+                                        <exclude>org.bouncycastle:*</exclude>
+                                        <exclude>org.wildfly.openssl:*</exclude>
+                                        <exclude>com.qcloud.cos:*</exclude>
+                                        <exclude>com.qcloud:*</exclude>
+                                        <exclude>com.tencentcloudapi:*</exclude>
+                                    </excludes>
+                                    <includes>
+                                        <include>org.bouncycastle:bc-fips:[2.1.1]</include>
+                                        <include>org.bouncycastle:bcutil-fips:[2.1.8]</include>
+                                        <include>org.bouncycastle:bctls-fips:[2.1.25]</include>
+                                        <include>org.bouncycastle:bcpkix-fips:[2.1.13]</include>
+                                    </includes>
+                                </bannedDependencies>
+                            </rules>
+                        </configuration>
+                    </execution>
+                    <execution>
                         <id>ban-vulnerable-dependencies</id>
                         <goals>
                             <goal>enforce</goal>
@@ -1759,7 +1808,7 @@ under the License.
                             <rules>
                                 <bannedDependencies>
                                     <excludes>
-                                        <!-- superseded by bcprov-jdk18on; 1.70 carries multiple open CVEs -->
+                                        <!-- Ordinary BC conflicts with the selected FIPS provider -->
                                         <exclude>org.bouncycastle:bcprov-jdk15on</exclude>
                                         <!-- EOL okhttp 2.x line -->
                                         <exclude>com.squareup.okhttp:*</exclude>

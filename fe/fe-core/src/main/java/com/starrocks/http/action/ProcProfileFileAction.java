@@ -17,6 +17,7 @@ package com.starrocks.http.action;
 import com.google.common.base.Strings;
 import com.google.re2j.Pattern;
 import com.starrocks.common.Config;
+import com.starrocks.connector.share.security.HttpAuthenticationPolicy;
 import com.starrocks.http.ActionController;
 import com.starrocks.http.BaseRequest;
 import com.starrocks.http.BaseResponse;
@@ -37,7 +38,6 @@ import org.apache.http.client.config.RequestConfig;
 import org.apache.http.client.methods.CloseableHttpResponse;
 import org.apache.http.client.methods.HttpGet;
 import org.apache.http.impl.client.CloseableHttpClient;
-import org.apache.http.impl.client.HttpClients;
 import org.apache.http.util.EntityUtils;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -152,7 +152,8 @@ public class ProcProfileFileAction extends WebBaseAction {
                             .setRedirectsEnabled(true)
                             .build();
 
-            try (CloseableHttpClient httpClient = HttpClients.custom().setDefaultRequestConfig(requestConfig).build()) {
+            try (CloseableHttpClient httpClient = HttpAuthenticationPolicy.clientBuilder()
+                    .setDefaultRequestConfig(requestConfig).build()) {
                 HttpGet httpGet = new HttpGet(url);
                 try (CloseableHttpResponse httpResponse = httpClient.execute(httpGet)) {
                     int code = httpResponse.getStatusLine().getStatusCode();

@@ -44,7 +44,7 @@ public class StringUtils {
     private static final String CHARSET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
 
     public static String generateRandomString(int length) {
-        SecureRandom secureRandom = new SecureRandom();
+        SecureRandom secureRandom = CryptoUtils.secureRandom();
         StringBuilder randomString = new StringBuilder(length);
 
         for (int i = 0; i < length; i++) {

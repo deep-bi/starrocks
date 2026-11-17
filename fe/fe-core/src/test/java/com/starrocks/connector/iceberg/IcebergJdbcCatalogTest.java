@@ -19,6 +19,7 @@ import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Lists;
 import com.starrocks.catalog.Database;
 import com.starrocks.common.MetaNotFoundException;
+import com.starrocks.common.util.CryptoTestExtension;
 import com.starrocks.connector.exception.StarRocksConnectorException;
 import com.starrocks.connector.iceberg.jdbc.IcebergJdbcCatalog;
 import com.starrocks.qe.ConnectContext;
@@ -38,6 +39,7 @@ import org.apache.iceberg.jdbc.JdbcCatalog;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 
 import java.io.IOException;
 import java.util.Arrays;
@@ -51,10 +53,11 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+@ExtendWith(CryptoTestExtension.class)
 public class IcebergJdbcCatalogTest {
 
     private static String LOCATION = "s3://path/to/warehouse";
-    private static String URI = "jdbc:mysql://host:port/db_name";
+    private static String URI = "jdbc:postgresql://host:5432/db_name?sslmode=disable";
     public static ConnectContext connectContext;
 
     @BeforeAll
