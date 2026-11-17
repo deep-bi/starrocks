@@ -55,6 +55,15 @@ CONF_String(ssl_certificate_path, "");
 // path of private key
 CONF_String(ssl_private_key_path, "");
 
+// Run all OpenSSL crypto through the OpenSSL 3.1.2 FIPS provider (CMVP #4985), which every package
+// ships in lib/ossl-modules; bin/start_backend.sh generates conf/fipsmodule.cnf on each host with
+// openssl fipsinstall. Startup fails instead of falling back to non-FIPS mode.
+CONF_Bool(enable_fips_mode, "false");
+// ships in lib/ so that upgrades, which replace lib/ but keep conf/, always bring the matching file
+CONF_String(fips_openssl_conf, "${STARROCKS_HOME}/lib/openssl-fips/openssl-fips.cnf");
+// bin/start_backend.sh reads this too, to find fips.so for fipsinstall
+CONF_String(fips_module_dir, "${STARROCKS_HOME}/lib/ossl-modules");
+
 // The max number of single connections maintained by the brpc client and each server.
 // These connections are created during the first few access and will be used thereafter
 CONF_Int32(brpc_max_connections_per_server, "1");

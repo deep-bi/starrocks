@@ -1,0 +1,47 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# OpenSSL configuration for running StarRocks BE/CN in FIPS mode.
+# Loaded by the BE when enable_fips_mode = true in be.conf / cn.conf.
+# Installed as lib/openssl-fips/openssl-fips.cnf; not meant to be edited per host.
+#
+# fipsmodule.cnf is generated on each host by `openssl fipsinstall` at startup
+# and must never be copied between hosts or edited by hand.
+
+config_diagnostics = 1
+openssl_conf = openssl_init
+
+.include $ENV::STARROCKS_HOME/conf/fipsmodule.cnf
+
+[openssl_init]
+providers = provider_sect
+alg_section = algorithm_sect
+
+[provider_sect]
+fips = fips_sect
+base = base_sect
+# needed only for non-security checksums fetched explicitly with "fips=no"
+default = default_sect
+
+[base_sect]
+activate = 1
+
+[default_sect]
+activate = 1
+
+[algorithm_sect]
+default_properties = fips=yes

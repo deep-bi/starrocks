@@ -565,7 +565,7 @@ StatusOr<ColumnPtr> EncryptionFunctions::md5sum(FunctionContext* ctx, const Colu
         }
         digest.digest();
 
-        result.append(Slice(digest.hex().c_str(), digest.hex().size()));
+        result.append(Slice(digest.hex()));
     }
 
     return result.build(ColumnHelper::is_all_const(columns));
@@ -589,9 +589,9 @@ StatusOr<ColumnPtr> EncryptionFunctions::md5sum_numeric(FunctionContext* ctx, co
             digest.update(v.data, v.size);
         }
         digest.digest();
+        const std::string hex = digest.hex();
         StringParser::ParseResult parse_res;
-        auto int_val =
-                StringParser::string_to_int<uint128_t>(digest.hex().c_str(), digest.hex().size(), 16, &parse_res);
+        auto int_val = StringParser::string_to_int<uint128_t>(hex.c_str(), hex.size(), 16, &parse_res);
         DCHECK_EQ(parse_res, StringParser::PARSE_SUCCESS);
         result.append(int_val);
     }
@@ -614,7 +614,7 @@ StatusOr<ColumnPtr> EncryptionFunctions::md5(FunctionContext* ctx, const Columns
         digest.update(src_value.data, src_value.size);
         digest.digest();
 
-        result.append(Slice(digest.hex().c_str(), digest.hex().size()));
+        result.append(Slice(digest.hex()));
     }
 
     return result.build(ColumnHelper::is_all_const(columns));
@@ -672,7 +672,7 @@ StatusOr<ColumnPtr> EncryptionFunctions::sha224(FunctionContext* ctx, const Colu
         digest.update(src_value.data, src_value.size);
         digest.digest();
 
-        result.append(Slice(digest.hex().c_str(), digest.hex().size()));
+        result.append(Slice(digest.hex()));
     }
 
     return result.build(ColumnHelper::is_all_const(columns));
@@ -694,7 +694,7 @@ StatusOr<ColumnPtr> EncryptionFunctions::sha256(FunctionContext* ctx, const Colu
         digest.update(src_value.data, src_value.size);
         digest.digest();
 
-        result.append(Slice(digest.hex().c_str(), digest.hex().size()));
+        result.append(Slice(digest.hex()));
     }
 
     return result.build(ColumnHelper::is_all_const(columns));
@@ -716,7 +716,7 @@ StatusOr<ColumnPtr> EncryptionFunctions::sha384(FunctionContext* ctx, const Colu
         digest.update(src_value.data, src_value.size);
         digest.digest();
 
-        result.append(Slice(digest.hex().c_str(), digest.hex().size()));
+        result.append(Slice(digest.hex()));
     }
 
     return result.build(ColumnHelper::is_all_const(columns));
@@ -738,7 +738,7 @@ StatusOr<ColumnPtr> EncryptionFunctions::sha512(FunctionContext* ctx, const Colu
         digest.update(src_value.data, src_value.size);
         digest.digest();
 
-        result.append(Slice(digest.hex().c_str(), digest.hex().size()));
+        result.append(Slice(digest.hex()));
     }
 
     return result.build(ColumnHelper::is_all_const(columns));
@@ -765,22 +765,22 @@ StatusOr<ColumnPtr> EncryptionFunctions::sha2(FunctionContext* ctx, const Column
                 SHA224Digest digest;
                 digest.update(src_value.data, src_value.size);
                 digest.digest();
-                result.append(Slice(digest.hex().c_str(), digest.hex().size()));
+                result.append(Slice(digest.hex()));
             } else if (length == 0 || length == 256) {
                 SHA256Digest digest;
                 digest.update(src_value.data, src_value.size);
                 digest.digest();
-                result.append(Slice(digest.hex().c_str(), digest.hex().size()));
+                result.append(Slice(digest.hex()));
             } else if (length == 384) {
                 SHA384Digest digest;
                 digest.update(src_value.data, src_value.size);
                 digest.digest();
-                result.append(Slice(digest.hex().c_str(), digest.hex().size()));
+                result.append(Slice(digest.hex()));
             } else if (length == 512) {
                 SHA512Digest digest;
                 digest.update(src_value.data, src_value.size);
                 digest.digest();
-                result.append(Slice(digest.hex().c_str(), digest.hex().size()));
+                result.append(Slice(digest.hex()));
             } else {
                 result.append_null();
             }
