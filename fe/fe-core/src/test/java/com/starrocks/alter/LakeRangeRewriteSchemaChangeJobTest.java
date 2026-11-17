@@ -288,16 +288,54 @@ public class LakeRangeRewriteSchemaChangeJobTest {
 
             Config.tablet_reshard_target_size = 1024;
             int expected = TabletPreSplitCoordinator.selectTabletCount(
-                    new Estimates(plan.partitionDataSize, 0L), activeComputeNodeCount);
+                    new Estimates(plan.partitionDataSize, 0L), activeComputeNodeCount, Config.tablet_reshard_target_size);
             Assertions.assertEquals(expected,
-                    job.selectRequestedTabletCount(plan, activeComputeNodeCount));
+                    job.selectRequestedTabletCount(plan, activeComputeNodeCount,
+                            table.getTabletReshardTargetSize()));
 
             Config.tablet_reshard_target_size = -1;
             Assertions.assertThrows(IllegalStateException.class,
-                    () -> job.selectRequestedTabletCount(plan, activeComputeNodeCount));
+                    () -> job.selectRequestedTabletCount(plan, activeComputeNodeCount,
+                            table.getTabletReshardTargetSize()));
         } finally {
             Config.tablet_reshard_target_size = oldTargetSize;
         }
+    }
+
+    @Test
+    public void testPlanPartitionShadowSizesAgainstTableTargetSize() throws Exception {
+        long oldTargetSize = Config.tablet_reshard_target_size;
+        long oneGiB = 1L << 30;
+        List<Long> receivedTargets = new ArrayList<>();
+        new MockUp<TabletPreSplitCoordinator>() {
+            @Mock
+            public int selectTabletCount(Estimates estimates, int activeComputeNodeCount, long targetSize) {
+                receivedTargets.add(targetSize);
+                return 1;
+            }
+        };
+        try {
+            Config.tablet_reshard_target_size = 10 * oneGiB;
+            PhysicalPartition partition = table.getPhysicalPartitions().iterator().next();
+            MaterializedIndex baseIndex = partition.getLatestIndex(table.getBaseIndexMetaId());
+            LakeRangeRewriteSchemaChangeJob job = newJob(stubSampler(List.of()));
+
+            job.planPartitionShadow(newPlanWithDataSize(partition, baseIndex, 10 * oneGiB), table, DB_NAME);
+            Assertions.assertEquals(List.of(10 * oneGiB), receivedTargets);
+
+            table.setTabletReshardTargetSize(oneGiB);
+            receivedTargets.clear();
+            job.planPartitionShadow(newPlanWithDataSize(partition, baseIndex, 10 * oneGiB), table, DB_NAME);
+            Assertions.assertEquals(List.of(oneGiB), receivedTargets);
+        } finally {
+            Config.tablet_reshard_target_size = oldTargetSize;
+        }
+    }
+
+    private PendingPartitionPlan newPlanWithDataSize(PhysicalPartition partition, MaterializedIndex baseIndex,
+                                                     long dataSize) {
+        return new PendingPartitionPlan(partition.getId(), baseIndex, baseIndex.getShardGroupId(),
+                table.getPartition(partition.getParentId()).getName(), dataSize, table.getName(), partition);
     }
 
     @Test
@@ -1856,6 +1894,48 @@ public class LakeRangeRewriteSchemaChangeJobTest {
     }
 
     @Test
+    public void testForceCancelRefusedUntilEarlierLoadIsVisible() throws Exception {
+        // A load committed at C-1 and not yet finished on FE (it may already be published on BE), then the job
+        // reserved C. The force cancel must be refused before any no-op publish: otherwise the FE visible bump
+        // to C is skipped and C never becomes visible. Once the load is visible the force cancel goes through.
+        LakeRangeRewriteSchemaChangeJob job = jobInFinishedRewriting();
+        PhysicalPartition physicalPartition = table.getPhysicalPartitions().iterator().next();
+        long loadVersion = physicalPartition.getNextVersion();
+        physicalPartition.setNextVersion(loadVersion + 1);
+        job.setPublishExecutor(j -> false);
+        job.runFinishedRewritingJob();
+        Assertions.assertEquals(AlterJobV2.JobState.FINISHED_REWRITING, job.getJobState());
+        long commitVersion = loadVersion + 1;
+        Assertions.assertEquals(commitVersion + 1, physicalPartition.getNextVersion());
+        Assertions.assertEquals(commitVersion - 2, physicalPartition.getVisibleVersion());
+
+        AtomicInteger noOpPublishes = new AtomicInteger();
+        new MockUp<com.starrocks.lake.Utils>() {
+            @Mock
+            public boolean noOpPublishForForceSkip(long jobId, String reason, long watershedTxnId, long watershedGtid,
+                                                   java.util.Map<Long, Long> commitVersionMap,
+                                                   java.util.Map<Long, List<Tablet>> tabletsByPartition,
+                                                   com.starrocks.warehouse.cngroup.ComputeResource cr,
+                                                   boolean useAggregatePublish) {
+                noOpPublishes.incrementAndGet();
+                return true;
+            }
+        };
+
+        Assertions.assertFalse(job.cancelImpl("force cancel", /*force=*/ true));
+        Assertions.assertEquals(AlterJobV2.JobState.FINISHED_REWRITING, job.getJobState());
+        Assertions.assertFalse(job.isForceSkippedAtCommitted());
+        Assertions.assertEquals(0, noOpPublishes.get());
+
+        // The load finishes.
+        physicalPartition.setVisibleVersion(loadVersion, System.currentTimeMillis());
+        Assertions.assertTrue(job.cancelImpl("force cancel", /*force=*/ true));
+        Assertions.assertEquals(AlterJobV2.JobState.CANCELLED, job.getJobState());
+        Assertions.assertEquals(1, noOpPublishes.get());
+        Assertions.assertEquals(commitVersion, physicalPartition.getVisibleVersion());
+    }
+
+    @Test
     public void testForceCancelReplayAdvancesVisibleVersion() throws Exception {
         // Regression: forceSkippedAtCommitted was not copied in replay()'s field-copy block,
         // so a follower replaying a force-cancelled job (recovered from a pre-cancel image) saw
@@ -1940,6 +2020,7 @@ public class LakeRangeRewriteSchemaChangeJobTest {
         AtomicReference<Long> capturedRewriteTxnId = new AtomicReference<>();
         AtomicReference<Long> capturedAlterVersion = new AtomicReference<>();
         Map<Long, Boolean> capturedEmpty = new TreeMap<>();
+        List<Boolean> capturedRetry = new ArrayList<>();
         new MockUp<Utils>() {
             // Non-bundling path: both shadow and origin tablets go through the generic publishVersion.
             // The shadow publish is the one carrying a TXN_SHADOW_REWRITE TxnInfoPB; the origin no-op
@@ -1947,8 +2028,9 @@ public class LakeRangeRewriteSchemaChangeJobTest {
             @Mock
             public void publishVersion(List<Tablet> tablets, com.starrocks.proto.TxnInfoPB txnInfo,
                     long baseVersion, long newVersion, ComputeResource cr,
-                    boolean useAggregatePublish) {
+                    boolean useAggregatePublish, boolean isRetryPublish) {
                 if (txnInfo.txnType == com.starrocks.proto.TxnTypePB.TXN_SHADOW_REWRITE) {
+                    capturedRetry.add(isRetryPublish);
                     tablets.forEach(t -> publishedShadowTabletIds.add(t.getId()));
                     capturedEmpty.put(txnInfo.txnId, txnInfo.shadowRewriteSourceEmpty);
                     if (txnInfo.txnId == 123456L) {
@@ -1965,9 +2047,11 @@ public class LakeRangeRewriteSchemaChangeJobTest {
                     List<com.starrocks.proto.TxnInfoPB> txnInfos, long baseVersion, long newVersion,
                     java.util.Map<com.starrocks.system.ComputeNode, List<Long>> nodeToTablets,
                     ComputeResource cr,
-                    com.starrocks.proto.AggregatePublishVersionRequest req) {
+                    com.starrocks.proto.AggregatePublishVersionRequest req,
+                    boolean preferSharedInitialMetadata, boolean isRetryPublish) {
                 com.starrocks.proto.TxnInfoPB txnInfo = txnInfos.get(0);
                 if (txnInfo.txnType == com.starrocks.proto.TxnTypePB.TXN_SHADOW_REWRITE) {
+                    capturedRetry.add(isRetryPublish);
                     tablets.forEach(t -> publishedShadowTabletIds.add(t.getId()));
                     capturedEmpty.put(txnInfo.txnId, txnInfo.shadowRewriteSourceEmpty);
                     if (txnInfo.txnId == 123456L) {
@@ -2011,6 +2095,8 @@ public class LakeRangeRewriteSchemaChangeJobTest {
         Assertions.assertEquals(7L, watershedVersion, "exercise the empty-at-W>1 publish path");
         Assertions.assertEquals(Map.of(123456L, true, 123457L, false), capturedEmpty,
                 "final TxnInfoPB must preserve both saved source-empty facts after eviction");
+        // One publish per partition, each a first attempt.
+        Assertions.assertEquals(List.of(false, false), capturedRetry);
     }
 
     /**
@@ -2039,7 +2125,8 @@ public class LakeRangeRewriteSchemaChangeJobTest {
         new MockUp<Utils>() {
             @Mock
             public void publishVersion(List<Tablet> tablets, TxnInfoPB txnInfo, long baseVersion, long newVersion,
-                                       ComputeResource computeResource, boolean useAggregatePublish) {
+                                       ComputeResource computeResource, boolean useAggregatePublish,
+                                       boolean isRetryPublish) {
                 publishedTxns.add(txnInfo);
                 publishedVersions.add(newVersion);
             }
@@ -2049,7 +2136,9 @@ public class LakeRangeRewriteSchemaChangeJobTest {
                                                             long baseVersion, long newVersion,
                                                             Map<ComputeNode, List<Long>> nodeToTablets,
                                                             ComputeResource computeResource,
-                                                            AggregatePublishVersionRequest request) {
+                                                            AggregatePublishVersionRequest request,
+                                                            boolean preferSharedInitialMetadata,
+                                                            boolean isRetryPublish) {
                 publishedTxns.addAll(txnInfos);
                 publishedVersions.add(newVersion);
             }

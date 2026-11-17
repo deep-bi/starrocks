@@ -28,6 +28,7 @@
 #include "common/config_lake_fwd.h"
 #include "common/config_primary_key_fwd.h"
 #include "common/config_rowset_fwd.h"
+#include "common/config_storage_fwd.h"
 #include "fs/fs_factory.h"
 #include "fs/fs_util.h"
 #include "platform/key_cache.h"
@@ -321,6 +322,12 @@ StatusOr<TabletMetadataPtr> PrimaryKeyManager::flush_pk_memtable(const TabletMet
     auto mutable_metadata = std::make_shared<TabletMetadataPB>(*metadata);
     Tablet tablet(_tablet_mgr, tablet_id);
     MetaFileBuilder builder(tablet, mutable_metadata);
+
+    // The flush needs the index of exactly |metadata|, but prepare_primary_index uses a loaded index whatever version
+    // it holds. This node can cache the index at an older version: the tablet was published on another node since
+    // this one loaded it, or a publish that wrote no data moved the version on. Run the check a publish runs first:
+    // an older index is dropped so that it is rebuilt from |metadata|, and a newer one fails the flush.
+    RETURN_IF_ERROR(check_meta_version(tablet, base_version));
 
     std::unique_ptr<std::lock_guard<std::shared_timed_mutex>> write_guard;
     ASSIGN_OR_RETURN(auto* index_entry, prepare_primary_index(metadata, &builder, base_version,
@@ -839,8 +846,12 @@ Status PrimaryKeyManager::_open_upsert_source_segment(const TxnLogPB_OpWrite& op
 
     // This is a segment this transaction just wrote and reads exactly once, so it is deliberately kept
     // out of the metacache: there is nothing for a later reader to reuse.
-    ASSIGN_OR_RETURN(*segment, Segment::open(fs, file_info, seg, tschema));
+    // Read as the publish that applies the write, or as a load of its own on a thread with no context.
+    LakeIOOptions lake_io_opts;
+    lake_io_opts.remote_read = ScopedRemoteReadContext::current_or_load();
+    ASSIGN_OR_RETURN(*segment, Segment::open(fs, file_info, seg, tschema, nullptr, nullptr, lake_io_opts));
     RandomAccessFileOptions opts;
+    opts.remote_read = lake_io_opts.remote_read;
     if (!file_info.encryption_meta.empty()) {
         ASSIGN_OR_RETURN(auto unwrap, KeyCache::instance().unwrap_encryption_meta(file_info.encryption_meta));
         opts.encryption_info = std::move(unwrap);
@@ -1805,7 +1816,10 @@ static StatusOr<std::shared_ptr<Segment>> get_lake_dcg_segment(GetDeltaColumnCon
         const auto& column_file = column_file_result.value();
 
         if (ctx.dcg_segments.count(column_file) == 0) {
-            auto dcg_segment_result = ctx.segment->new_dcg_segment(*dcg, idx.first, read_tablet_schema);
+            // A `.cols` segment is opened again by every publish that reads it, so its footer read has to
+            // fill the local data cache, as the column reads that follow do.
+            auto dcg_segment_result = ctx.segment->new_dcg_segment(*dcg, idx.first, read_tablet_schema,
+                                                                   LakeIOOptions{.fill_data_cache = true});
             if (!dcg_segment_result.ok()) {
                 return Status::InternalError(fmt::format("Failed to create DCG segment for column {}: {}", ucid,
                                                          dcg_segment_result.status().to_string()));
@@ -1834,6 +1848,7 @@ static StatusOr<std::unique_ptr<ColumnIterator>> new_lake_dcg_column_iterator(
     const auto& dcg_segment = dcg_segment_result.value();
     if (ctx.dcg_read_files.count(dcg_segment->file_name()) == 0) {
         RandomAccessFileOptions ropts;
+        ropts.remote_read = ScopedRemoteReadContext::current_or_load();
         if (!dcg_segment->file_info().encryption_meta.empty()) {
             ASSIGN_OR_RETURN(auto info,
                              KeyCache::instance().unwrap_encryption_meta(dcg_segment->file_info().encryption_meta));
@@ -1992,15 +2007,20 @@ Status PrimaryKeyManager::get_column_values(const RowsetUpdateStateParams& param
                                 publish_segment_count <= cache_capacity / estimated_segment_bytes;
         }
         TEST_SYNC_POINT_CALLBACK("UpdateManager::get_column_values:fill_meta_cache", &use_segment_cache);
+        // The column reads below go through the page cache, so a later publish can be served from memory
+        // without touching the file. Nothing would then bring the footer block back into the local data
+        // cache once it is evicted, so the footer read has to fill the data cache itself.
+        const LakeIOOptions segment_io_opts{.fill_data_cache = true,
+                                            .remote_read = ScopedRemoteReadContext::current_or_load()};
         if (use_segment_cache) {
             // Reuse the metacache entry instead of re-parsing the footer and rebuilding a column
             // reader per schema column on every publish. Segment::open() is `_open_once` guarded, so
-            // a cached entry turns the open into a no-op. LakeIOOptions is left at its defaults to
-            // keep the data-cache behaviour identical to the static Segment::open below.
-            segment = tablet_mgr->load_segment(file_info, segment_id_in_rowset, LakeIOOptions{},
+            // a cached entry turns the open into a no-op.
+            segment = tablet_mgr->load_segment(file_info, segment_id_in_rowset, segment_io_opts,
                                                /*fill_meta_cache=*/true, tablet_schema);
         } else {
-            segment = Segment::open(fs, file_info, segment_id_in_rowset, tablet_schema);
+            segment = Segment::open(fs, file_info, segment_id_in_rowset, tablet_schema, nullptr, nullptr,
+                                    segment_io_opts);
         }
         if (!segment.ok()) {
             LOG(WARNING) << "Fail to open rssid: " << segment_id << " path: " << file_info.path << " : "
@@ -2012,6 +2032,7 @@ Status PrimaryKeyManager::get_column_values(const RowsetUpdateStateParams& param
         }
 
         RandomAccessFileOptions opts;
+        opts.remote_read = segment_io_opts.remote_read;
         if (!file_info.encryption_meta.empty()) {
             ASSIGN_OR_RETURN(auto info, KeyCache::instance().unwrap_encryption_meta(file_info.encryption_meta));
             opts.encryption_info = std::move(info);
@@ -2019,8 +2040,12 @@ Status PrimaryKeyManager::get_column_values(const RowsetUpdateStateParams& param
         ColumnIteratorOptions iter_opts;
         OlapReaderStatistics stats;
         iter_opts.stats = &stats;
+        // Publishes of a tablet keep reading the same base rows, from the base segment and from its `.cols`
+        // files alike, so keep their pages in the page cache as a scan does.
+        iter_opts.use_page_cache = !config::disable_storage_page_cache;
         ASSIGN_OR_RETURN(auto read_file, fs->new_random_access_file_with_bundling(opts, file_info));
         iter_opts.read_file = read_file.get();
+        TEST_SYNC_POINT_CALLBACK("UpdateManager::get_column_values:iter_opts", &iter_opts);
 
         GetDeltaColumnContext* dcg_ctx = nullptr;
         if (has_any_dcg && dcg_contexts.count(segment_id) > 0 && !dcg_contexts[segment_id].dcgs.empty()) {
