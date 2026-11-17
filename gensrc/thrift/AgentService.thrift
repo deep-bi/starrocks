@@ -314,7 +314,9 @@ struct TUploadReq {
     // hdfs_write_buffer_size_kb for writing through lib hdfs directly
     6: optional i32 hdfs_write_buffer_size_kb = 0
     // properties from hdfs-site.xml, core-site.xml and load_properties
-    7: optional PlanNodes.THdfsProperties hdfs_properties 
+    7: optional PlanNodes.THdfsProperties hdfs_properties
+    // incremental backup: dest path -> files (<name>.<md5>) the base's holders already have, not to be uploaded
+    8: optional map<string, list<string>> reusable_files
 }
 
 struct TDownloadReq {
@@ -328,7 +330,11 @@ struct TDownloadReq {
     // hdfs_read_buffer_size_kb for writing through lib hdfs directly
     6: optional i32 hdfs_read_buffer_size_kb = 0
     // properties from hdfs-site.xml, core-site.xml and load_properties
-    7: optional PlanNodes.THdfsProperties hdfs_properties 
+    7: optional PlanNodes.THdfsProperties hdfs_properties
+    // incremental restore: local tablet path -> remote files (<holder dir>/<name>.<md5>) that make up the tablet.
+    // For these tablets, the remote path in src_dest_map is the snapshot's own legacy one, which is empty, so a
+    // BE that ignores this field fails with "get nothing from remote path" instead of restoring partially.
+    8: optional map<string, list<string>> source_files
 }
 
 struct TSnapshotRequest {
