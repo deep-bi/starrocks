@@ -39,6 +39,7 @@ under the License.
         <module>plugin/hive-udf</module>
         <module>fe-core</module>
         <module>fe-server</module>
+        <module>../extensions/warehouse</module>
     </modules>
 
     <name>starrocks-fe</name>
