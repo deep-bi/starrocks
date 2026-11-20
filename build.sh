@@ -565,7 +565,7 @@ if [ ${BUILD_FE} -eq 1 ] || [ ${BUILD_SPARK_DPP} -eq 1 ] || [ ${BUILD_HIVE_UDF} 
         FE_MODULES="fe-testing,plugin/hive-udf"
     fi
     if [ ${BUILD_FE} -eq 1 ]; then
-        FE_MODULES="plugin/hive-udf,fe-testing,plugin/spark-dpp,fe-server"
+        FE_MODULES="plugin/hive-udf,fe-testing,plugin/spark-dpp,fe-server,../extensions/warehouse"
     fi
 fi
 
@@ -609,6 +609,7 @@ if [ ${BUILD_FE} -eq 1 -o ${BUILD_SPARK_DPP} -eq 1 ]; then
         cp -r -p ${STARROCKS_HOME}/fe/fe-server/target/lib/* ${STARROCKS_OUTPUT}/fe/lib/
         cp -r -p ${STARROCKS_HOME}/fe/fe-server/target/starrocks-fe.jar ${STARROCKS_OUTPUT}/fe/lib/
         cp -r -p ${STARROCKS_HOME}/java-extensions/hadoop-ext/target/starrocks-hadoop-ext.jar ${STARROCKS_OUTPUT}/fe/lib/
+        cp -r -p ${STARROCKS_HOME}/extensions/warehouse/target/starrocks-warehouse-ext.jar ${STARROCKS_OUTPUT}/fe/lib/
         cp -r -p ${STARROCKS_HOME}/webroot/* ${STARROCKS_OUTPUT}/fe/webroot/
         cp -r -p ${STARROCKS_HOME}/fe/plugin/spark-dpp/target/spark-dpp-*-jar-with-dependencies.jar ${STARROCKS_OUTPUT}/fe/spark-dpp/
         cp -r -p ${STARROCKS_HOME}/fe/plugin/hive-udf/target/hive-udf-*.jar ${STARROCKS_OUTPUT}/fe/hive-udf/
