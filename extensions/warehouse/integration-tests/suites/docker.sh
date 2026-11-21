@@ -17,7 +17,8 @@
 #   - routing of queries, INSERT and Stream Load
 #   - a node of either warehouse going down and coming back
 #   - checkpoint and FE restart with live nodes
-#   - privileges and the USAGE gate, a REVOKE on an open connection, and the switch that turns the gate off
+#   - privileges and the USAGE gate, a REVOKE on an open connection, a REVOKE while a statement runs, and
+#     the switch that turns the gate off
 #   - alter, drop, re-create
 #   - build and unit tests inside the image, against the image's own jars
 # Evidence for routing is the research node's own counters: nothing but research sessions ever reaches it.
@@ -164,6 +165,23 @@ grew "open session: the refused INSERT loaded nothing on the research node" "$L"
 expect "open session: the refused INSERT wrote no row" "0" "$(q -N -e 'SELECT count(*) FROM poc.t WHERE id = 9105')"
 expect "open session: the same session works again after GRANT" "| after grant " "$out"
 expect "open session: the prepared statement ran before the REVOKE and after the GRANT" "2" "$(echo "$out" | grep -c '^| prepared ')"
+
+# A REVOKE that arrives while a statement runs must not change the result of that statement. With a profile on,
+# the FE asks for the session's compute resource once more after an INSERT has committed.
+# docker/profiled-session.sql is one session of loader with profiles on; docker/revoke-later.sh revokes while
+# each of its two slow statements runs.
+q -e "GRANT USAGE ON WAREHOUSE research TO USER loader;" >/dev/null
+d cp -q "$IT_DIR/docker/profiled-session.sql" whext-fe:/tmp/profiled-session.sql
+d cp -q "$IT_DIR/docker/revoke-later.sh" whext-fe:/tmp/revoke-later.sh
+L=$(metric 22 load)
+out=$(d exec -i whext-fe bash -c 'mysql -h127.0.0.1 -P9030 -uloader --force --table < /tmp/profiled-session.sql' 2>&1); sleep 1
+expect "revoke while running: only the two statements after a REVOKE are refused" "2" "$(echo "$out" | grep -c 'ERROR 5203')"
+expect "revoke while running: the INSERT committed its row" "1" "$(q -N -e 'SELECT count(*) FROM poc.t WHERE id = 9106')"
+grew "revoke while running: the INSERT loaded on the research node" "$L" "$(metric 22 load)" 1
+expect "revoke while running: the SELECT returned its rows" "| slow select " "$out"
+refute "revoke while running: the statement after the INSERT did not run" "| after the insert " "$out"
+refute "revoke while running: the statement after the SELECT did not run" "| after the select " "$out"
+expect "revoke while running: the profiles of both slow statements were built" "2" "$(q -N -e 'SHOW PROFILELIST' | grep -c 'SELECT 9106\|slow select')"
 q -e "REVOKE USAGE ON WAREHOUSE research FROM USER loader;" >/dev/null
 
 section "the switch that turns the check off, and what the check costs"

@@ -186,18 +186,41 @@ final class LiveFeEnvironment implements FeEnvironment {
 
     @Override
     public void requireUsage(String warehouseName) {
-        ConnectContext context = ConnectContext.get();
-        try {
-            Authorizer.checkWarehouseAction(context, warehouseName, PrivilegeType.USAGE);
-        } catch (AccessDeniedException denied) {
-            throw usageDenied(context, warehouseName);
+        if (!hasUsage(warehouseName)) {
+            throw usageDenied(ConnectContext.get(), warehouseName);
         }
+    }
+
+    @Override
+    public boolean hasUsage(String warehouseName) {
+        try {
+            Authorizer.checkWarehouseAction(ConnectContext.get(), warehouseName, PrivilegeType.USAGE);
+            return true;
+        } catch (AccessDeniedException denied) {
+            return false;
+        }
+    }
+
+    @Override
+    public Object currentStatement() {
+        ConnectContext context = ConnectContext.get();
+        return context == null ? null : context.getQueryId();
+    }
+
+    @Override
+    public boolean isStatementFinished() {
+        ConnectContext context = ConnectContext.get();
+        return context != null && !context.getState().isRunning();
     }
 
     /**
      * The error the FE raises for SET warehouse without the privilege: same code, same text. Built here, not
      * with AccessDeniedException.reportAccessDenied, because that method throws the error instead of returning
      * it.
+     *
+     * <p>Building it is not free of effects: ErrorReportException.report writes the error into the session on
+     * the calling thread, and the session answers its statement with it even when a caller catches the
+     * exception. Build it only for a statement that must fail.
      */
     private static ErrorReportException usageDenied(ConnectContext context, String warehouseName) {
         AuthorizationMgr authorization = GlobalStateMgr.getCurrentState().getAuthorizationMgr();

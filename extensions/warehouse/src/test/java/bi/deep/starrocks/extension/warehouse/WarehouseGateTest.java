@@ -36,6 +36,7 @@ import java.util.Optional;
 
 /**
  * The gate: the USAGE check on the one method every query, INSERT and Stream Load calls to get compute nodes.
+ * A Stream Load with Merge Commit calls it only to create its job, so it is not covered.
  *
  * <p>The tests run the FE's own acquire code in shared-data mode. Only the last step, finding live nodes, is
  * replaced, by a provider that records which warehouse it was asked for.
@@ -222,11 +223,15 @@ public class WarehouseGateTest {
 
     // ------------------------------------------------------------------ a session reuses what it acquired
 
-    /** The first statement of a session: it acquires a resource and from then on holds it. */
+    /**
+     * The first statement of a session on a warehouse. As in the FE, the session first builds the resource
+     * object it will keep, then acquires through it.
+     */
     private ComputeResource firstStatement(long warehouseId) {
-        ComputeResource resource = manager.acquireComputeResource(warehouseId);
-        fe.sessionResource = resource;
-        return resource;
+        ComputeResource held = WarehouseComputeResource.of(warehouseId);
+        fe.sessionResource = held;
+        manager.acquireComputeResource(warehouseId, held);
+        return held;
     }
 
     /**
@@ -239,11 +244,33 @@ public class WarehouseGateTest {
         fe.usageGrants.add("analyst on research");
         ComputeResource resource = firstStatement(research);
 
+        fe.nextStatement();
         Assertions.assertTrue(manager.isResourceAvailable(resource));
+        fe.nextStatement();
         Assertions.assertTrue(manager.isResourceAvailable(resource));
 
         Assertions.assertEquals(Arrays.asList("analyst on research", "analyst on research", "analyst on research"),
                 fe.usageChecks, "once to acquire, once per later statement");
+    }
+
+    /**
+     * The FE asks many times in one statement. Only the first question of a statement is checked.
+     */
+    @Test
+    public void aStatementIsCheckedOnlyOnce() {
+        fe.sessionUser = "analyst";
+        fe.usageGrants.add("analyst on research");
+        ComputeResource resource = firstStatement(research);
+
+        Assertions.assertTrue(manager.isResourceAvailable(resource));
+        Assertions.assertTrue(manager.isResourceAvailable(resource));
+        Assertions.assertEquals(1, fe.usageChecks.size(), "the statement that acquired has passed already");
+
+        fe.nextStatement();
+        Assertions.assertTrue(manager.isResourceAvailable(resource));
+        Assertions.assertTrue(manager.isResourceAvailable(resource));
+        Assertions.assertTrue(manager.isResourceAvailable(resource));
+        Assertions.assertEquals(2, fe.usageChecks.size(), "one more for the next statement, however often the FE asks");
     }
 
     /**
@@ -257,14 +284,169 @@ public class WarehouseGateTest {
         ComputeResource resource = firstStatement(research);
 
         fe.usageGrants.clear();
+        fe.nextStatement();
         FakeFeEnvironment.AccessDenied denied = Assertions.assertThrows(FakeFeEnvironment.AccessDenied.class,
                 () -> manager.isResourceAvailable(resource));
         Assertions.assertTrue(denied.getMessage().contains("analyst needs USAGE on WAREHOUSE research"), denied.getMessage());
         Assertions.assertThrows(FakeFeEnvironment.AccessDenied.class, () -> manager.isResourceAvailable(resource),
-                "and at every statement after it");
+                "a refused statement has not passed: it is refused again when the FE asks again");
+        fe.nextStatement();
+        Assertions.assertThrows(FakeFeEnvironment.AccessDenied.class, () -> manager.isResourceAvailable(resource),
+                "and so is every statement after it");
 
         fe.usageGrants.add("analyst on research");
+        fe.nextStatement();
         Assertions.assertTrue(manager.isResourceAvailable(resource));
+    }
+
+    /**
+     * The FE builds the profile of an INSERT after the commit, and asks for the session's resource to do it. A
+     * REVOKE that arrived while the INSERT ran must not turn the committed INSERT into a failed one. It takes
+     * effect at the next statement.
+     */
+    @Test
+    public void aRevokeDuringAStatementDoesNotChangeItsResult() {
+        fe.sessionUser = "analyst";
+        fe.usageGrants.add("analyst on research");
+        ComputeResource resource = firstStatement(research);
+        fe.nextStatement();
+        Assertions.assertTrue(manager.isResourceAvailable(resource), "the statement passes at its start");
+
+        fe.usageGrants.clear();
+        fe.usageChecks.clear();
+
+        Assertions.assertTrue(manager.isResourceAvailable(resource), "asked again while the statement runs");
+        fe.statementFinished = true;
+        Assertions.assertTrue(manager.isResourceAvailable(resource), "and again after it has its result, for the profile");
+        Assertions.assertTrue(fe.usageChecks.isEmpty(), "the statement is not checked a second time");
+
+        fe.nextStatement();
+        Assertions.assertThrows(FakeFeEnvironment.AccessDenied.class, () -> manager.isResourceAvailable(resource),
+                "the next statement is refused");
+    }
+
+    /**
+     * The same for the first statement of a session, which passed the check when it acquired.
+     */
+    @Test
+    public void aRevokeDoesNotStopTheStatementThatAcquiredEither() {
+        fe.sessionUser = "analyst";
+        fe.usageGrants.add("analyst on research");
+        ComputeResource resource = firstStatement(research);
+
+        fe.usageGrants.clear();
+        fe.usageChecks.clear();
+
+        Assertions.assertTrue(manager.isResourceAvailable(resource));
+        Assertions.assertTrue(fe.usageChecks.isEmpty());
+    }
+
+    /**
+     * A statement that has its result when it is checked for the first time: raising the error now would
+     * replace that result. The answer is "not available" instead, which makes the session drop the resource
+     * without an error.
+     */
+    @Test
+    public void aCheckAfterTheStatementFinishedRaisesNothing() {
+        fe.sessionUser = "analyst";
+        fe.usageGrants.add("analyst on research");
+        ComputeResource resource = firstStatement(research);
+        fe.nextStatement();
+        fe.usageGrants.clear();
+        fe.statementFinished = true;
+
+        Assertions.assertFalse(manager.isResourceAvailable(resource));
+        Assertions.assertFalse(manager.isResourceAvailable(resource), "a refusal is not remembered as a pass");
+
+        fe.nextStatement();
+        Assertions.assertThrows(FakeFeEnvironment.AccessDenied.class, () -> manager.isResourceAvailable(resource),
+                "a statement that is still running is refused with the error");
+    }
+
+    @Test
+    public void aCheckAfterTheStatementFinishedPassesWithThePrivilege() {
+        fe.sessionUser = "analyst";
+        fe.usageGrants.add("analyst on research");
+        ComputeResource resource = firstStatement(research);
+        fe.nextStatement();
+        fe.statementFinished = true;
+        fe.usageChecks.clear();
+
+        Assertions.assertTrue(manager.isResourceAvailable(resource));
+        Assertions.assertTrue(manager.isResourceAvailable(resource));
+        Assertions.assertEquals(1, fe.usageChecks.size(), "checked once, then remembered");
+
+        provider.hasLiveNodes = false;
+        Assertions.assertFalse(manager.isResourceAvailable(resource), "the FE's own answer still counts");
+    }
+
+    /**
+     * Without a statement id there is nothing to remember a pass by, so every question is checked.
+     */
+    @Test
+    public void aSessionWithoutAStatementIdIsCheckedEveryTime() {
+        fe.sessionUser = "analyst";
+        fe.usageGrants.add("analyst on research");
+        fe.statement = null;
+        ComputeResource resource = firstStatement(research);
+
+        Assertions.assertTrue(manager.isResourceAvailable(resource));
+        Assertions.assertTrue(manager.isResourceAvailable(resource));
+        Assertions.assertEquals(3, fe.usageChecks.size(), "once to acquire, once per question");
+
+        fe.usageGrants.clear();
+        Assertions.assertThrows(FakeFeEnvironment.AccessDenied.class, () -> manager.isResourceAvailable(resource));
+    }
+
+    /**
+     * Acquiring counts as a pass only for the resource object the session holds and acquires through.
+     */
+    @Test
+    public void acquiringThroughAnotherObjectIsNotAPassForTheSessionsResource() {
+        fe.sessionUser = "analyst";
+        fe.usageGrants.add("analyst on research");
+        ComputeResource held = WarehouseComputeResource.of(research);
+        fe.sessionResource = held;
+
+        manager.acquireComputeResource(research, WarehouseComputeResource.of(research));
+        fe.usageChecks.clear();
+
+        Assertions.assertTrue(manager.isResourceAvailable(held));
+        Assertions.assertEquals(Collections.singletonList("analyst on research"), fe.usageChecks);
+    }
+
+    /**
+     * USAGE on one warehouse is not a pass for a resource of another, even when the session acquires through
+     * that resource.
+     */
+    @Test
+    public void acquiringOnAnotherWarehouseIsNotAPassForTheSessionsResource() {
+        fe.sessionUser = "analyst";
+        fe.usageGrants.add("analyst on etl");
+        ComputeResource held = WarehouseComputeResource.of(research);
+        fe.sessionResource = held;
+
+        manager.acquireComputeResource(etl, held);
+
+        Assertions.assertThrows(FakeFeEnvironment.AccessDenied.class, () -> manager.isResourceAvailable(held));
+    }
+
+    /**
+     * A pass belongs to the resource object, not to the warehouse. A session that dropped its resource and took
+     * a new one for the same warehouse is checked on the new one, also within one statement.
+     */
+    @Test
+    public void aPassDoesNotCarryOverToANewResourceObject() {
+        fe.sessionUser = "analyst";
+        fe.usageGrants.add("analyst on research");
+        firstStatement(research);
+        ComputeResource replacement = WarehouseComputeResource.of(research);
+        fe.sessionResource = replacement;
+        fe.usageChecks.clear();
+
+        Assertions.assertTrue(manager.isResourceAvailable(replacement));
+
+        Assertions.assertEquals(Collections.singletonList("analyst on research"), fe.usageChecks);
     }
 
     /**
@@ -279,6 +461,8 @@ public class WarehouseGateTest {
 
         provider.hasLiveNodes = false;
 
+        Assertions.assertFalse(manager.isResourceAvailable(resource));
+        fe.nextStatement();
         Assertions.assertFalse(manager.isResourceAvailable(resource));
     }
 
@@ -304,6 +488,7 @@ public class WarehouseGateTest {
         fe.sessionUser = "analyst";
         ComputeResource resource = firstStatement(WarehouseManager.DEFAULT_WAREHOUSE_ID);
 
+        fe.nextStatement();
         Assertions.assertTrue(manager.isResourceAvailable(resource));
         Assertions.assertTrue(fe.usageChecks.isEmpty());
     }
@@ -317,6 +502,7 @@ public class WarehouseGateTest {
         fe.sessionUser = null;
         ComputeResource resource = firstStatement(research);
 
+        fe.nextStatement();
         Assertions.assertTrue(manager.isResourceAvailable(resource));
         provider.hasLiveNodes = false;
         Assertions.assertFalse(manager.isResourceAvailable(resource));
@@ -330,6 +516,7 @@ public class WarehouseGateTest {
         ComputeResource resource = firstStatement(research);
         fe.usageGrants.clear();
         fe.usageChecks.clear();
+        fe.nextStatement();
 
         WarehouseExtensionSettings.install(WarehouseExtensionSettings.of(true, false, false));
 

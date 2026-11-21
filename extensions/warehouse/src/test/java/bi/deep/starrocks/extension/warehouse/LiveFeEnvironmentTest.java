@@ -29,6 +29,7 @@ import com.starrocks.persist.EditLog;
 import com.starrocks.persist.OperationType;
 import com.starrocks.persist.WALApplier;
 import com.starrocks.qe.ConnectContext;
+import com.starrocks.qe.QueryState;
 import com.starrocks.server.GlobalStateMgr;
 import com.starrocks.server.NodeMgr;
 import com.starrocks.server.RunMode;
@@ -436,6 +437,74 @@ public class LiveFeEnvironmentTest {
                 times = 1;
             }
         };
+    }
+
+    /**
+     * The question form must leave the session alone. The FE's access-denied error writes itself into the
+     * session when it is built, so a "no" here must not build it.
+     */
+    @Test
+    public void usageCanBeAskedWithoutTouchingTheSession(@Mocked ConnectContext context, @Mocked Authorizer authorizer)
+            throws Exception {
+        new Expectations() {
+            {
+                ConnectContext.get();
+                result = context;
+                Authorizer.checkWarehouseAction(context, "research", PrivilegeType.USAGE);
+                result = null;
+                result = new AccessDeniedException();
+            }
+        };
+
+        Assertions.assertTrue(live.hasUsage("research"));
+        Assertions.assertFalse(live.hasUsage("research"));
+
+        new Verifications() {
+            {
+                context.getState();
+                times = 0;
+            }
+        };
+    }
+
+    @Test
+    public void theStatementIsKnownByTheSessionsQueryId(@Mocked ConnectContext context) {
+        java.util.UUID queryId = java.util.UUID.randomUUID();
+        new Expectations() {
+            {
+                ConnectContext.get();
+                returns(null, context);
+                context.getQueryId();
+                result = queryId;
+            }
+        };
+
+        Assertions.assertNull(live.currentStatement(), "no session on the thread");
+        Assertions.assertEquals(queryId, live.currentStatement());
+    }
+
+    /**
+     * Finished is what the FE's own session code calls "not running": the statement has its result or its
+     * error.
+     */
+    @Test
+    public void aStatementIsFinishedOnceItHasItsResult(@Mocked ConnectContext context) {
+        QueryState state = new QueryState();
+        new Expectations() {
+            {
+                ConnectContext.get();
+                returns(null, context, context, context);
+                context.getState();
+                result = state;
+            }
+        };
+
+        Assertions.assertFalse(live.isStatementFinished(), "no session on the thread");
+        Assertions.assertFalse(live.isStatementFinished(), "a statement that is running");
+        state.setOk();
+        Assertions.assertTrue(live.isStatementFinished(), "an INSERT that has committed");
+        state.reset();
+        Assertions.assertFalse(live.isStatementFinished(), "the next statement of the session");
     }
 
     /**

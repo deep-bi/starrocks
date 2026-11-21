@@ -44,7 +44,8 @@ public final class WarehouseExtensionSettings {
     public static final String KEY_SKIP_VERSION_CHECK = "warehouse_extension_skip_version_check";
 
     /**
-     * Checks USAGE on a user warehouse for every query and load of a user session. Default {@code true}.
+     * Checks USAGE on a user warehouse for the queries and loads of a user session. Default {@code true}. A
+     * Stream Load with Merge Commit is not covered, see {@link UserWarehouseManager#acquireComputeResource}.
      *
      * <p>The check sits in the path of every request. This switch turns it off without removing the jar, which
      * is not a safe way to disable anything once warehouses exist.

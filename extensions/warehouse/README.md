@@ -33,7 +33,7 @@ the file itself.
 |------------------------------------------|---------|-------------------------------------------------------------------------------------------------------------------------------------|
 | `enable_warehouse_extension`             | `false` | Allows `CREATE WAREHOUSE`. `false` does not switch existing warehouses off: they keep working and can still be altered and dropped. |
 | `warehouse_extension_skip_version_check` | `false` | Starts the FE even if the jar was built for another FE version.                                                                     |
-| `warehouse_extension_check_usage`        | `true`  | Checks `USAGE` on a user warehouse for every query and load of a user session. See Access control.                                  |
+| `warehouse_extension_check_usage`        | `true`  | Checks `USAGE` on a user warehouse for the queries and loads of a user session. See Access control.                                 |
 
 A value other than `true` or `false` stops the FE at start.
 
@@ -64,8 +64,8 @@ each of them. Do not set it higher than the number of nodes in the warehouse.
 A user needs `USAGE` on a warehouse to run on it: `GRANT USAGE ON WAREHOUSE research TO USER analyst`. Every user may
 run on `default_warehouse` without a grant, as in a StarRocks cluster without the extension.
 
-`USAGE` is checked for every query, `INSERT` and Stream Load on a warehouse other than `default_warehouse`,
-whichever way the warehouse was chosen:
+`USAGE` is checked for every query and `INSERT` on a warehouse other than `default_warehouse`, and for every Stream
+Load that does not use Merge Commit (see Limits). It does not matter how the warehouse was chosen:
 
 - `SET warehouse = '<name>'`
 - the `SET_VAR` hint, on a query or on `INSERT`
@@ -75,9 +75,10 @@ whichever way the warehouse was chosen:
 Without the privilege, a statement fails with the access-denied error 5203. A Stream Load fails with `Access denied` in
 its response.
 
-`REVOKE` takes effect at the next statement, also on a connection that is already open. That session stays on the
-warehouse it selected, so its statements keep failing until the privilege is back or it moves to a warehouse it may
-use. `SET warehouse = 'default_warehouse'` needs `USAGE` on `default_warehouse` like any other `SET warehouse`. A user
+`REVOKE` takes effect at the next statement, also on a connection that is already open. A statement that is running
+when the `REVOKE` arrives is not stopped and keeps its result. After that, the session stays on the warehouse it
+selected, so its statements keep failing until the privilege is back or it moves to a warehouse it may use.
+`SET warehouse = 'default_warehouse'` needs `USAGE` on `default_warehouse` like any other `SET warehouse`. A user
 without that grant reconnects instead: a new connection starts on `default_warehouse`, unless another default is set
 on the user.
 
@@ -130,6 +131,8 @@ A lost warehouse that had no nodes is not detected.
   next checkpoint, FE will restore them. However, if an FE without the jar writes a checkpoint, the warehouse
   information in the new image will be lost. In such a case, drop the affected nodes with
   `ALTER SYSTEM DROP COMPUTE NODE`, create the warehouses again and add the nodes back.
+- `USAGE` on a warehouse is not enforced for a Stream Load with Merge Commit (the `enable_merge_commit` header). Such
+  a load needs only `INSERT` on the table.
 - Background work stays on `default_warehouse`: compaction, vacuum, automatic statistics. Keep compute nodes in it.
 - `SUSPEND WAREHOUSE`, `RESUME WAREHOUSE` and CN groups are not implemented.
 - The Kubernetes operator's `StarRocksWarehouse` resource needs the FE to report a `multi-warehouse` feature. The FE

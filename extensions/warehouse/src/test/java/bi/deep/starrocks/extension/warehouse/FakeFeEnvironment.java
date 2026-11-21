@@ -80,6 +80,17 @@ class FakeFeEnvironment implements FeEnvironment {
     final List<String> usageChecks = new ArrayList<>();
     /** The compute resource the session on the calling thread acquired itself and still holds, or null. */
     ComputeResource sessionResource;
+    /** What identifies the statement the session is running, or null for a session without one. */
+    Object statement = "statement 1";
+    /** True once the statement has its result or its error. */
+    boolean statementFinished;
+    private int statements = 1;
+
+    /** The session starts its next statement. */
+    void nextStatement() {
+        statement = "statement " + (++statements);
+        statementFinished = false;
+    }
 
     /** Number of calls made to the fake StarMgr, to prove replay makes none. */
     int starMgrCalls;
@@ -236,13 +247,28 @@ class FakeFeEnvironment implements FeEnvironment {
 
     @Override
     public void requireUsage(String warehouseName) {
-        if (sessionUser == null) {
-            throw new AssertionError("requireUsage called without a user session");
-        }
-        usageChecks.add(sessionUser + " on " + warehouseName);
-        if (!usageGrants.contains(sessionUser + " on " + warehouseName)) {
+        if (!hasUsage(warehouseName)) {
             throw new AccessDenied(sessionUser, warehouseName);
         }
+    }
+
+    @Override
+    public boolean hasUsage(String warehouseName) {
+        if (sessionUser == null) {
+            throw new AssertionError("USAGE checked without a user session");
+        }
+        usageChecks.add(sessionUser + " on " + warehouseName);
+        return usageGrants.contains(sessionUser + " on " + warehouseName);
+    }
+
+    @Override
+    public Object currentStatement() {
+        return statement;
+    }
+
+    @Override
+    public boolean isStatementFinished() {
+        return statementFinished;
     }
 
     @Override

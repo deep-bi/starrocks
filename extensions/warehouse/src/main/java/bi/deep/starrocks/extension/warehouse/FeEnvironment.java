@@ -131,6 +131,27 @@ interface FeEnvironment {
     void requireUsage(String warehouseName);
 
     /**
+     * The same check as {@link #requireUsage}, as a question. Call it only when {@link #hasUserSession()} is
+     * true.
+     *
+     * @return false when the user does not hold the privilege. Nothing is raised then, and the session on the
+     *         calling thread is left as it is: the FE's access-denied error would be written into it
+     */
+    boolean hasUsage(String warehouseName);
+
+    /**
+     * @return what identifies the statement the session on the calling thread is running. The FE gives every
+     *         statement a new one. Null on a thread without a session, and for a session that has none
+     */
+    Object currentStatement();
+
+    /**
+     * @return true when the statement of the session on the calling thread already has its result or its error.
+     *         What still runs then is work after the statement, such as building its profile
+     */
+    boolean isStatementFinished();
+
+    /**
      * A session acquires its compute resource at its first statement and keeps it for the statements that
      * follow.
      *

@@ -12,6 +12,7 @@
 
 package bi.deep.starrocks.extension.warehouse;
 
+import com.google.common.collect.MapMaker;
 import com.staros.util.LockCloseable;
 import com.starrocks.common.DdlException;
 import com.starrocks.extension.Inject;
@@ -70,6 +71,10 @@ public class UserWarehouseManager extends WarehouseManager {
 
     private final FeEnvironment env;
     private final Object statementLock = new Object();
+    // Not persisted. For a compute resource a session holds: the statement that last passed the USAGE check on
+    // it. The keys are that very object, compared by identity and held weakly, so an entry goes away with the
+    // resource, when the session drops it or ends.
+    private final Map<ComputeResource, Object> passedBy = new MapMaker().weakKeys().makeMap();
 
     /**
      * The constructor the FE's extension context calls, once for the serving state and once per checkpoint.
@@ -109,20 +114,33 @@ public class UserWarehouseManager extends WarehouseManager {
     // ---------------------------------------------------------------- the gate
 
     /**
-     * The first half of the gate: where a query, an INSERT or a Stream Load gets compute nodes it does not hold
-     * yet, whatever statement, hint, user default or HTTP header named the warehouse. The FE itself checks USAGE
-     * only for SET warehouse and the SET_VAR hint on a query. Checking it here as well means a user session
-     * cannot skip it by naming the warehouse another way. A session that already holds its nodes does not come
-     * back here; {@link #isResourceAvailable} covers that.
+     * The first half of the gate: where a query, an INSERT or a Stream Load without Merge Commit gets compute
+     * nodes it does not hold yet, whatever statement, hint, user default or HTTP header named the warehouse.
+     * The FE itself checks USAGE only for SET warehouse and the SET_VAR hint on a query. Checking it here as
+     * well means a user session cannot skip it by naming the warehouse another way. A session that already
+     * holds its nodes does not come back here; {@link #isResourceAvailable} covers that.
      *
      * <p>Requests on the default warehouse go straight to the FE's own code: every user may use it, as in a
      * stock FE. So does background work, which has no user session, on any warehouse.
+     *
+     * <p>A Stream Load with Merge Commit is the exception. The FE keeps one Merge Commit job per table and set
+     * of load parameters, and the job holds the compute nodes. Only the request that creates the job comes
+     * here, and it has a user session only when it arrived on the FE's HTTP port. A request that finds the job
+     * does not come here, whichever user sends it. The request a compute node sends to the FE for each load
+     * has no user session. Checking these needs a change in the FE.
      */
     @Override
     public ComputeResource acquireComputeResource(CRAcquireContext acquireContext) {
         long warehouseId = acquireContext.getWarehouseId();
-        if (warehouseId != DEFAULT_WAREHOUSE_ID) {
-            requireUsage(warehouseId);
+        Warehouse warehouse = gated(warehouseId);
+        if (warehouse != null) {
+            env.requireUsage(warehouse.getName());
+            // A session acquires through the resource object it already holds, and passes that object in here.
+            // The statement has now passed on it and is not checked a second time.
+            ComputeResource held = acquireContext.getPrevComputeResource();
+            if (held != null && held.getWarehouseId() == warehouseId && env.isAcquiredBySession(held)) {
+                rememberPassed(held);
+            }
         }
         return super.acquireComputeResource(acquireContext);
     }
@@ -136,27 +154,65 @@ public class UserWarehouseManager extends WarehouseManager {
      * {@link #acquireComputeResource} with the same session. Every other caller gets the FE's own answer:
      * background work, and the internal session of a load job, which the FE hands a stored resource.
      *
-     * @throws RuntimeException the FE's access-denied error, when the session's user no longer holds USAGE. The
-     *                          stock method never throws. This one does, because "not available" would make the
-     *                          session report a warehouse without nodes and ask the user to try again
+     * <p>A statement is checked once, at its first use of the resource. The FE asks again many times in the
+     * same statement, also after the statement has its result: it builds the profile of an INSERT after the
+     * commit. A REVOKE that arrives in between must not turn a statement that has run into a failed one, so
+     * these later questions get the FE's own answer. The REVOKE takes effect at the session's next statement.
+     *
+     * <p>A check that still finds no USAGE after the statement has finished raises nothing and answers "not
+     * available". The session then drops the resource without an error and takes a new one, and its next
+     * statement is refused here or in {@link #acquireComputeResource}.
+     *
+     * @throws RuntimeException the FE's access-denied error, when the session's user no longer holds USAGE and
+     *                          the statement has not passed yet. The stock method never throws. This one does,
+     *                          because "not available" would make a running statement report a warehouse
+     *                          without nodes and ask the user to try again
      */
     @Override
     public boolean isResourceAvailable(ComputeResource computeResource) {
         long warehouseId = computeResource.getWarehouseId();
         if (warehouseId != DEFAULT_WAREHOUSE_ID && env.isAcquiredBySession(computeResource)) {
-            requireUsage(warehouseId);
+            Warehouse warehouse = gated(warehouseId);
+            if (warehouse != null && !hasPassed(computeResource)) {
+                if (env.isStatementFinished()) {
+                    if (!env.hasUsage(warehouse.getName())) {
+                        return false;
+                    }
+                } else {
+                    env.requireUsage(warehouse.getName());
+                }
+                rememberPassed(computeResource);
+            }
         }
         return super.isResourceAvailable(computeResource);
     }
 
-    private void requireUsage(long warehouseId) {
-        if (!WarehouseExtensionSettings.current().isCheckUsage() || !env.hasUserSession()) {
-            return;
+    /**
+     * @return the warehouse the calling session needs USAGE on, or null when there is nothing to check: the
+     *         default warehouse, the check switched off, a thread without a user session, or an id the manager
+     *         does not know, which is left to the FE's own code to report
+     */
+    private Warehouse gated(long warehouseId) {
+        if (warehouseId == DEFAULT_WAREHOUSE_ID || !WarehouseExtensionSettings.current().isCheckUsage()
+                || !env.hasUserSession()) {
+            return null;
         }
-        Warehouse warehouse = getWarehouseAllowNull(warehouseId);
-        // An unknown id is left to the FE's own code, which reports it.
-        if (warehouse != null) {
-            env.requireUsage(warehouse.getName());
+        return getWarehouseAllowNull(warehouseId);
+    }
+
+    /**
+     * @return true when the statement the calling session is running has already passed the USAGE check on this
+     *         resource. A session without a statement id never has, so it is checked every time
+     */
+    private boolean hasPassed(ComputeResource resource) {
+        Object statement = env.currentStatement();
+        return statement != null && statement.equals(passedBy.get(resource));
+    }
+
+    private void rememberPassed(ComputeResource resource) {
+        Object statement = env.currentStatement();
+        if (statement != null) {
+            passedBy.put(resource, statement);
         }
     }
 
