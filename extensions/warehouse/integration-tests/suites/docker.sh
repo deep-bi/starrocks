@@ -17,7 +17,7 @@
 #   - routing of queries, INSERT and Stream Load
 #   - a node of either warehouse going down and coming back
 #   - checkpoint and FE restart with live nodes
-#   - privileges and the USAGE gate, and the switch that turns the gate off
+#   - privileges and the USAGE gate, a REVOKE on an open connection, and the switch that turns the gate off
 #   - alter, drop, re-create
 #   - build and unit tests inside the image, against the image's own jars
 # Evidence for routing is the research node's own counters: nothing but research sessions ever reaches it.
@@ -148,6 +148,23 @@ grew "with USAGE: INSERT with the hint ran on the research node" "$L" "$(metric 
 q -e "REVOKE USAGE ON WAREHOUSE research FROM USER loader;" >/dev/null
 expect "after REVOKE the INSERT with the hint is refused again" "ERROR 5203" "$(as loader "INSERT /*+ SET_VAR(warehouse='research') */ INTO poc.t VALUES (9102, 'x');")"
 expect "root is never refused" "research" "$(q -N -e "SET warehouse = 'research'; SELECT @@warehouse, count(*) > 0 FROM poc.t;")"
+
+# A REVOKE must also reach a connection that is already open: a session keeps the compute resource it acquired
+# for its first statement. docker/open-session.sql is one session of loader, with the REVOKE and the GRANT run
+# as root between its statements.
+q -e "GRANT USAGE ON WAREHOUSE research TO USER loader;" >/dev/null
+d cp -q "$IT_DIR/docker/open-session.sql" whext-fe:/tmp/open-session.sql
+L=$(metric 22 load)
+out=$(d exec -i whext-fe bash -c 'mysql -h127.0.0.1 -P9030 -uloader --force --table < /tmp/open-session.sql' 2>&1); sleep 1
+expect "open session: the first query runs on research" "| warm " "$out"
+expect "open session: after REVOKE the query, the prepared statement and the INSERT are refused" "3" "$(echo "$out" | grep -c 'ERROR 5203')"
+refute "open session: no query ran between REVOKE and GRANT" "after revoke" "$out"
+refute "open session: the refusal is the access-denied error, not a missing node" "not available" "$out"
+grew "open session: the refused INSERT loaded nothing on the research node" "$L" "$(metric 22 load)" 0
+expect "open session: the refused INSERT wrote no row" "0" "$(q -N -e 'SELECT count(*) FROM poc.t WHERE id = 9105')"
+expect "open session: the same session works again after GRANT" "| after grant " "$out"
+expect "open session: the prepared statement ran before the REVOKE and after the GRANT" "2" "$(echo "$out" | grep -c '^| prepared ')"
+q -e "REVOKE USAGE ON WAREHOUSE research FROM USER loader;" >/dev/null
 
 section "the switch that turns the check off, and what the check costs"
 d cp -q "$IT_DIR/docker/timeq.sh" whext-fe:/tmp/timeq.sh

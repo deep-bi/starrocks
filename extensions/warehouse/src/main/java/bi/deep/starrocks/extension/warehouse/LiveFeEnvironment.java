@@ -31,6 +31,8 @@ import com.starrocks.server.GlobalStateMgr;
 import com.starrocks.server.RunMode;
 import com.starrocks.sql.analyzer.Authorizer;
 import com.starrocks.system.ComputeNode;
+import com.starrocks.warehouse.cngroup.ComputeResource;
+import com.starrocks.warehouse.cngroup.LazyComputeResource;
 
 import java.util.ArrayList;
 import java.util.Collection;
@@ -43,7 +45,7 @@ import java.util.function.LongSupplier;
 import java.util.stream.Collectors;
 
 /**
- * {@link FeEnvironment} backed by the FE this jar is loaded into.
+ * {@link FeEnvironment} backed by the FE this extension is loaded into.
  *
  * <p>{@code GlobalStateMgr.getCurrentState()} is resolved on every call. The checkpoint thread runs with its own
  * {@code GlobalStateMgr}, and that method returns the right one for the calling thread.
@@ -182,6 +184,18 @@ final class LiveFeEnvironment implements FeEnvironment {
         return ErrorReportException.report(ErrorCode.ERR_ACCESS_DENIED, PrivilegeType.USAGE.name(),
                 ObjectType.WAREHOUSE.name(), " " + warehouseName,
                 activeRoles.isEmpty() ? "NONE" : activeRoles, inactiveRoles.isEmpty() ? "NONE" : inactiveRoles);
+    }
+
+    /**
+     * A session that acquires its own compute resource always gets a {@code LazyComputeResource}: that is what
+     * {@code ConnectContext} builds, and nothing else does. A resource set from outside, such as the stored one
+     * of a load job, is of another type.
+     */
+    @Override
+    public boolean isAcquiredBySession(ComputeResource resource) {
+        ConnectContext context = ConnectContext.get();
+        return context != null && resource instanceof LazyComputeResource
+                && context.getCurrentComputeResourceNoAcquire() == resource;
     }
 
     @Override

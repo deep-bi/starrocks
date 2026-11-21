@@ -36,6 +36,9 @@ import com.starrocks.sql.analyzer.Authorizer;
 import com.starrocks.system.Backend;
 import com.starrocks.system.ComputeNode;
 import com.starrocks.system.SystemInfoService;
+import com.starrocks.warehouse.cngroup.ComputeResource;
+import com.starrocks.warehouse.cngroup.LazyComputeResource;
+import com.starrocks.warehouse.cngroup.WarehouseComputeResource;
 import mockit.Expectations;
 import mockit.Mocked;
 import mockit.Verifications;
@@ -338,6 +341,31 @@ public class LiveFeEnvironmentTest {
         Assertions.assertFalse(live.hasUserSession(), "no session on the thread: background work");
         Assertions.assertFalse(live.hasUserSession(), "a session nobody has logged in to");
         Assertions.assertTrue(live.hasUserSession());
+    }
+
+    /**
+     * "Acquired by the session" means two things at once: the session on this thread holds this very object,
+     * and the object is of the type a session builds when it acquires for itself.
+     */
+    @Test
+    public void aSessionAcquiredItsResourceWhenItHoldsTheLazyObjectItBuilt(@Mocked ConnectContext context) {
+        ComputeResource acquired = LazyComputeResource.of(10001L, () -> WarehouseComputeResource.of(10001L));
+        ComputeResource anotherLazy = LazyComputeResource.of(10001L, () -> WarehouseComputeResource.of(10001L));
+        ComputeResource handedIn = WarehouseComputeResource.of(10001L);
+        new Expectations() {
+            {
+                ConnectContext.get();
+                returns(null, context, context, context);
+                context.getCurrentComputeResourceNoAcquire();
+                returns(acquired, acquired);
+                minTimes = 0;
+            }
+        };
+
+        Assertions.assertFalse(live.isAcquiredBySession(acquired), "no session on the thread: background work");
+        Assertions.assertFalse(live.isAcquiredBySession(handedIn), "a stored resource, as a load job's session gets");
+        Assertions.assertFalse(live.isAcquiredBySession(anotherLazy), "a lazy resource, but not the one this session holds");
+        Assertions.assertTrue(live.isAcquiredBySession(acquired));
     }
 
     @Test

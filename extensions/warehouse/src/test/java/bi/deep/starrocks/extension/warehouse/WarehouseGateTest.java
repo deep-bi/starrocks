@@ -62,9 +62,12 @@ public class WarehouseGateTest {
             return Collections.singletonList(WarehouseComputeResource.of(warehouse.getId()));
         }
 
+        /** What the FE's own availability check answers: whether the warehouse has live nodes. */
+        boolean hasLiveNodes = true;
+
         @Override
         public boolean isResourceAvailable(ComputeResource computeResource) {
-            return true;
+            return hasLiveNodes;
         }
 
         @Override
@@ -214,6 +217,123 @@ public class WarehouseGateTest {
                 () -> manager.acquireComputeResource(424242L));
 
         Assertions.assertTrue(e.getMessage().contains("id: 424242"), e.getMessage());
+        Assertions.assertTrue(fe.usageChecks.isEmpty());
+    }
+
+    // ------------------------------------------------------------------ a session reuses what it acquired
+
+    /** The first statement of a session: it acquires a resource and from then on holds it. */
+    private ComputeResource firstStatement(long warehouseId) {
+        ComputeResource resource = manager.acquireComputeResource(warehouseId);
+        fe.sessionResource = resource;
+        return resource;
+    }
+
+    /**
+     * A session acquires its compute resource once. Before every later statement the FE asks whether that
+     * resource is still available, and that question is checked too.
+     */
+    @Test
+    public void everyLaterStatementOfASessionIsCheckedAgain() {
+        fe.sessionUser = "analyst";
+        fe.usageGrants.add("analyst on research");
+        ComputeResource resource = firstStatement(research);
+
+        Assertions.assertTrue(manager.isResourceAvailable(resource));
+        Assertions.assertTrue(manager.isResourceAvailable(resource));
+
+        Assertions.assertEquals(Arrays.asList("analyst on research", "analyst on research", "analyst on research"),
+                fe.usageChecks, "once to acquire, once per later statement");
+    }
+
+    /**
+     * REVOKE must reach a connection that is already open. The session gets the access-denied error, not "no
+     * nodes", and works again once the privilege is back.
+     */
+    @Test
+    public void aRevokeStopsAnOpenSessionAtItsNextStatement() {
+        fe.sessionUser = "analyst";
+        fe.usageGrants.add("analyst on research");
+        ComputeResource resource = firstStatement(research);
+
+        fe.usageGrants.clear();
+        FakeFeEnvironment.AccessDenied denied = Assertions.assertThrows(FakeFeEnvironment.AccessDenied.class,
+                () -> manager.isResourceAvailable(resource));
+        Assertions.assertTrue(denied.getMessage().contains("analyst needs USAGE on WAREHOUSE research"), denied.getMessage());
+        Assertions.assertThrows(FakeFeEnvironment.AccessDenied.class, () -> manager.isResourceAvailable(resource),
+                "and at every statement after it");
+
+        fe.usageGrants.add("analyst on research");
+        Assertions.assertTrue(manager.isResourceAvailable(resource));
+    }
+
+    /**
+     * The privilege check comes on top of the FE's own answer. A warehouse whose nodes are all down is still
+     * reported as not available.
+     */
+    @Test
+    public void aWarehouseWithoutLiveNodesIsStillNotAvailable() {
+        fe.sessionUser = "analyst";
+        fe.usageGrants.add("analyst on research");
+        ComputeResource resource = firstStatement(research);
+
+        provider.hasLiveNodes = false;
+
+        Assertions.assertFalse(manager.isResourceAvailable(resource));
+    }
+
+    /**
+     * A load job runs in an internal session that carries the user's name but not every role the user logged
+     * in with. The FE hands that session the job's stored resource. Checking it there would refuse loads that
+     * were allowed when they were submitted, so only a resource the session acquired itself is checked.
+     */
+    @Test
+    public void aResourceHandedToASessionIsNotChecked() {
+        fe.sessionUser = "analyst";
+        ComputeResource stored = WarehouseComputeResource.of(research);
+
+        Assertions.assertTrue(manager.isResourceAvailable(stored));
+
+        fe.sessionResource = WarehouseComputeResource.of(research);
+        Assertions.assertTrue(manager.isResourceAvailable(stored), "the session holds another object for the same warehouse");
+        Assertions.assertTrue(fe.usageChecks.isEmpty());
+    }
+
+    @Test
+    public void reuseOnTheDefaultWarehouseIsNeverChecked() {
+        fe.sessionUser = "analyst";
+        ComputeResource resource = firstStatement(WarehouseManager.DEFAULT_WAREHOUSE_ID);
+
+        Assertions.assertTrue(manager.isResourceAvailable(resource));
+        Assertions.assertTrue(fe.usageChecks.isEmpty());
+    }
+
+    /**
+     * Publish and other FE work ask the same question from threads without a user session. They get the FE's
+     * own answer.
+     */
+    @Test
+    public void availabilityAskedByBackgroundWorkIsNotChecked() {
+        fe.sessionUser = null;
+        ComputeResource resource = firstStatement(research);
+
+        Assertions.assertTrue(manager.isResourceAvailable(resource));
+        provider.hasLiveNodes = false;
+        Assertions.assertFalse(manager.isResourceAvailable(resource));
+        Assertions.assertTrue(fe.usageChecks.isEmpty());
+    }
+
+    @Test
+    public void theSwitchAlsoTurnsOffTheCheckOnReuse() {
+        fe.sessionUser = "analyst";
+        fe.usageGrants.add("analyst on research");
+        ComputeResource resource = firstStatement(research);
+        fe.usageGrants.clear();
+        fe.usageChecks.clear();
+
+        WarehouseExtensionSettings.install(WarehouseExtensionSettings.of(true, false, false));
+
+        Assertions.assertTrue(manager.isResourceAvailable(resource));
         Assertions.assertTrue(fe.usageChecks.isEmpty());
     }
 

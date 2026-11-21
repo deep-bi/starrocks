@@ -19,6 +19,7 @@ import com.starrocks.persist.WALApplier;
 import com.starrocks.persist.gson.GsonUtils;
 import com.starrocks.system.ComputeNode;
 import com.starrocks.warehouse.Warehouse;
+import com.starrocks.warehouse.cngroup.ComputeResource;
 
 import java.util.ArrayList;
 import java.util.Collection;
@@ -77,6 +78,8 @@ class FakeFeEnvironment implements FeEnvironment {
     final java.util.Set<String> usageGrants = new java.util.HashSet<>();
     /** Every privilege check made, each as "user on warehouse". */
     final List<String> usageChecks = new ArrayList<>();
+    /** The compute resource the session on the calling thread acquired itself and still holds, or null. */
+    ComputeResource sessionResource;
 
     /** Number of calls made to the fake StarMgr, to prove replay makes none. */
     int starMgrCalls;
@@ -207,6 +210,11 @@ class FakeFeEnvironment implements FeEnvironment {
         if (!usageGrants.contains(sessionUser + " on " + warehouseName)) {
             throw new AccessDenied(sessionUser, warehouseName);
         }
+    }
+
+    @Override
+    public boolean isAcquiredBySession(ComputeResource resource) {
+        return sessionResource == resource;
     }
 
     /** Stands in for the FE's access-denied error. */

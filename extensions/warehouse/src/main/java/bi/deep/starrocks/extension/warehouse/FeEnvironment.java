@@ -15,6 +15,7 @@ package bi.deep.starrocks.extension.warehouse;
 import com.starrocks.common.DdlException;
 import com.starrocks.persist.WALApplier;
 import com.starrocks.system.ComputeNode;
+import com.starrocks.warehouse.cngroup.ComputeResource;
 
 import java.util.Collection;
 import java.util.List;
@@ -110,6 +111,16 @@ interface FeEnvironment {
      *                          does not hold the privilege
      */
     void requireUsage(String warehouseName);
+
+    /**
+     * A session acquires its compute resource at its first statement and keeps it for the statements that
+     * follow.
+     *
+     * @return true when the session on the calling thread holds {@code resource} as its current compute resource
+     *         and acquired it itself. False for a thread without a session, and for a resource that was handed
+     *         to the session ready-made, as the FE does for the internal session of a load job
+     */
+    boolean isAcquiredBySession(ComputeResource resource);
 
     static FeEnvironment live() {
         return LiveFeEnvironment.INSTANCE;

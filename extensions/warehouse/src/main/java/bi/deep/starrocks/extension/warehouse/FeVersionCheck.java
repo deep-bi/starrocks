@@ -20,9 +20,9 @@ import java.util.Optional;
 import java.util.Properties;
 
 /**
- * Checks that the jar runs on the FE version it was compiled against.
+ * Checks that the extension runs on the FE version it was compiled against.
  *
- * <p>The extension calls FE classes that are not a public API. A jar built for another version can load
+ * <p>The extension calls FE classes that are not a public API. A extension built for another version can load
  * and then fail with {@code NoSuchMethodError} on the first warehouse statement, so the mismatch is caught at
  * start instead.
  *
@@ -45,7 +45,7 @@ final class FeVersionCheck {
     }
 
     /**
-     * @return the FE version this jar was compiled against, recorded by the build
+     * @return the FE version this extension was compiled against, recorded by the build
      */
     static String builtForFeVersion() {
         return requireBuildInfo(

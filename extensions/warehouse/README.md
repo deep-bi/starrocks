@@ -75,6 +75,12 @@ whichever way the warehouse was chosen:
 Without the privilege, a statement fails with the access-denied error 5203. A Stream Load fails with `Access denied` in
 its response.
 
+`REVOKE` takes effect at the next statement, also on a connection that is already open. That session stays on the
+warehouse it selected, so its statements keep failing until the privilege is back or it moves to a warehouse it may
+use. `SET warehouse = 'default_warehouse'` needs `USAGE` on `default_warehouse` like any other `SET warehouse`. A user
+without that grant reconnects instead: a new connection starts on `default_warehouse`, unless another default is set
+on the user.
+
 With `warehouse_extension_check_usage = false`, only `SET warehouse` and the hint on a query are checked.
 
 ### Drop a warehouse

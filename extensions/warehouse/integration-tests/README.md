@@ -32,7 +32,7 @@ Each check prints one `PASS` or `FAIL` line. The run ends with a summary per sui
 | `lifecycle` | 3 FEs on this host | 80 | 6 minutes |
 | `lost-metadata` | 3 FEs on this host | 31 | 4 minutes |
 | `drop-guards` | 1 FE on this host | 30 | half a minute |
-| `docker` | Official image: 1 FE, 2 compute nodes, MinIO | 64 | 4 minutes |
+| `docker` | Official image: 1 FE, 2 compute nodes, MinIO | 72 | 4 minutes |
 
 The times are from one run on one machine, with both Docker images already pulled.
 
@@ -42,7 +42,7 @@ The times are from one run on one machine, with both Docker images already pulle
 
 `drop-guards` checks that nodes and resource groups stop `DROP WAREHOUSE`, and that the hints in the error messages work.
 
-`docker` is the only suite with running compute nodes. It checks where queries, `INSERT` and Stream Load run, what happens when a node goes down, and the `USAGE` gate. It also compiles the extension and runs its unit tests inside the image, against the image's own jars.
+`docker` is the only suite with running compute nodes. It checks where queries, `INSERT` and Stream Load run, what happens when a node goes down, and the `USAGE` gate. The gate checks include a `REVOKE` that arrives on an open connection. It also compiles the extension and runs its unit tests inside the image, against the image's own jars.
 
 ## Requirements
 

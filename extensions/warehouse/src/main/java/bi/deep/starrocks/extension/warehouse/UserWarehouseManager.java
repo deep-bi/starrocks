@@ -107,10 +107,11 @@ public class UserWarehouseManager extends WarehouseManager {
     // ---------------------------------------------------------------- the gate
 
     /**
-     * The one place every query, INSERT and Stream Load passes to get its compute nodes, whatever statement,
-     * hint, user default or HTTP header named the warehouse. The FE itself checks USAGE only for SET warehouse
-     * and the SET_VAR hint on a query. Checking it here as well means a user session cannot skip it, whichever
-     * way it named the warehouse.
+     * The first half of the gate: where a query, an INSERT or a Stream Load gets compute nodes it does not hold
+     * yet, whatever statement, hint, user default or HTTP header named the warehouse. The FE itself checks USAGE
+     * only for SET warehouse and the SET_VAR hint on a query. Checking it here as well means a user session
+     * cannot skip it by naming the warehouse another way. A session that already holds its nodes does not come
+     * back here; {@link #isResourceAvailable} covers that.
      *
      * <p>Requests on the default warehouse go straight to the FE's own code: every user may use it, as in a
      * stock FE. So does background work, which has no user session, on any warehouse.
@@ -122,6 +123,28 @@ public class UserWarehouseManager extends WarehouseManager {
             requireUsage(warehouseId);
         }
         return super.acquireComputeResource(acquireContext);
+    }
+
+    /**
+     * The second half of the gate. A session acquires its compute resource once and keeps it; before every
+     * later use it asks this method whether the resource can still be used. Without the check here, a
+     * connection that is already open would go on running after its USAGE was revoked, until it reconnected.
+     *
+     * <p>The check covers only a resource the calling session acquired itself, which is one that passed
+     * {@link #acquireComputeResource} with the same session. Every other caller gets the FE's own answer:
+     * background work, and the internal session of a load job, which the FE hands a stored resource.
+     *
+     * @throws RuntimeException the FE's access-denied error, when the session's user no longer holds USAGE. The
+     *                          stock method never throws. This one does, because "not available" would make the
+     *                          session report a warehouse without nodes and ask the user to try again
+     */
+    @Override
+    public boolean isResourceAvailable(ComputeResource computeResource) {
+        long warehouseId = computeResource.getWarehouseId();
+        if (warehouseId != DEFAULT_WAREHOUSE_ID && env.isAcquiredBySession(computeResource)) {
+            requireUsage(warehouseId);
+        }
+        return super.isResourceAvailable(computeResource);
     }
 
     private void requireUsage(long warehouseId) {
