@@ -1,0 +1,9 @@
+<?xml version="1.0"?>
+<!DOCTYPE suppressions PUBLIC
+        "-//Checkstyle//DTD SuppressionFilter Configuration 1.2//EN"
+        "https://checkstyle.org/dtds/suppressions_1_2.dtd">
+<!-- The extension is checked with the FE's checkstyle.xml. Its header rule accepts only the ASF and the
+     StarRocks, Inc. file headers; the files here carry the plain Apache-2.0 header. -->
+<suppressions>
+    <suppress checks="RegexpHeader" files=".*"/>
+</suppressions>
