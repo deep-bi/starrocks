@@ -94,14 +94,16 @@ public class UserWarehouseManager extends WarehouseManager {
     // ---------------------------------------------------------------- start
 
     /**
-     * The FE calls this on every start, when it takes its role. That makes it the place to start the watch for
-     * lost warehouse metadata. The call also arrives on image load and in checkpoint copies of the FE state;
-     * the watch is started only once per FE process.
+     * The FE calls this on every start, when it takes its role. That makes it the place to start the periodic
+     * work: the watch for lost warehouse metadata and the check of the worker groups against StarMgr. The call
+     * also arrives on image load and in checkpoint copies of the FE state; each task is started only once per
+     * FE process.
      */
     @Override
     public void initDefaultWarehouse() {
         super.initDefaultWarehouse();
         LostWarehouseWatch.install(env);
+        StarMgrSync.install(env);
     }
 
     // ---------------------------------------------------------------- the gate
@@ -201,11 +203,12 @@ public class UserWarehouseManager extends WarehouseManager {
             UserWarehouse current = requireUserWarehouse(name, "altered");
             WarehouseOptions options = WarehouseOptions.forAlter(stmt.getProperties(), current.getReplicaNumber());
             if (options.replicaNumber() == current.getReplicaNumber()) {
-                // Nothing to change in StarMgr, but the warehouse is still written to the edit log. This is the
-                // repair path after lost metadata: an FE that kept the warehouse in memory writes it back, and
-                // the FEs that lost it get it again on replay.
+                // The statement that repairs. First StarMgr: a worker group that holds another number, after an
+                // FE died in the middle of an earlier ALTER, is set to the stored one. Then the edit log: the
+                // warehouse is written again, so FEs that lost it get it back on replay.
+                alignWorkerGroup(current);
                 env.writeJournal(OperationType.OP_ALTER_WAREHOUSE, current, entry -> install((Warehouse) entry));
-                LOG.info("ALTER WAREHOUSE {}: nothing changes, wrote it to the edit log again", name);
+                LOG.info("ALTER WAREHOUSE {}: the value is unchanged, wrote the warehouse to the edit log again", name);
                 return;
             }
 
@@ -446,8 +449,62 @@ public class UserWarehouseManager extends WarehouseManager {
         try {
             env.updateWorkerGroup(previous.getWorkerGroupId(), previous.getReplicaNumber());
         } catch (DdlException | RuntimeException e) {
-            LOG.warn("Worker group {} of warehouse {} may not match the stored replica number {}: {}",
+            LOG.warn("Worker group {} of warehouse {} may not match the stored replica number {} until the leader's"
+                            + " next check of StarMgr: {}",
                     previous.getWorkerGroupId(), previous.getName(), previous.getReplicaNumber(), e.getMessage());
         }
+    }
+
+    /**
+     * Makes StarMgr hold the stored replica number of every warehouse. {@link StarMgrSync} calls this on the
+     * leader once a minute.
+     *
+     * <p>The statement lock is taken for one warehouse at a time, so a statement waits for one round trip to
+     * StarMgr at most. A worker group that cannot be read or changed is left for the next round.
+     *
+     * @return the number of worker groups it corrected
+     */
+    int alignWorkerGroups() {
+        int corrected = 0;
+        List<String> unchecked = new ArrayList<>();
+        for (UserWarehouse listed : userWarehouses()) {
+            synchronized (statementLock) {
+                // Looked up again under the lock: a statement may have altered or dropped it since the list
+                // was made, and a stale copy would put an old number into StarMgr.
+                Warehouse current = getWarehouseAllowNull(listed.getId());
+                if (!(current instanceof UserWarehouse)) {
+                    continue;
+                }
+                try {
+                    if (alignWorkerGroup((UserWarehouse) current)) {
+                        corrected++;
+                    }
+                } catch (DdlException | RuntimeException e) {
+                    unchecked.add(current.getName() + " (" + e.getMessage() + ")");
+                }
+            }
+        }
+        if (!unchecked.isEmpty()) {
+            LOG.warn("Could not check the worker group of {} warehouse(s) against StarMgr, will try again: {}",
+                    unchecked.size(), String.join("; ", unchecked));
+        }
+        return corrected;
+    }
+
+    /**
+     * Makes StarMgr hold the stored replica number of one warehouse. The caller holds the statement lock.
+     *
+     * @return true when StarMgr held another number and was corrected
+     */
+    private boolean alignWorkerGroup(UserWarehouse warehouse) throws DdlException {
+        int inStarMgr = env.replicaNumberInStarMgr(warehouse.getWorkerGroupId());
+        if (inStarMgr == warehouse.getReplicaNumber()) {
+            return false;
+        }
+        env.updateWorkerGroup(warehouse.getWorkerGroupId(), warehouse.getReplicaNumber());
+        LOG.warn("Worker group {} of warehouse {} had replica number {} in StarMgr, the stored value is {}."
+                        + " StarMgr was set to the stored value",
+                warehouse.getWorkerGroupId(), warehouse.getName(), inStarMgr, warehouse.getReplicaNumber());
+        return true;
     }
 }

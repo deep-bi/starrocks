@@ -84,8 +84,15 @@ class FakeFeEnvironment implements FeEnvironment {
     /** Number of calls made to the fake StarMgr, to prove replay makes none. */
     int starMgrCalls;
 
+    /** Whether this FE is the leader and has finished taking over. */
+    boolean activeLeader = true;
+    /** The manager the FE serves from. Null stands for an FE whose manager is not the extension's. */
+    UserWarehouseManager servingManager;
+
     DdlException failCreateWorkerGroup;
     DdlException failUpdateWorkerGroup;
+    /** Thrown when StarMgr is asked for a worker group: a DdlException or a RuntimeException. */
+    Exception failReadWorkerGroup;
     /** Thrown by deleteWorkerGroup: a DdlException or a RuntimeException. */
     Exception failDeleteWorkerGroup;
     RuntimeException failJournal;
@@ -132,6 +139,32 @@ class FakeFeEnvironment implements FeEnvironment {
             throw new IllegalStateException("StarMgr is gone");
         }
         workerGroups.put(workerGroupId, replicaNumber);
+    }
+
+    @Override
+    public int replicaNumberInStarMgr(long workerGroupId) throws DdlException {
+        starMgrCalls++;
+        if (failReadWorkerGroup instanceof DdlException) {
+            throw (DdlException) failReadWorkerGroup;
+        }
+        if (failReadWorkerGroup instanceof RuntimeException) {
+            throw (RuntimeException) failReadWorkerGroup;
+        }
+        Integer replicaNumber = workerGroups.get(workerGroupId);
+        if (replicaNumber == null) {
+            throw new DdlException("Failed to get worker group info (id=" + workerGroupId + ")");
+        }
+        return replicaNumber;
+    }
+
+    @Override
+    public boolean isActiveLeader() {
+        return activeLeader;
+    }
+
+    @Override
+    public UserWarehouseManager servingManager() {
+        return servingManager;
     }
 
     @Override

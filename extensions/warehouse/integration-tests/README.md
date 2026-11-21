@@ -12,12 +12,12 @@ Build the FE first, as described under Build in the module's README. Then, from 
 ./run.sh
 ```
 
-That runs the three host suites. It takes the FE distribution from `output/fe` of this source tree, and the newest extension jar from the module's `target` directory or `output/fe/lib`. Other choices:
+That runs the four host suites. It takes the FE distribution from `output/fe` of this source tree, and the newest extension jar from the module's `target` directory or `output/fe/lib`. Other choices:
 
 ```bash
 ./run.sh drop-guards    # one suite
 ./run.sh docker         # the suite on the official image
-./run.sh all            # all four suites
+./run.sh all            # all five suites
 ./run.sh --fe-dist /path/to/starrocks/fe --jar /path/to/starrocks-warehouse-ext.jar
 ```
 
@@ -32,6 +32,7 @@ Each check prints one `PASS` or `FAIL` line. The run ends with a summary per sui
 | `lifecycle` | 3 FEs on this host | 80 | 6 minutes |
 | `lost-metadata` | 3 FEs on this host | 31 | 4 minutes |
 | `drop-guards` | 1 FE on this host | 30 | half a minute |
+| `replica-drift` | 3 FEs on this host | 24 | 4 minutes |
 | `docker` | Official image: 1 FE, 2 compute nodes, MinIO | 72 | 4 minutes |
 
 The times are from one run on one machine, with both Docker images already pulled.
@@ -41,6 +42,8 @@ The times are from one run on one machine, with both Docker images already pulle
 `lost-metadata` makes an FE without the jar write the checkpoint. It then checks the alarm and the repair.
 
 `drop-guards` checks that nodes and resource groups stop `DROP WAREHOUSE`, and that the hints in the error messages work.
+
+`replica-drift` leaves StarMgr with a replica number the FE never stored, as an FE that dies in the middle of `ALTER WAREHOUSE` does. It then checks that the leader corrects StarMgr, also after a leader change, and that followers change nothing. `lib/StarMgr.java` makes that state by talking to StarMgr directly.
 
 `docker` is the only suite with running compute nodes. It checks where queries, `INSERT` and Stream Load run, what happens when a node goes down, and the `USAGE` gate. The gate checks include a `REVOKE` that arrives on an open connection. It also compiles the extension and runs its unit tests inside the image, against the image's own jars.
 

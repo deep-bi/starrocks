@@ -29,6 +29,7 @@ import com.starrocks.persist.WALApplier;
 import com.starrocks.qe.ConnectContext;
 import com.starrocks.server.GlobalStateMgr;
 import com.starrocks.server.RunMode;
+import com.starrocks.server.WarehouseManager;
 import com.starrocks.sql.analyzer.Authorizer;
 import com.starrocks.system.ComputeNode;
 import com.starrocks.warehouse.cngroup.ComputeResource;
@@ -93,6 +94,28 @@ final class LiveFeEnvironment implements FeEnvironment {
     @Override
     public void deleteWorkerGroup(long workerGroupId) throws DdlException {
         GlobalStateMgr.getCurrentState().getStarOSAgent().deleteWorkerGroup(workerGroupId);
+    }
+
+    @Override
+    public int replicaNumberInStarMgr(long workerGroupId) throws DdlException {
+        return GlobalStateMgr.getCurrentState().getStarOSAgent().getWorkerGroupInfo(workerGroupId).getReplicaNumber();
+    }
+
+    /**
+     * An FE that takes over as leader first stops being ready, then replays the rest of the edit log, then
+     * becomes the leader, and only then is ready again. Asking for both leaves no moment in which it counts as
+     * the leader while it still replays.
+     */
+    @Override
+    public boolean isActiveLeader() {
+        GlobalStateMgr serving = GlobalStateMgr.getServingState();
+        return serving.isLeader() && serving.isReady();
+    }
+
+    @Override
+    public UserWarehouseManager servingManager() {
+        WarehouseManager manager = GlobalStateMgr.getServingState().getWarehouseMgr();
+        return manager instanceof UserWarehouseManager ? (UserWarehouseManager) manager : null;
     }
 
     @Override

@@ -205,7 +205,7 @@ The sources are checked with the FE's `checkstyle.xml`, except its file header r
 
 ### Integration tests
 
-The scripts in `integration-tests` run the extension in real FEs: 3 suites on the local host and one on the official
+The scripts in `integration-tests` run the extension in real FEs: 4 suites on the local host and one on the official
 image with compute nodes. They are not part of the Maven build. After `./build.sh --fe`, on the host and not inside the
 build image:
 

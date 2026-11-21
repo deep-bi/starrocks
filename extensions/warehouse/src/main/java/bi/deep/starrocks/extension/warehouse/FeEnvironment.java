@@ -52,6 +52,24 @@ interface FeEnvironment {
     void deleteWorkerGroup(long workerGroupId) throws DdlException;
 
     /**
+     * @return the replica number StarMgr holds for a worker group right now
+     */
+    int replicaNumberInStarMgr(long workerGroupId) throws DdlException;
+
+    /**
+     * @return true when this FE is the leader and has finished taking over, which includes replaying the whole
+     *         edit log. Only then may it write to StarMgr outside a statement: a follower, or a leader that is
+     *         still replaying, would act on stored values that are already out of date
+     */
+    boolean isActiveLeader();
+
+    /**
+     * @return the warehouse manager this FE serves from, never the copy of a checkpoint; null when that manager
+     *         is not this extension's
+     */
+    UserWarehouseManager servingManager();
+
+    /**
      * Writes one entry to the edit log and, once it is durable, runs {@code afterWrite} with that entry.
      */
     void writeJournal(short operation, Object entry, WALApplier afterWrite);

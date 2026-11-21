@@ -15,7 +15,7 @@
 # per check. See README.md next to this file.
 set -u
 IT_DIR="$(cd "$(dirname "$0")" && pwd)"
-HOST_SUITES="lifecycle lost-metadata drop-guards"
+HOST_SUITES="lifecycle lost-metadata drop-guards replica-drift"
 ALL_SUITES="$HOST_SUITES docker"
 
 usage() {
@@ -26,8 +26,9 @@ Suites:
   lifecycle       3 FEs on this host: statements, replay, checkpoint, leader change, settings, jar removal
   lost-metadata   3 FEs on this host: the alarm for lost warehouse metadata and the repair
   drop-guards     1 FE on this host: what stops DROP WAREHOUSE
+  replica-drift   3 FEs on this host: a worker group whose replica number in StarMgr is not the stored one
   docker          official image with compute nodes and MinIO: routing, node loss, the USAGE gate
-  host            the three host suites (the default)
+  host            the four host suites (the default)
   all             the host suites and docker
 
 Options:
@@ -91,7 +92,7 @@ while [ $# -gt 0 ]; do
     -h|--help) usage; exit 0 ;;
     host) requested="$requested $HOST_SUITES"; shift ;;
     all)  requested="$requested $ALL_SUITES"; shift ;;
-    lifecycle|lost-metadata|drop-guards|docker) requested="$requested $1"; shift ;;
+    lifecycle|lost-metadata|drop-guards|replica-drift|docker) requested="$requested $1"; shift ;;
     *) usage >&2; die "unknown argument: $1" ;;
   esac
 done

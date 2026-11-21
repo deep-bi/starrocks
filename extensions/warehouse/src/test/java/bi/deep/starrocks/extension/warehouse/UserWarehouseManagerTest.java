@@ -104,12 +104,13 @@ public class UserWarehouseManagerTest {
     public void theFeInitCallCreatesTheDefaultWarehouseAndStartsTheWatchOnce() {
         Assertions.assertTrue(manager.warehouseExists("default_warehouse"));
         Assertions.assertInstanceOf(DefaultWarehouse.class, manager.getWarehouse(WarehouseManager.DEFAULT_WAREHOUSE_ID));
-        Assertions.assertEquals(Collections.singleton(LostWarehouseWatch.NAME), fe.periodicTasks.keySet());
+        Assertions.assertEquals(new HashSet<>(Arrays.asList(LostWarehouseWatch.NAME, StarMgrSync.NAME)),
+                fe.periodicTasks.keySet());
 
         manager.initDefaultWarehouse();
         new UserWarehouseManager(fe).initDefaultWarehouse();
 
-        Assertions.assertEquals(1, fe.periodicTasks.size());
+        Assertions.assertEquals(2, fe.periodicTasks.size(), "each task once, however many managers start");
         Assertions.assertEquals(Collections.singletonList(0L), manager.getAllWarehouseIds());
     }
 
@@ -315,7 +316,8 @@ public class UserWarehouseManagerTest {
         manager.alterWarehouse(alter("etl", "replica_number", "2"));
 
         Assertions.assertSame(before, user("etl"));
-        Assertions.assertEquals(starMgrCalls, fe.starMgrCalls);
+        Assertions.assertEquals(starMgrCalls + 1, fe.starMgrCalls, "StarMgr is asked once and not changed");
+        Assertions.assertEquals(Collections.singletonMap(before.getWorkerGroupId(), 2), fe.workerGroups);
         Assertions.assertEquals(Arrays.asList(OperationType.OP_CREATE_WAREHOUSE, OperationType.OP_ALTER_WAREHOUSE),
                 fe.journaledOperations());
 
@@ -332,6 +334,44 @@ public class UserWarehouseManagerTest {
         Assertions.assertEquals(2, restored.getReplicaNumber());
         Assertions.assertEquals("nightly loads", restored.getComment());
         Assertions.assertEquals(0, lostFe.starMgrCalls);
+    }
+
+    /**
+     * An FE that dies between the StarMgr update and the edit log leaves StarMgr with a number nobody committed.
+     * Repeating the stored value is how an operator puts it right at once.
+     */
+    @Test
+    public void alterToTheSameValueSetsStarMgrBackToTheStoredNumber() throws Exception {
+        manager.createWarehouse(create("etl", false, null, "replica_number", "2"));
+        long workerGroupId = user("etl").getWorkerGroupId();
+        fe.workerGroups.put(workerGroupId, 5);
+
+        manager.alterWarehouse(alter("etl", "replica_number", "2"));
+
+        Assertions.assertEquals(Collections.singletonMap(workerGroupId, 2), fe.workerGroups);
+        Assertions.assertEquals(2, user("etl").getReplicaNumber());
+        Assertions.assertEquals(Arrays.asList(OperationType.OP_CREATE_WAREHOUSE, OperationType.OP_ALTER_WAREHOUSE),
+                fe.journaledOperations());
+    }
+
+    /**
+     * StarMgr comes first here too. A statement that cannot check or correct it fails and writes nothing.
+     */
+    @Test
+    public void alterToTheSameValueWritesNothingWhenStarMgrRefuses() throws Exception {
+        manager.createWarehouse(create("etl", false, null, "replica_number", "2"));
+        long workerGroupId = user("etl").getWorkerGroupId();
+
+        fe.failReadWorkerGroup = new DdlException("Failed to get worker group info (id=" + workerGroupId + ")");
+        String message = messageOf(DdlException.class, () -> manager.alterWarehouse(alter("etl", "replica_number", "2")));
+        Assertions.assertTrue(message.contains("Failed to get worker group info"), message);
+
+        fe.failReadWorkerGroup = null;
+        fe.workerGroups.put(workerGroupId, 5);
+        fe.failUpdateWorkerGroup = new DdlException("Failed to update worker group. error: timeout");
+        Assertions.assertThrows(DdlException.class, () -> manager.alterWarehouse(alter("etl", "replica_number", "2")));
+
+        Assertions.assertEquals(1, fe.journal.size(), "nothing but the CREATE is in the edit log");
     }
 
     @Test

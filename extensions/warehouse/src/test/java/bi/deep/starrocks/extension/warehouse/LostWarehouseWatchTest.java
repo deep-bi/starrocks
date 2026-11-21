@@ -192,7 +192,8 @@ public class LostWarehouseWatchTest {
 
         round.run();
         Assertions.assertEquals(1L, fe.gauges.get(LostWarehouseWatch.GAUGE).getAsLong());
-        Assertions.assertEquals(1, fe.periodicTasks.size(), "still one watch after the second manager");
+        Assertions.assertSame(round, fe.periodicTasks.get(LostWarehouseWatch.NAME),
+                "still the same watch after the second manager");
 
         // Dropping the stray node, as the log line advises, clears the alarm.
         fe.nodes.removeIf(node -> node.getId() == 20001L);

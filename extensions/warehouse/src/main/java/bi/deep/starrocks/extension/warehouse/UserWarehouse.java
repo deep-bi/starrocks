@@ -40,8 +40,8 @@ import java.util.List;
  */
 public class UserWarehouse extends Warehouse implements GsonPostProcessable {
     /**
-     * Version of the persisted layout below. Raise it when a change would make an older version of the extension misread the data;
-     * {@link #gsonPostProcess} then stops that older extension.
+     * Version of the persisted layout below. Raise it when a change would make an older version of the extension
+     * misread the data; {@link #gsonPostProcess} then stops that older extension.
      */
     static final int FORMAT_VERSION = 1;
 

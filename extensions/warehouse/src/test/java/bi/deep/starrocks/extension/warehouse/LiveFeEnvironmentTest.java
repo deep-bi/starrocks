@@ -12,6 +12,7 @@
 
 package bi.deep.starrocks.extension.warehouse;
 
+import com.staros.proto.WorkerGroupDetailInfo;
 import com.starrocks.authorization.AccessDeniedException;
 import com.starrocks.authorization.AuthorizationMgr;
 import com.starrocks.authorization.ObjectType;
@@ -164,6 +165,55 @@ public class LiveFeEnvironmentTest {
                 times = 1;
             }
         };
+    }
+
+    @Test
+    public void theReplicaNumberOfAWorkerGroupIsReadFromStarMgr() throws Exception {
+        wireGlobalState();
+        new Expectations() {
+            {
+                starOSAgent.getWorkerGroupInfo(501L);
+                result = WorkerGroupDetailInfo.newBuilder().setGroupId(501L).setReplicaNumber(3).build();
+            }
+        };
+
+        Assertions.assertEquals(3, live.replicaNumberInStarMgr(501L));
+    }
+
+    /**
+     * While an FE takes over as leader it is "not ready" from before the last replay until after it has become
+     * the leader. Leader and ready together therefore mean: leader, with the whole edit log replayed.
+     */
+    @Test
+    public void theActiveLeaderIsALeaderThatHasFinishedTakingOver() {
+        wireGlobalState();
+        new Expectations() {
+            {
+                globalStateMgr.isLeader();
+                returns(false, true, true);
+                globalStateMgr.isReady();
+                returns(false, true);
+            }
+        };
+
+        Assertions.assertFalse(live.isActiveLeader(), "a follower");
+        Assertions.assertFalse(live.isActiveLeader(), "the leader, still taking over");
+        Assertions.assertTrue(live.isActiveLeader());
+    }
+
+    @Test
+    public void theServingManagerIsReportedOnlyWhenItIsTheExtensions() {
+        wireGlobalState();
+        UserWarehouseManager ours = new UserWarehouseManager(new FakeFeEnvironment());
+        new Expectations() {
+            {
+                globalStateMgr.getWarehouseMgr();
+                returns(new WarehouseManager(), ours);
+            }
+        };
+
+        Assertions.assertNull(live.servingManager(), "the stock manager");
+        Assertions.assertSame(ours, live.servingManager());
     }
 
     @Test

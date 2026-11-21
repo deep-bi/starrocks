@@ -22,7 +22,7 @@ import java.util.Properties;
 /**
  * Checks that the extension runs on the FE version it was compiled against.
  *
- * <p>The extension calls FE classes that are not a public API. A extension built for another version can load
+ * <p>The extension calls FE classes that are not a public API. An extension built for another version can load
  * and then fail with {@code NoSuchMethodError} on the first warehouse statement, so the mismatch is caught at
  * start instead.
  *
