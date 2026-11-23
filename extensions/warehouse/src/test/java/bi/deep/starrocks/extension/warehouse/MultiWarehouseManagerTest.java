@@ -146,7 +146,8 @@ public class MultiWarehouseManagerTest {
         // Everything the stock manager offers by id or name now works for the new warehouse.
         Assertions.assertSame(research, manager.getWarehouse(10001L));
         Assertions.assertTrue(manager.warehouseExists("research"));
-        Assertions.assertEquals(2, manager.getAllWorkerGroupCount());
+        Assertions.assertNotEquals(manager.getWarehouse(WarehouseManager.DEFAULT_WAREHOUSE_ID).getAnyWorkerGroupId(),
+                research.getAnyWorkerGroupId());
         Assertions.assertEquals(new HashSet<>(Arrays.asList("default_warehouse", "research")),
                 manager.getAllWarehouseNames());
     }

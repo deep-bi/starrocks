@@ -150,6 +150,15 @@ public class MultiWarehouseManager extends WarehouseManager {
         return acquireMaintenanceResource(getBackgroundWarehouse(tableId));
     }
 
+    /**
+     * The FE compaction scheduler uses this count to stop scanning when every target is full. All tables
+     * share one compaction target, either the configured warehouse or the default fallback.
+     */
+    @Override
+    public int getAllWorkerGroupCount() {
+        return 1;
+    }
+
     @Override
     public ComputeResource getCompactionComputeResource(long tableId) {
         Warehouse warehouse = configuredWarehouse(Config.lake_compaction_warehouse, compactionWarning);
