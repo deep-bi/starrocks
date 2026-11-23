@@ -16,12 +16,18 @@ import com.starrocks.authorization.AccessDeniedException;
 import com.starrocks.authorization.AuthorizationMgr;
 import com.starrocks.authorization.ObjectType;
 import com.starrocks.authorization.PrivilegeType;
+import com.starrocks.catalog.Database;
+import com.starrocks.catalog.MaterializedView;
 import com.starrocks.catalog.ResourceGroup;
 import com.starrocks.catalog.ResourceGroupMgr;
 import com.starrocks.common.DdlException;
 import com.starrocks.common.ErrorCode;
 import com.starrocks.common.ErrorReportException;
+import com.starrocks.common.MetaNotFoundException;
 import com.starrocks.common.util.FrontendDaemon;
+import com.starrocks.common.util.concurrent.lock.LockType;
+import com.starrocks.common.util.concurrent.lock.Locker;
+import com.starrocks.load.routineload.RoutineLoadJob;
 import com.starrocks.metric.GaugeMetric;
 import com.starrocks.metric.Metric;
 import com.starrocks.metric.MetricRepo;
@@ -39,6 +45,7 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.TreeMap;
 import java.util.UUID;
@@ -171,6 +178,37 @@ final class LiveFeEnvironment implements FeEnvironment {
             }
         }
         return result;
+    }
+
+    @Override
+    public Optional<String> findWarehouseReference(long warehouseId) throws DdlException {
+        GlobalStateMgr state = GlobalStateMgr.getCurrentState();
+        Locker locker = new Locker();
+        for (Database db : state.getLocalMetastore().getAllDbs()) {
+            if (!locker.lockDatabaseAndCheckExist(db, LockType.READ)) {
+                continue;
+            }
+            try {
+                for (MaterializedView view : db.getMaterializedViews()) {
+                    if (view.getWarehouseId() == warehouseId) {
+                        return Optional.of("materialized view " + db.getFullName() + "." + view.getName());
+                    }
+                }
+            } finally {
+                locker.unLockDatabase(db.getId(), LockType.READ);
+            }
+        }
+        try {
+            // Excluding history keeps paused jobs, which can resume on the same warehouse.
+            for (RoutineLoadJob job : state.getRoutineLoadMgr().getJob(null, null, false)) {
+                if (job.getWarehouseId() == warehouseId) {
+                    return Optional.of("Routine Load job " + job.getName() + " (ID " + job.getId() + ")");
+                }
+            }
+        } catch (MetaNotFoundException e) {
+            throw new DdlException("Cannot check Routine Load jobs for warehouse ID " + warehouseId, e);
+        }
+        return Optional.empty();
     }
 
     @Override

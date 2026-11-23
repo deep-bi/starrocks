@@ -28,6 +28,7 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.function.LongSupplier;
 import java.util.function.Supplier;
@@ -235,6 +236,11 @@ class FakeFeEnvironment implements FeEnvironment {
     @Override
     public Map<String, List<String>> warehousesByResourceGroup() {
         return resourceGroups;
+    }
+
+    @Override
+    public Optional<String> findWarehouseReference(long warehouseId) {
+        return Optional.empty();
     }
 
     @Override

@@ -49,6 +49,7 @@ import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.WeakHashMap;
@@ -417,6 +418,11 @@ public class MultiWarehouseManager extends WarehouseManager {
                             + String.join(", ", resourceGroups) + " name it in their 'warehouses' property."
                             + " Change the property with ALTER RESOURCE GROUP <group> WITH ('warehouses' ="
                             + " '<warehouses to keep>'), or drop the resource group, then drop the warehouse");
+                }
+                Optional<String> reference = env.findWarehouseReference(warehouse.getId());
+                if (reference.isPresent()) {
+                    throw new DdlException("Cannot drop warehouse " + name + " because " + reference.get()
+                            + " still references warehouse ID " + warehouse.getId());
                 }
                 env.writeJournal(OperationType.OP_DROP_WAREHOUSE, new DropWarehouseLog(name),
                         entry -> uninstall(((DropWarehouseLog) entry).getWarehouseName()));

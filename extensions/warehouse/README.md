@@ -103,7 +103,8 @@ With `warehouse_extension_check_usage = false`, only `SET warehouse` and the hin
 
 ### Drop a warehouse
 
-`DROP WAREHOUSE` refuses a warehouse that is still in use, either by compute nodes or resource groups.
+`DROP WAREHOUSE` refuses to drop a warehouse with registered nodes, a resource group that names it, a materialized
+view assigned to it, or a nonterminal Routine Load job that uses it. A paused Routine Load job still blocks the drop.
 
 In case of compute nodes, remove each one first with:
 
@@ -119,6 +120,9 @@ ALTER RESOURCE GROUP rg_reports WITH ('warehouses' = 'etl');
 ```
 
 An empty value lifts the limit, and the group then applies on every warehouse.
+
+To move a materialized view, use `ALTER MATERIALIZED VIEW <name> SET ('warehouse' = '<other_warehouse>')`.
+A Routine Load job stops blocking the drop when it reaches `STOPPED` or `CANCELLED`.
 
 ### Remove the extension
 

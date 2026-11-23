@@ -21,12 +21,12 @@ import com.starrocks.warehouse.cngroup.ComputeResource;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.function.LongSupplier;
 
 /**
- * Everything the warehouse classes need from the running FE: the run mode, id allocation, StarMgr worker groups,
- * the edit log, the node list and the resource groups.
+ * Access to FE services and metadata used by the warehouse extension.
  *
  * <p>The warehouse logic reaches the FE only through this interface. {@link LiveFeEnvironment} is the one place
  * that touches the FE's global state, and tests replace it with an in-memory implementation.
@@ -109,6 +109,11 @@ interface FeEnvironment {
      *         Groups without the property are left out
      */
     Map<String, List<String>> warehousesByResourceGroup();
+
+    /**
+     * Returns a description identifying one materialized view or nonterminal Routine Load job using this warehouse ID.
+     */
+    Optional<String> findWarehouseReference(long warehouseId) throws DdlException;
 
     /**
      * Runs {@code task} once the FE has loaded its metadata, and then again every {@code intervalMs}.
