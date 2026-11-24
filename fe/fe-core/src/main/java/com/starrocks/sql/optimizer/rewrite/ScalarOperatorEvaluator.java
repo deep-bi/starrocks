@@ -33,6 +33,7 @@ import com.starrocks.sql.optimizer.operator.OperatorType;
 import com.starrocks.sql.optimizer.operator.scalar.CallOperator;
 import com.starrocks.sql.optimizer.operator.scalar.ConstantOperator;
 import com.starrocks.sql.optimizer.operator.scalar.ScalarOperator;
+import com.starrocks.sql.optimizer.transformer.DecimalArithmeticLowering;
 import com.starrocks.type.PrimitiveType;
 import com.starrocks.type.Type;
 import com.starrocks.type.TypeFactory;
@@ -177,6 +178,9 @@ public enum ScalarOperatorEvaluator {
             }
         }
 
+        if (fn instanceof DecimalArithmeticLowering decimal) {
+            return needMonotonic ? root : decimal.fold(root);
+        }
         List<Type> argTypes = new ArrayList<>(Arrays.asList(fn.getArgs()));
 
         FunctionSignature signature =

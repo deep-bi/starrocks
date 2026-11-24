@@ -63,6 +63,7 @@ import com.starrocks.sql.ast.expression.NullLiteral;
 import com.starrocks.sql.ast.expression.SlotRef;
 import com.starrocks.sql.ast.expression.StringLiteral;
 import com.starrocks.sql.ast.expression.TypeDef;
+import com.starrocks.sql.common.MetaUtils;
 import com.starrocks.thrift.TAggStateDesc;
 import com.starrocks.thrift.TAggregationType;
 import com.starrocks.thrift.TColumn;
@@ -630,6 +631,9 @@ public class Column implements Writable, GsonPreProcessable, GsonPostProcessable
 
     public void setDefineExpr(Expr expr) {
         defineExpr = expr;
+        if (expr != null) {
+            expr.markStoredExpression();
+        }
     }
 
     public Expr getGeneratedColumnExpr(Map<ColumnId, Column> idToColumn) {
@@ -638,16 +642,12 @@ public class Column implements Writable, GsonPreProcessable, GsonPostProcessable
         }
         Expr expr = generatedColumnExpr.convertToColumnNameExpr(idToColumn).clone();
         expr.setType(type);
+        expr.markStoredExpression();
         return expr;
     }
 
     public Expr getGeneratedColumnExpr(List<Column> schema) {
-        if (generatedColumnExpr == null) {
-            return null;
-        }
-        Expr res = generatedColumnExpr.convertToColumnNameExpr(schema).clone();
-        res.setType(type);
-        return res;
+        return generatedColumnExpr == null ? null : getGeneratedColumnExpr(MetaUtils.buildIdToColumn(schema));
     }
 
     public void setGeneratedColumnExpr(ColumnIdExpr expr) {

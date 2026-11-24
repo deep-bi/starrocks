@@ -177,7 +177,9 @@ public class ColumnDef implements ParseNode {
     }
 
     public Expr generatedColumnExpr() {
-        return generatedColumnExpr.clone();
+        Expr copy = generatedColumnExpr.clone();
+        copy.markStoredExpression();
+        return copy;
     }
 
     // The columns will obey NULL constraint if not specified. The primary key column should abide by the NOT NULL constraint default to be compatible with ANSI.

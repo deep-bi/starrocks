@@ -20,6 +20,8 @@ package com.starrocks.sql;
 import com.starrocks.catalog.Table;
 import com.starrocks.planner.PartitionColumnFilter;
 import com.starrocks.qe.ConnectContext;
+import com.starrocks.qe.SessionVariable;
+import com.starrocks.qe.SqlModeHelper;
 import com.starrocks.sql.optimizer.OptExpression;
 import com.starrocks.sql.optimizer.OptExpressionVisitor;
 import com.starrocks.sql.optimizer.operator.ColumnFilterConverter;
@@ -28,8 +30,10 @@ import com.starrocks.sql.optimizer.operator.logical.LogicalFilterOperator;
 import com.starrocks.sql.optimizer.operator.logical.LogicalLimitOperator;
 import com.starrocks.sql.optimizer.operator.logical.LogicalOlapScanOperator;
 import com.starrocks.sql.optimizer.operator.logical.LogicalProjectOperator;
+import com.starrocks.sql.optimizer.operator.scalar.CallOperator;
 import com.starrocks.sql.optimizer.operator.scalar.ColumnRefOperator;
 import com.starrocks.sql.optimizer.operator.scalar.ScalarOperator;
+import com.starrocks.sql.optimizer.transformer.DecimalArithmeticLowering;
 
 import java.util.List;
 import java.util.Map;
@@ -76,7 +80,12 @@ public class ShortCircuitPlanner {
         if (!connectContext.getSessionVariable().isEnableShortCircuit()) {
             return false;
         }
-        return root.getOp().accept(new LogicalPlanChecker(), root, null);
+        LogicalPlanChecker checker = new LogicalPlanChecker();
+        SessionVariable variables = connectContext.getSessionVariable();
+        checker.checkDecimalOptions = variables.isDecimalOverflowReduceScale() &&
+                (SqlModeHelper.check(variables.getSqlMode(), SqlModeHelper.MODE_ERROR_IF_OVERFLOW) ||
+                        SqlModeHelper.check(variables.getSqlMode(), SqlModeHelper.MODE_ERROR_FOR_DIVISION_BY_ZERO));
+        return root.getOp().accept(checker, root, null);
     }
     protected static boolean isRedundant(Map<ColumnRefOperator, ScalarOperator> projections) {
         for (Map.Entry<ColumnRefOperator, ScalarOperator> entry : projections.entrySet()) {
@@ -109,6 +118,7 @@ public class ShortCircuitPlanner {
      * Filter only support pk IN/EQUAL/AND/OR
      */
     public static class LogicalPlanChecker extends BaseLogicalPlanChecker {
+        private boolean checkDecimalOptions;
         protected boolean allowFilter = true;
         protected boolean allowLimit = true;
         protected boolean allowProject = true;
@@ -143,6 +153,9 @@ public class ShortCircuitPlanner {
 
             LogicalFilterOperator filterOp = optExpression.getOp().cast();
             predicate = filterOp.getPredicate();
+            if (checkDecimalOptions && needsDecimalOptions(predicate)) {
+                return false;
+            }
             return visitChild(optExpression, context);
         }
 
@@ -153,10 +166,17 @@ public class ShortCircuitPlanner {
                 return visitChild(optExpression, context);
             }
 
-            if (!allowProject) {
+            if (!allowProject || (checkDecimalOptions && projectOp.getColumnRefMap().values().stream()
+                    .anyMatch(LogicalPlanChecker::needsDecimalOptions))) {
                 return false;
             }
             return visitChild(optExpression, context);
+        }
+
+        // The point-read RPC does not pass the query's overflow and division-by-zero options.
+        private static boolean needsDecimalOptions(ScalarOperator expr) {
+            return expr.asStream().anyMatch(child -> child instanceof CallOperator call &&
+                    call.getFunction() instanceof DecimalArithmeticLowering);
         }
 
         @Override

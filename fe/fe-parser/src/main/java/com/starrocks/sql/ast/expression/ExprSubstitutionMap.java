@@ -17,6 +17,7 @@ package com.starrocks.sql.ast.expression;
 import com.google.common.collect.Lists;
 
 import java.util.List;
+import java.util.function.BiPredicate;
 
 /**
  * Simple container for expression substitutions, consumed exclusively by
@@ -29,14 +30,21 @@ public final class ExprSubstitutionMap {
     private final List<Expr> lhs;
     private final List<Expr> rhs;
 
+    private final BiPredicate<Expr, Expr> matches;
+
     public ExprSubstitutionMap() {
+        this(Expr::equals);
+    }
+
+    public ExprSubstitutionMap(BiPredicate<Expr, Expr> matches) {
+        this.matches = matches;
         this.lhs = Lists.newArrayList();
         this.rhs = Lists.newArrayList();
     }
 
     /**
-     * Adds a mapping from {@code lhsExpr} to {@code rhsExpr}. The visitor will look up entries
-     * using {@link Expr#equals(Object)}, so callers should pass the references they expect to replace.
+     * Adds a mapping from {@code lhsExpr} to {@code rhsExpr}. Entries use {@link Expr#equals(Object)}
+     * unless the caller supplies a matcher.
      * The {@code rhsExpr} must already be analyzed and valid in the target scope.
      */
     public void put(Expr lhsExpr, Expr rhsExpr) {
@@ -49,7 +57,7 @@ public final class ExprSubstitutionMap {
      */
     public Expr get(Expr lhsExpr) {
         for (int i = 0; i < lhs.size(); ++i) {
-            if (lhsExpr.equals(lhs.get(i))) {
+            if (matches.test(lhsExpr, lhs.get(i))) {
                 return rhs.get(i);
             }
         }

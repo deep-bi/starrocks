@@ -920,12 +920,17 @@ public class FunctionAnalyzer {
             }
 
             expr = SqlParser.parseExpression(fn.getSql(), context.getSessionVariable());
+            if (node.isStoredExpression()) {
+                expr.markStoredExpression();
+            }
             ExpressionAnalyzer.analyzeExpressionResolveSlot(expr, context, slotRef -> {
                 if (!argsMap.containsKey(slotRef.getColName())) {
                     throw new SemanticException("Cannot find argument %s in function args", slotRef.getColName());
                 }
                 slotRef.setType(argsMap.get(slotRef.getColName()));
             });
+        } catch (DecimalV3FunctionAnalyzer.DecimalOverflowModeConflictException e) {
+            throw e;
         } catch (Exception e) {
             throw new SemanticException("Failed to parse view definition: " + fn.getSql());
         }

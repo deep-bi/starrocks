@@ -1197,8 +1197,10 @@ public class RelationTransformer implements AstVisitorExtendInterface<LogicalPla
                 queryPlan.getRootBuilder(), groupKeys, aggFunctions, null, ImmutableList.of());
 
         // output
-        LogicalAggregationOperator aggregationOperator = (LogicalAggregationOperator) builder.getRoot().getOp();
-        List<ColumnRefOperator> output = new ArrayList<>(aggregationOperator.getGroupingKeys());
+        List<ColumnRefOperator> output = groupKeys.stream()
+                .map(builder.getExpressionMapping()::get)
+                .distinct()
+                .collect(Collectors.toCollection(ArrayList::new));
         for (Expr agg : aggFunctions) {
             ColumnRefOperator ref = builder.getExpressionMapping().get(agg);
             output.add(ref);

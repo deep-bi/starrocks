@@ -64,6 +64,8 @@ public class GeneratedColumnTest extends PlanTestBase {
         String sql = "select v1+v2 from tmc";
         String plan = getFragmentPlan(sql);
         assertContains(plan, "OUTPUT EXPRS:4: v4");
+        assertContains(getFragmentPlan("select /*+ SET_VAR(decimal_overflow_reduce_scale=true) */ v1 + v2 from tmc"),
+                "OUTPUT EXPRS:4: v4");
 
         sql = "select tmc.v1 + tmc.v2 from tmc";
         plan = getFragmentPlan(sql);

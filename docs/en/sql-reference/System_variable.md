@@ -487,6 +487,22 @@ Setting this value with hints applies only to `COUNT(DISTINCT)` with a single pa
 * **Unit**: Seconds
 * **Introduced in**: v3.5.1
 
+### decimal_overflow_reduce_scale
+
+* **Scope**: Session
+* **Description**: When the operand precisions of a decimal multiplication add up to more than 38, the result uses
+  `DECIMAL(38, min(s1 + s2, max(s1, s2, 12)))`, where `s1` and `s2` are the operand scales. Addition, subtraction,
+  division, SUM, and AVG keep their SQL result types. The planner uses wider decimal intermediates, rounds ties away
+  from zero, and checks the declared result precision. Overflow returns NULL or raises an error under
+  `ERROR_IF_OVERFLOW`. An eligible multiplication raises an analysis error if `decimal_overflow_to_double` is also
+  enabled. Explicit DECIMAL256 arithmetic follows its existing rules. Scale reduction is disabled for stored
+  generated-column and materialized-view expressions. The planner can reuse a generated column when its analyzed
+  expression matches the query. Enabling this option disables materialized-view rewrites. On a BE, strict mode can still
+  raise an overflow for a row excluded by IF, CASE, or an aggregate FILTER when the backend evaluates the expression
+  before applying the condition.
+* **Default**: `false`
+* **Data Type**: Boolean
+
 ### decimal_overflow_to_double
 
 * **Scope**: Session

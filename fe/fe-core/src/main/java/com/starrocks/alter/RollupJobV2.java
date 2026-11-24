@@ -460,6 +460,7 @@ public class RollupJobV2 extends AlterJobV2 implements GsonPostProcessable {
         }
         Expr newExpr = ExprSubstitutionVisitor.rewrite(defineExpr, smap);
         newExpr = newExpr.accept(visitor, null);
+        newExpr.markStoredExpression();
         newExpr = ExprUtils.analyzeAndCastFold(newExpr);
         Type newType = newExpr.getType();
         if (!type.isFullyCompatible(newType)) {

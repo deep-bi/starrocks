@@ -18,6 +18,8 @@ import com.starrocks.catalog.OlapTable;
 import com.starrocks.catalog.Partition;
 import com.starrocks.common.FeConstants;
 import com.starrocks.qe.ConnectContext;
+import com.starrocks.qe.SessionVariable;
+import com.starrocks.qe.SqlModeHelper;
 import com.starrocks.server.GlobalStateMgr;
 import com.starrocks.sql.plan.ExecPlan;
 import com.starrocks.thrift.TCacheParam;
@@ -27,6 +29,8 @@ import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
+import java.util.Arrays;
+import java.util.Map;
 import java.util.Optional;
 
 // Guards the two cache-key invariants that the query cache relies on:
@@ -211,6 +215,32 @@ public class QueryCacheRuntimeFilterAndTimeZoneTest {
         }
     }
 
+
+    @Test
+    public void testDecimalOverflowModesSeparateCacheEntries() throws Exception {
+        String sql = "select count(*) from t1 where dt between '2022-01-01' and '2022-02-01' " +
+                "and cast(v1 as decimal(38,18)) / cast(ts as decimal(38,18)) > 1 group by c1";
+        SessionVariable original = ctx.getSessionVariable();
+        ctx.setSessionVariable(original.clone());
+        try {
+            byte[] legacy = cacheParamOf(sql).orElseThrow().getDigest();
+            SessionVariable session = ctx.getSessionVariable();
+            ctx.getGlobalStateMgr().getVariableMgr().applySessionVariable(
+                    Map.of("decimal_overflow_reduce_scale", "true"), session);
+            byte[] reduced = cacheParamOf(sql).orElseThrow().getDigest();
+            Assertions.assertFalse(Arrays.equals(legacy, reduced));
+
+            session.setSqlMode(session.getSqlMode() | SqlModeHelper.MODE_ERROR_IF_OVERFLOW);
+            byte[] strict = cacheParamOf(sql).orElseThrow().getDigest();
+            Assertions.assertFalse(Arrays.equals(reduced, strict));
+
+            session.setSqlMode(session.getSqlMode() | SqlModeHelper.MODE_ERROR_FOR_DIVISION_BY_ZERO);
+            byte[] strictDivision = cacheParamOf(sql).orElseThrow().getDigest();
+            Assertions.assertFalse(Arrays.equals(strict, strictDivision));
+        } finally {
+            ctx.setSessionVariable(original);
+        }
+    }
 
     @Test
     public void testTimeZoneIsPartOfTheDigest() throws Exception {

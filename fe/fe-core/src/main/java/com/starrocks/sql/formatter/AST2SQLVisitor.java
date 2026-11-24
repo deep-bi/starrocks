@@ -17,6 +17,7 @@ package com.starrocks.sql.formatter;
 import com.google.common.base.Joiner;
 import com.starrocks.catalog.TableName;
 import com.starrocks.common.util.ParseUtil;
+import com.starrocks.qe.ConnectContext;
 import com.starrocks.sql.analyzer.AnalyzerUtils;
 import com.starrocks.sql.analyzer.Field;
 import com.starrocks.sql.ast.CTERelation;
@@ -33,6 +34,7 @@ import com.starrocks.sql.ast.TableRelation;
 import com.starrocks.sql.ast.TableSampleClause;
 import com.starrocks.sql.ast.ValuesRelation;
 import com.starrocks.sql.ast.ViewRelation;
+import com.starrocks.sql.ast.expression.ArithmeticExpr;
 import com.starrocks.sql.ast.expression.ArrayExpr;
 import com.starrocks.sql.ast.expression.CaseExpr;
 import com.starrocks.sql.ast.expression.CompoundPredicate;
@@ -540,6 +542,17 @@ public class AST2SQLVisitor extends AST2StringVisitor {
         }
         sb.append("}");
         return sb.toString();
+    }
+
+    @Override
+    public String visitArithmeticExpr(ArithmeticExpr node, Void context) {
+        if (node.isUnaryMinus() && node.getChild(1).getType().isDecimalV3() &&
+                ConnectContext.getSessionVariableOrDefault().isDecimalOverflowReduceScale()) {
+            // Print decimal negation as -(x) so reparsing it in this session preserves unary minus.
+            // With the flag off, keep the existing spelling used for materialized-view rewrite keys.
+            return "-(" + visit(node.getChild(1)) + ")";
+        }
+        return super.visitArithmeticExpr(node, context);
     }
 
     @Override

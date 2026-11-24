@@ -40,6 +40,7 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import java.util.List;
+import java.util.function.Consumer;
 
 /**
  * Execute SQL
@@ -128,9 +129,14 @@ public class SimpleExecutor {
     }
 
     public List<TResultBatch> executeDQL(String sql) {
+        return executeDQL(sql, context -> {});
+    }
+
+    public List<TResultBatch> executeDQL(String sql, Consumer<ConnectContext> configureContext) {
         ConnectContext prev = ConnectContext.get();
         try {
             ConnectContext context = createConnectContext();
+            configureContext.accept(context);
             return executeDQL(sql, context);
         } finally {
             ConnectContext.remove();

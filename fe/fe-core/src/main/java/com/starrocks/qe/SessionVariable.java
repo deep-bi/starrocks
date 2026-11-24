@@ -99,6 +99,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
 import static com.starrocks.qe.SessionVariableConstants.BlacklistBackupRoutingPolicy;
@@ -341,6 +342,7 @@ public class SessionVariable implements Serializable, Writable, Cloneable {
     public static final String EVENT_SCHEDULER = "event_scheduler";
     public static final String STORAGE_ENGINE = "storage_engine";
     public static final String DIV_PRECISION_INCREMENT = "div_precision_increment";
+    public static final String DECIMAL_OVERFLOW_REDUCE_SCALE = "decimal_overflow_reduce_scale";
     public static final String DECIMAL_OVERFLOW_TO_DOUBLE = "decimal_overflow_to_double";
 
     // see comment of `starrocks_max_scan_key_num` and `max_pushdown_conditions_per_column` in BE config
@@ -1782,6 +1784,13 @@ public class SessionVariable implements Serializable, Writable, Cloneable {
     private String storageEngine = "olap";
     @VariableMgr.VarAttr(name = DIV_PRECISION_INCREMENT)
     private int divPrecisionIncrement = 4;
+
+    // Definition analysis can use both an explicit context and the thread-bound caller's context.
+    // Suppress the opt-in mode for this compilation without changing either session's settings.
+    private static final ThreadLocal<Boolean> PLANNING_STORED_MV_DEFINITION = new ThreadLocal<>();
+
+    @VariableMgr.VarAttr(name = DECIMAL_OVERFLOW_REDUCE_SCALE)
+    private boolean decimalOverflowReduceScale = false;
 
     @VariableMgr.VarAttr(name = DECIMAL_OVERFLOW_TO_DOUBLE)
     private boolean decimalOverflowToDouble = false;
@@ -3269,6 +3278,41 @@ public class SessionVariable implements Serializable, Writable, Cloneable {
 
     public boolean isCboDecimalCastStringStrict() {
         return cboDecimalCastStringStrict;
+    }
+
+    public static <T> T withStoredMvDecimalSemantics(Supplier<T> compilation) {
+        if (PLANNING_STORED_MV_DEFINITION.get() != null) {
+            return compilation.get();
+        }
+        PLANNING_STORED_MV_DEFINITION.set(true);
+        try {
+            return compilation.get();
+        } finally {
+            PLANNING_STORED_MV_DEFINITION.remove();
+        }
+    }
+
+    public boolean isDecimalOverflowReduceScale() {
+        return decimalOverflowReduceScale && PLANNING_STORED_MV_DEFINITION.get() == null;
+    }
+
+    public void setDecimalOverflowReduceScale(boolean enabled) {
+        decimalOverflowReduceScale = enabled;
+    }
+
+    /** Distinguishes plans and values cached under the opt-in decimal arithmetic settings. */
+    public byte getDecimalArithmeticCacheKey() {
+        if (!isDecimalOverflowReduceScale()) {
+            return 0;
+        }
+        int key = decimalOverflowToDouble ? 2 : 1;
+        if (SqlModeHelper.check(sqlMode, SqlModeHelper.MODE_ERROR_IF_OVERFLOW)) {
+            key |= 4;
+        }
+        if (SqlModeHelper.check(sqlMode, SqlModeHelper.MODE_ERROR_FOR_DIVISION_BY_ZERO)) {
+            key |= 8;
+        }
+        return (byte) key;
     }
 
     public boolean isDecimalOverflowToDouble() {
@@ -5128,7 +5172,8 @@ public class SessionVariable implements Serializable, Writable, Cloneable {
     }
 
     public boolean isEnableMaterializedViewRewrite() {
-        return enableMaterializedViewRewrite;
+        // Storage-maintained expressions use legacy arithmetic regardless of the writer's session.
+        return enableMaterializedViewRewrite && !isDecimalOverflowReduceScale();
     }
 
     public void setEnableMaterializedViewRewrite(boolean enableMaterializedViewRewrite) {
@@ -5160,7 +5205,7 @@ public class SessionVariable implements Serializable, Writable, Cloneable {
     }
 
     public boolean isEnableSyncMaterializedViewRewrite() {
-        return enableSyncMaterializedViewRewrite;
+        return enableSyncMaterializedViewRewrite && !isDecimalOverflowReduceScale();
     }
 
     public void setEnableSyncMaterializedViewRewrite(boolean enableSyncMaterializedViewRewrite) {
