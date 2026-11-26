@@ -25,6 +25,7 @@ import com.starrocks.thrift.TResourceInfo;
 import com.starrocks.thrift.TTaskType;
 import com.starrocks.thrift.TUploadReq;
 
+import java.util.List;
 import java.util.Map;
 
 public class UploadTask extends AgentTask {
@@ -35,6 +36,7 @@ public class UploadTask extends AgentTask {
     private FsBroker broker;
     private Map<String, String> brokerProperties;
     private THdfsProperties hdfsProperties;
+    private Map<String, List<String>> reusableFiles = Map.of();
 
     public UploadTask(TResourceInfo resourceInfo, long backendId, long signature, long jobId, Long dbId,
                       Map<String, String> srcToDestPath, FsBroker broker, Map<String, String> brokerProperties) {
@@ -72,6 +74,10 @@ public class UploadTask extends AgentTask {
         return brokerProperties;
     }
 
+    public void setReusableFiles(Map<String, List<String>> reusableFiles) {
+        this.reusableFiles = reusableFiles;
+    }
+
     public TUploadReq toThrift() {
         TNetworkAddress address;
         if (broker != null) {
@@ -87,6 +93,9 @@ public class UploadTask extends AgentTask {
             request.setUse_broker(false);
             request.setHdfs_write_buffer_size_kb(Config.hdfs_write_buffer_size_kb);
             request.setHdfs_properties(hdfsProperties);
+        }
+        if (!reusableFiles.isEmpty()) {
+            request.setReusable_files(reusableFiles);
         }
         return request;
     }

@@ -25,6 +25,7 @@ import com.starrocks.thrift.TNetworkAddress;
 import com.starrocks.thrift.TResourceInfo;
 import com.starrocks.thrift.TTaskType;
 
+import java.util.List;
 import java.util.Map;
 
 public class DownloadTask extends AgentTask {
@@ -34,6 +35,7 @@ public class DownloadTask extends AgentTask {
     private FsBroker brokerAddr;
     private Map<String, String> brokerProperties;
     private THdfsProperties hdfsProperties;
+    private Map<String, List<String>> sourceFiles = Map.of();
 
     public DownloadTask(TResourceInfo resourceInfo, long backendId, long signature, long jobId, long dbId,
                         Map<String, String> srcToDestPath, FsBroker brokerAddr, Map<String, String> brokerProperties) {
@@ -71,6 +73,10 @@ public class DownloadTask extends AgentTask {
         return brokerProperties;
     }
 
+    public void setSourceFiles(Map<String, List<String>> sourceFiles) {
+        this.sourceFiles = sourceFiles;
+    }
+
     public TDownloadReq toThrift() {
         TNetworkAddress address;
         if (brokerAddr != null) {
@@ -86,6 +92,9 @@ public class DownloadTask extends AgentTask {
             req.setUse_broker(false);
             req.setHdfs_read_buffer_size_kb(Config.hdfs_read_buffer_size_kb);
             req.setHdfs_properties(hdfsProperties);
+        }
+        if (!sourceFiles.isEmpty()) {
+            req.setSource_files(sourceFiles);
         }
         return req;
     }

@@ -148,6 +148,16 @@ Status SnapshotLoader::upload(const std::map<std::string, std::string>& src_to_d
             VLOG(2) << "get remote file: " << tmp.first << ", checksum: " << tmp.second.md5;
         }
 
+        // Incremental backup: files (<name>.<md5>) that the base snapshot's holders already have. They are still
+        // reported in tablet_files, so the FE lists them in the tablet's manifest with their holder.
+        std::set<std::string> reusable_files;
+        if (upload.__isset.reusable_files) {
+            auto reusable = upload.reusable_files.find(dest_path);
+            if (reusable != upload.reusable_files.end()) {
+                reusable_files.insert(reusable->second.begin(), reusable->second.end());
+            }
+        }
+
         // 2.2 list local files
         std::vector<std::string> local_files;
         std::vector<std::string> local_files_with_checksum;
@@ -161,6 +171,10 @@ Status SnapshotLoader::upload(const std::map<std::string, std::string>& src_to_d
             ASSIGN_OR_RETURN(auto md5sum, fs::md5sum(src_path + "/" + local_file));
             VLOG(2) << "get file checksum: " << local_file << ": " << md5sum;
             local_files_with_checksum.push_back(local_file + "." + md5sum);
+            if (reusable_files.count(local_files_with_checksum.back()) > 0) {
+                VLOG(2) << "file is held by the base snapshot, no need to upload: " << local_file;
+                continue;
+            }
 
             // check if this local file need upload
             bool need_upload = false;
@@ -296,7 +310,14 @@ Status SnapshotLoader::download(const std::map<std::string, std::string>& src_to
 
         // 2. get remote files
         std::map<std::string, FileStat> remote_files;
-        if (!download.__isset.use_broker || download.use_broker) {
+        // An incremental snapshot's tablet is built from exactly the files in its manifest, which can be in several
+        // holder snapshots' directories. remote_path, its own legacy directory, is then empty.
+        std::map<std::string, std::string> manifest_dirs;
+        auto manifest = download.source_files.find(local_path);
+        if (download.__isset.source_files && manifest != download.source_files.end()) {
+            RETURN_IF_ERROR(
+                    _get_manifest_files(client.get(), fs, download, manifest->second, &remote_files, &manifest_dirs));
+        } else if (!download.__isset.use_broker || download.use_broker) {
             RETURN_IF_ERROR(_get_existing_files_from_remote(*client, remote_path, download.broker_prop, &remote_files));
         } else {
             RETURN_IF_ERROR(_get_existing_files_from_remote_without_broker(fs, remote_path, &remote_files));
@@ -355,7 +376,9 @@ Status SnapshotLoader::download(const std::map<std::string, std::string>& src_to
             }
 
             // begin to download
-            std::string full_remote_file = remote_path + "/" + remote_file + "." + file_stat.md5;
+            auto manifest_dir = manifest_dirs.find(remote_file);
+            const std::string& remote_dir = manifest_dir == manifest_dirs.end() ? remote_path : manifest_dir->second;
+            std::string full_remote_file = remote_dir + "/" + remote_file + "." + file_stat.md5;
             std::string local_file_name;
             // we need to replace the tablet_id in remote file name with local tablet id
             RETURN_IF_ERROR(_replace_tablet_id(remote_file, local_tablet_id, &local_file_name));
@@ -379,7 +402,9 @@ Status SnapshotLoader::download(const std::map<std::string, std::string>& src_to
             // this file will be added to local_files if it be downloaded successfully.
             // The Restore process of Primary key tablet may get a empty local_files at the begining.
             // Because we just generate the download path but not any other file.
-            if (!local_files.empty()) {
+            // find is end() for a file that isn't local yet, and erasing end() would drop the last local file, which
+            // then escapes the deletion of files that aren't remote.
+            if (find != local_files.end()) {
                 local_files.erase(find);
             }
 
@@ -810,7 +835,8 @@ Status SnapshotLoader::_check_local_snapshot_paths(const std::map<std::string, s
 
 Status SnapshotLoader::_get_existing_files_from_remote(BrokerServiceConnection& client, const std::string& remote_path,
                                                        const std::map<std::string, std::string>& broker_prop,
-                                                       std::map<std::string, FileStat>* files) {
+                                                       std::map<std::string, FileStat>* files,
+                                                       bool key_by_name_with_md5) {
     try {
         // get existing files from remote path
         TBrokerListResponse list_rep;
@@ -854,7 +880,7 @@ Status SnapshotLoader::_get_existing_files_from_remote(BrokerServiceConnection& 
             }
 
             FileStat stat = {std::string(file_name, 0, pos), std::string(file_name, pos + 1), file.size};
-            files->emplace(std::string(file_name, 0, pos), stat);
+            files->emplace(key_by_name_with_md5 ? file_name : stat.name, stat);
             VLOG(2) << "split remote file: " << std::string(file_name, 0, pos)
                     << ", checksum: " << std::string(file_name, pos + 1);
         }
@@ -874,7 +900,8 @@ Status SnapshotLoader::_get_existing_files_from_remote(BrokerServiceConnection& 
 
 Status SnapshotLoader::_get_existing_files_from_remote_without_broker(const std::unique_ptr<FileSystem>& fs,
                                                                       const std::string& remote_path,
-                                                                      std::map<std::string, FileStat>* files) {
+                                                                      std::map<std::string, FileStat>* files,
+                                                                      bool key_by_name_with_md5) {
     int64_t file_num = 0;
     Status st;
     st.update(fs->iterate_dir2(remote_path, [&](DirEntry entry) {
@@ -898,7 +925,7 @@ Status SnapshotLoader::_get_existing_files_from_remote_without_broker(const std:
         std::string name_part(entry.name.data(), entry.name.data() + pos);
         std::string md5_part(entry.name.data() + pos + 1, entry.name.data() + entry.name.size());
         FileStat stat = {.name = name_part, .md5 = md5_part, .size = entry.size.value()};
-        files->emplace(name_part, stat);
+        files->emplace(key_by_name_with_md5 ? std::string(entry.name) : name_part, stat);
         VLOG(2) << "split remote file: " << name_part << ", checksum: " << md5_part;
         return true;
     }));
@@ -910,6 +937,41 @@ Status SnapshotLoader::_get_existing_files_from_remote_without_broker(const std:
 
     VLOG(2) << "finished to split files. total file num: " << file_num << " valid file num: " << files->size();
 
+    return Status::OK();
+}
+
+Status SnapshotLoader::_get_manifest_files(BrokerServiceConnection* client, const std::unique_ptr<FileSystem>& fs,
+                                           const TDownloadReq& download, const std::vector<std::string>& manifest,
+                                           std::map<std::string, FileStat>* files,
+                                           std::map<std::string, std::string>* dirs) {
+    std::map<std::string, std::vector<std::string>> files_by_dir;
+    for (const auto& path : manifest) {
+        size_t pos = path.find_last_of('/');
+        if (pos == std::string::npos || pos == path.size() - 1) {
+            return Status::InternalError("invalid file path in the snapshot's manifest: " + path);
+        }
+        files_by_dir[path.substr(0, pos)].push_back(path.substr(pos + 1));
+    }
+
+    for (const auto& [dir, names] : files_by_dir) {
+        std::map<std::string, FileStat> listed;
+        if (!download.__isset.use_broker || download.use_broker) {
+            RETURN_IF_ERROR(_get_existing_files_from_remote(*client, dir, download.broker_prop, &listed, true));
+        } else {
+            RETURN_IF_ERROR(_get_existing_files_from_remote_without_broker(fs, dir, &listed, true));
+        }
+        for (const auto& name : names) {
+            auto found = listed.find(name);
+            if (found == listed.end()) {
+                std::string msg = "file " + name + " of the snapshot's manifest is missing from " + dir;
+                LOG(WARNING) << msg;
+                // NOT_FOUND makes the FE cancel the restore instead of retrying it: the file won't come back.
+                return Status::NotFound(msg);
+            }
+            files->emplace(found->second.name, found->second);
+            dirs->emplace(found->second.name, dir);
+        }
+    }
     return Status::OK();
 }
 

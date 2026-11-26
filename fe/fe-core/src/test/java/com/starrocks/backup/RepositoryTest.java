@@ -316,4 +316,38 @@ public class RepositoryTest {
             Assertions.fail();
         }
     }
+
+    // TC-077
+    @Test
+    public void testNewestInfoFileOfASnapshotIsRead() {
+        String older = "__info_2018-04-18-20-11-00.12345678123456781234567812345678";
+        String newer = "__info_2019-01-01-00-00-00.12345678123456781234567812345678";
+        String unparsable = "__info_2099-01-01-00-00-00.notAChecksum";
+        List<String> readTimestamps = Lists.newArrayList();
+        new MockUp<Repository>() {
+            @Mock
+            public Status getSnapshotInfoFile(String label, String backupTimestamp, List<BackupJobInfo> infos) {
+                readTimestamps.add(backupTimestamp);
+                return Status.OK;
+            }
+        };
+
+        repo = new Repository(10000, "repo", false, location, storage);
+        for (List<String> listing : List.of(List.of(older, newer, unparsable), List.of(unparsable, newer, older))) {
+            new Expectations() {
+                {
+                    storage.list(anyString, (List<RemoteFile>) any);
+                    result = new Delegate() {
+                        public Status list(String remotePath, List<RemoteFile> result) {
+                            listing.forEach(file -> result.add(new RemoteFile(file, true, 100)));
+                            return Status.OK;
+                        }
+                    };
+                }
+            };
+            Assertions.assertTrue(repo.getSnapshotInfoFile("s1", Lists.newArrayList()).ok());
+        }
+
+        Assertions.assertEquals(List.of("2019-01-01-00-00-00", "2019-01-01-00-00-00"), readTimestamps);
+    }
 }
