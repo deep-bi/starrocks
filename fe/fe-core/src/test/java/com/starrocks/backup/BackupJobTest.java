@@ -54,6 +54,7 @@ import com.starrocks.common.util.concurrent.lock.LockManager;
 import com.starrocks.metric.MetricRepo;
 import com.starrocks.persist.EditLog;
 import com.starrocks.persist.TableRefPersist;
+import com.starrocks.persist.gson.GsonUtils;
 import com.starrocks.server.GlobalStateMgr;
 import com.starrocks.server.LocalMetastore;
 import com.starrocks.server.NodeMgr;
@@ -859,5 +860,96 @@ public class BackupJobTest {
             e.printStackTrace();
             Assertions.fail("Failed to test chooseReplica: " + e.getMessage());
         }
+    }
+
+    private BackupJob replayFromEditLog(BackupJob source) {
+        String json = GsonUtils.GSON.toJson(source, AbstractJob.class);
+        BackupJob replayed = (BackupJob) GsonUtils.GSON.fromJson(json, AbstractJob.class);
+        replayed.setGlobalStateMgr(globalStateMgr);
+        return replayed;
+    }
+
+    private BackupJob replayedPendingJob() {
+        AgentTaskQueue.clearAllTasks();
+        return replayFromEditLog(job);
+    }
+
+    private SnapshotTask onlySnapshotTask() {
+        AgentTask task = AgentTaskQueue.getTask(backendId, TTaskType.MAKE_SNAPSHOT, tabletId);
+        Assertions.assertTrue(task instanceof SnapshotTask);
+        return (SnapshotTask) task;
+    }
+
+    // TC-111
+    @Test
+    public void testReplayedPendingJobLeavesPending() {
+        BackupJob replayed = replayedPendingJob();
+        Assertions.assertEquals(BackupJobState.PENDING, replayed.getState());
+
+        replayed.run();
+
+        Assertions.assertTrue(replayed.getStatus().ok());
+        Assertions.assertEquals(BackupJobState.SNAPSHOTING, replayed.getState());
+        Assertions.assertEquals(1, AgentTaskQueue.getTaskNum());
+        Assertions.assertEquals(replayed.getJobId(), onlySnapshotTask().getJobId());
+    }
+
+    // TC-112
+    @Test
+    public void testReplayedPendingJobReachesUploadSnapshot() {
+        BackupJob replayed = replayedPendingJob();
+        replayed.run();
+        Assertions.assertEquals(BackupJobState.SNAPSHOTING, replayed.getState());
+
+        SnapshotTask snapshotTask = onlySnapshotTask();
+        TFinishTaskRequest request = new TFinishTaskRequest(new TBackend("", 0, 1), TTaskType.MAKE_SNAPSHOT,
+                snapshotTask.getSignature(), new TStatus(TStatusCode.OK));
+        request.setSnapshot_files(Lists.newArrayList("1.dat", "1.idx", "1.hdr"));
+        request.setSnapshot_path("/path/to/snapshot");
+        Assertions.assertTrue(replayed.finishTabletSnapshotTask(snapshotTask, request));
+        replayed.run();
+
+        Assertions.assertTrue(replayed.getStatus().ok());
+        Assertions.assertEquals(BackupJobState.UPLOAD_SNAPSHOT, replayed.getState());
+        Map<Long, SnapshotInfo> snapshotInfos = Deencapsulation.getField(replayed, "snapshotInfos");
+        Assertions.assertEquals(1, snapshotInfos.size());
+        Assertions.assertTrue(snapshotInfos.containsKey(tabletId));
+    }
+
+    // TC-114
+    @Test
+    public void testReplayedPendingJobCancelledWhenTableDropped() {
+        BackupJob replayed = replayedPendingJob();
+        new Expectations(localMetastore) {
+            {
+                localMetastore.getTable("testDb", "testTable");
+                minTimes = 0;
+                result = null;
+            }
+        };
+
+        replayed.run();
+
+        Assertions.assertEquals(Status.ErrCode.NOT_FOUND, replayed.getStatus().getErrCode());
+        Assertions.assertEquals(BackupJobState.CANCELLED, replayed.getState());
+        Assertions.assertEquals(0, AgentTaskQueue.getTaskNum());
+    }
+
+    // TC-115
+    @Test
+    public void testReplayedPendingJobSendsSnapshotTasksOnce() {
+        BackupJob replayed = replayedPendingJob();
+        long counterBefore = MetricRepo.COUNTER_UNFINISHED_BACKUP_JOB.getValue();
+
+        replayed.run();
+        long jobId = replayed.getJobId();
+        SnapshotTask firstTask = onlySnapshotTask();
+        replayed.run();
+
+        Assertions.assertEquals(BackupJobState.SNAPSHOTING, replayed.getState());
+        Assertions.assertEquals(jobId, replayed.getJobId());
+        Assertions.assertEquals(1, AgentTaskQueue.getTaskNum());
+        Assertions.assertSame(firstTask, onlySnapshotTask());
+        Assertions.assertEquals(counterBefore + 1, MetricRepo.COUNTER_UNFINISHED_BACKUP_JOB.getValue());
     }
 }
