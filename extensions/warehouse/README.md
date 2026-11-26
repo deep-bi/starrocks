@@ -144,14 +144,40 @@ for nodes whose warehouse it does not know. It reports on that FE in 2 places:
 
 A lost warehouse that had no nodes is not detected.
 
+### Recover lost warehouse metadata
+
+Once no FE knows a warehouse, refer to the ERROR messages from the logs. The logs list the lost warehouse nodes
+(`SHOW COMPUTE NODES` will likely fail with error 5901 on an FE that does not know a node's warehouse).
+
+To recover:
+
+1. Check that every FE has the extension jar in `fe/lib`.
+2. Run `SHOW WAREHOUSES` on every FE. An FE that still lists a lost warehouse id holds its definition only in memory,
+   so do not restart it.
+3. Step 4 must run on a leader that lists the warehouse, because followers forward `ALTER WAREHOUSE` to the leader.
+   If only a follower lists it, get that follower elected leader without losing quorum. If only an observer lists it,
+   or the follower cannot be elected safely, keep that FE running and get help.
+4. On that leader, write each lost warehouse to the edit log again (see Stored metadata):
+
+   ```sql
+   ALTER WAREHOUSE WAREHOUSE_NAME SET ('replica_number' = 'REPLICA_NUMBER');
+   ```
+
+   Take `WAREHOUSE_NAME` and `REPLICA_NUMBER` from the leader's `SHOW WAREHOUSES` row for that id; the `Property`
+   column shows `replica_number=N`.
+5. When every FE lists the warehouses again, run `ALTER SYSTEM CREATE IMAGE`.
+
+If no FE lists the warehouse, its definition is gone, or the warehouse was dropped while the node was being added.
+Drop each node the ERROR line lists with `ALTER SYSTEM DROP COMPUTE NODE 'HOST:HEARTBEAT_PORT'`; the form with
+`FROM WAREHOUSE` fails here. Then create the warehouse again if you still need it, and add the nodes back.
+
 ### Limits
 
 - Shared-data mode only.
 - Once warehouses exist, every FE  must have the jar. If the extension jar would be missing, FE skips the
   warehouse entries in the image and the journal, and shows only `default_warehouse`. If the jar is put again before the
   next checkpoint, FE will restore them. However, if an FE without the jar writes a checkpoint, the warehouse
-  information in the new image will be lost. In such a case, drop the affected nodes with
-  `ALTER SYSTEM DROP COMPUTE NODE`, create the warehouses again and add the nodes back.
+  information in the new image will be lost. See Recover lost warehouse metadata.
 - `USAGE` on a warehouse is not enforced for a Stream Load with Merge Commit (the `enable_merge_commit` header). Such
   a load needs only `INSERT` on the table.
 - Full vacuum selects `default_warehouse` directly. Keep compute nodes there for full vacuum and for fallback.

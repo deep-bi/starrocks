@@ -65,12 +65,16 @@ section "fe2 restarts from that image"
 restart 2
 expect "fe2 lost the warehouses" "default_warehouse() " "$(names 2)"
 wait_metric 2 2 100 && ok "fe2 gauge shows 2 orphaned nodes" || bad "fe2 gauge" "$(metric 2)"
-ALARM=$(lines_since_start 2 'belong to a warehouse this FE does not know' | tail -1)
+ALARM=$(lines_since_start 2 'Warehouse metadata is missing on this FE' | tail -1)
 expect "fe2 logs the alarm at ERROR level" " ERROR " "$ALARM"
 expect "the alarm names both nodes" "10.86.0.51:9050" "$ALARM"
 expect "the alarm names both nodes (second)" "10.86.0.52:9050" "$ALARM"
-expect "the alarm says what to check" "Check that every FE has the jar" "$ALARM"
-echo "      $(echo "$ALARM" | sed -E 's/^[0-9-]+ [0-9:.+]+ //' | cut -c1-230)"
+expect "the alarm counts both lost warehouses" "2 node(s) belong to 2 unknown warehouse(s)" "$ALARM"
+for w in research etl; do
+  id=$(sql 1 "SHOW WAREHOUSES" | awk -F'\t' -v w="$w" '$2==w {print $1}')
+  expect "the alarm gives the id of $w, as fe1 still lists it" "Warehouse id $id, worker group " "$ALARM"
+done
+echo "      $(echo "$ALARM" | sed -E 's/^[0-9-]+ [0-9:.+]+ //' | cut -c1-400)"
 
 section "repair from the FE that still has them"
 cp "$EXTJAR" "$H/fe3/lib/"; restart 3

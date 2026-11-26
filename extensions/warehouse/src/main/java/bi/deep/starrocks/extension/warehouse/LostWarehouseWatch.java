@@ -37,7 +37,7 @@ import java.util.Set;
  *
  * <p>A warehouse that had no nodes leaves no trace, so its loss is not detected.
  *
- * <p>The repair named in the log line works because {@code ALTER WAREHOUSE} writes the whole warehouse to the
+ * <p>The repair in the README works because {@code ALTER WAREHOUSE} writes the whole warehouse to the
  * edit log even when nothing changes, and replay adds a warehouse an FE does not have.
  */
 final class LostWarehouseWatch {
@@ -113,18 +113,9 @@ final class LostWarehouseWatch {
             return "";
         }
         lastReportMs = now;
-        String message = orphans.size() + " node(s) belong to a warehouse this FE does not know: " + finding
-                + ". Warehouse metadata is missing. The usual cause is an FE without the warehouse extension jar"
-                + " that wrote a checkpoint image; a node added while its warehouse was being dropped looks the"
-                + " same. Check that every FE has the jar. For each missing warehouse ID, check SHOW WAREHOUSES"
-                + " on each FE. If an FE still lists that ID, do not restart it. A follower forwards ALTER"
-                + " WAREHOUSE to the leader. If only a follower has the definition, keep quorum and elect that"
-                + " running follower. Confirm with SHOW FRONTENDS that it is now leader. If only an observer has"
-                + " the definition or the follower cannot be safely elected, keep it running and seek help"
-                + " recovering its metadata. On a leader that lists the original ID, run ALTER WAREHOUSE <name>"
-                + " SET ('replica_number' = '<its current value>'). Verify that every FE lists the recovered IDs"
-                + " before running ALTER SYSTEM CREATE IMAGE. If no FE retains a warehouse's definition, drop its"
-                + " orphaned nodes with ALTER SYSTEM DROP COMPUTE NODE and create that warehouse again";
+        long warehouses = orphans.stream().mapToLong(ComputeNode::getWarehouseId).distinct().count();
+        String message = "Warehouse metadata is missing on this FE: " + orphans.size() + " node(s) belong to "
+                + warehouses + " unknown warehouse(s). " + finding + ".";
         LOG.error(message);
         return message;
     }
@@ -161,11 +152,29 @@ final class LostWarehouseWatch {
         return orphans;
     }
 
+    /**
+     * @return the nodes grouped by the warehouse and worker group they point at, for example
+     *         {@code Warehouse id 10001, worker group 3: node 20001 at 10.0.0.1:9050, node 20002 at 10.0.0.2:9050}
+     */
     private static String describe(List<ComputeNode> orphans) {
-        List<String> parts = new ArrayList<>(orphans.size());
-        for (ComputeNode node : orphans) {
-            parts.add(node.getHost() + ":" + node.getHeartbeatPort() + " (warehouse id " + node.getWarehouseId() + ")");
+        List<ComputeNode> ordered = new ArrayList<>(orphans);
+        ordered.sort(Comparator.comparingLong(ComputeNode::getWarehouseId)
+                .thenComparingLong(ComputeNode::getWorkerGroupId)
+                .thenComparingLong(ComputeNode::getId));
+        StringBuilder text = new StringBuilder();
+        ComputeNode previous = null;
+        for (ComputeNode node : ordered) {
+            if (previous != null && previous.getWarehouseId() == node.getWarehouseId()
+                    && previous.getWorkerGroupId() == node.getWorkerGroupId()) {
+                text.append(", ");
+            } else {
+                text.append(previous == null ? "" : ". ").append("Warehouse id ").append(node.getWarehouseId())
+                        .append(", worker group ").append(node.getWorkerGroupId()).append(": ");
+            }
+            text.append("node ").append(node.getId()).append(" at ").append(node.getHost()).append(':')
+                    .append(node.getHeartbeatPort());
+            previous = node;
         }
-        return String.join(", ", parts);
+        return text.toString();
     }
 }

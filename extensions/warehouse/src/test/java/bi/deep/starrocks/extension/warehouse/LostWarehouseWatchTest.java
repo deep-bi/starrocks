@@ -47,6 +47,12 @@ public class LostWarehouseWatchTest {
         return node;
     }
 
+    private ComputeNode node(long id, String host, long warehouseId, long workerGroupId) {
+        ComputeNode node = node(id, host, warehouseId);
+        node.setWorkerGroupId(workerGroupId);
+        return node;
+    }
+
     private static List<Long> ids(List<ComputeNode> nodes) {
         return nodes.stream().map(ComputeNode::getId).collect(Collectors.toList());
     }
@@ -119,8 +125,8 @@ public class LostWarehouseWatchTest {
 
         String report = watch.check();
 
-        Assertions.assertTrue(report.startsWith("1 node(s) belong to a warehouse this FE does not know: "
-                + "cn-orphan:9050 (warehouse id 10003)."), report);
+        Assertions.assertTrue(report.startsWith("Warehouse metadata is missing on this FE: 1 node(s) belong to 1 unknown"
+                + " warehouse(s). Warehouse id 10003, worker group 0: node 3 at cn-orphan:9050."), report);
         Assertions.assertEquals(1L, fe.gauges.get(LostWarehouseWatch.GAUGE).getAsLong());
     }
 
@@ -139,23 +145,41 @@ public class LostWarehouseWatchTest {
         Assertions.assertEquals(1, fe.gauges.size(), "registered once");
     }
 
+    /**
+     * The log line carries what the recovery needs: the warehouse ids, their worker groups and the addresses of
+     * the nodes. The steps themselves are in the README.
+     */
     @Test
-    public void lostMetadataIsReportedWithTheNodesAndWhatToDo() {
-        node(2L, "10.0.0.2", 10002L);
-        node(1L, "10.0.0.1", 10001L);
+    public void lostMetadataIsReportedWithTheNodesAndWhereTheStepsAre() {
+        node(2L, "10.0.0.2", 10002L, 502L);
+        node(1L, "10.0.0.1", 10001L, 501L);
         node(3L, "10.0.0.3", 0L);
 
         String report = watch.check();
 
-        Assertions.assertTrue(report.startsWith("2 node(s) belong to a warehouse this FE does not know: "
-                + "10.0.0.1:9050 (warehouse id 10001), 10.0.0.2:9050 (warehouse id 10002)."), report);
-        Assertions.assertTrue(report.contains("FE without the warehouse extension jar"), report);
-        Assertions.assertTrue(report.contains("do not restart it"), report);
-        Assertions.assertTrue(report.contains("ALTER WAREHOUSE <name> SET ('replica_number' = '<its current value>')"), report);
-        Assertions.assertTrue(report.contains("ALTER SYSTEM CREATE IMAGE"), report);
-        Assertions.assertTrue(report.contains("ALTER SYSTEM DROP COMPUTE NODE"), report);
-        Assertions.assertFalse(report.contains("10.0.0.3"), report);
+        Assertions.assertEquals("Warehouse metadata is missing on this FE: 2 node(s) belong to 2 unknown warehouse(s)."
+                + " Warehouse id 10001, worker group 501: node 1 at 10.0.0.1:9050."
+                + " Warehouse id 10002, worker group 502: node 2 at 10.0.0.2:9050.", report);
         Assertions.assertEquals(2L, watch.orphanCount());
+    }
+
+    /**
+     * Nodes of one warehouse are listed together, in node id order. Nodes of one warehouse that point at
+     * different worker groups are listed per worker group.
+     */
+    @Test
+    public void nodesAreGroupedByWarehouseAndWorkerGroup() {
+        node(4L, "10.0.0.4", 10001L, 501L);
+        node(3L, "10.0.0.3", 10002L, 503L);
+        node(2L, "10.0.0.2", 10001L, 502L);
+        node(1L, "10.0.0.1", 10001L, 501L);
+
+        String report = watch.check();
+
+        Assertions.assertTrue(report.startsWith("Warehouse metadata is missing on this FE: 4 node(s) belong to 2 unknown"
+                + " warehouse(s). Warehouse id 10001, worker group 501: node 1 at 10.0.0.1:9050, node 4 at 10.0.0.4:9050."
+                + " Warehouse id 10001, worker group 502: node 2 at 10.0.0.2:9050."
+                + " Warehouse id 10002, worker group 503: node 3 at 10.0.0.3:9050."), report);
     }
 
     /**
@@ -178,7 +202,8 @@ public class LostWarehouseWatchTest {
 
         node(2L, "10.0.0.2", 10001L);
         String changed = watch.check();
-        Assertions.assertTrue(changed.startsWith("2 node(s)"), "reported at once when another node is affected: " + changed);
+        Assertions.assertTrue(changed.contains(": 2 node(s) belong to 1 unknown warehouse(s)."),
+                "reported at once when another node is affected: " + changed);
     }
 
     @Test
@@ -236,7 +261,7 @@ public class LostWarehouseWatchTest {
         Assertions.assertSame(round, fe.periodicTasks.get(LostWarehouseWatch.NAME),
                 "still the same watch after the second manager");
 
-        // Dropping the stray node, as the log line advises, clears the alarm.
+        // Dropping the stray node, the last step of the recovery, clears the alarm.
         fe.nodes.removeIf(node -> node.getId() == 20001L);
         round.run();
         Assertions.assertEquals(0L, fe.gauges.get(LostWarehouseWatch.GAUGE).getAsLong());
