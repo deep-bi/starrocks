@@ -205,7 +205,9 @@ for s in $suites; do
   echo
   echo "##### suite $s"
   started=$SECONDS
-  SUITE_DIR=$dir bash "$IT_DIR/suites/$s.sh" 2>&1 | tee "$dir/suite.log"
+  # The suites take no input. Given the terminal, a "docker exec -i" under timeout, which runs in a process group
+  # of its own, is stopped by the terminal as soon as it reads, and the suite hangs.
+  SUITE_DIR=$dir bash "$IT_DIR/suites/$s.sh" 2>&1 </dev/null | tee "$dir/suite.log"
   rc=${PIPESTATUS[0]}
   took=$((SECONDS - started))
   result=$(grep '^RESULT:' "$dir/suite.log" | tail -1 | sed 's/^RESULT: //')

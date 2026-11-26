@@ -88,6 +88,8 @@ class FakeFeEnvironment implements FeEnvironment {
     UUID statement = UUID.randomUUID();
     /** True once the statement has its result or its error. */
     boolean statementFinished;
+    /** True while the session runs ALTER MATERIALIZED VIEW ... SET (...). */
+    boolean settingMaterializedViewProperties;
 
     /** The session starts its next statement. */
     void nextStatement() {
@@ -267,6 +269,11 @@ class FakeFeEnvironment implements FeEnvironment {
     @Override
     public boolean isMaterializedViewRefresh() {
         return false;
+    }
+
+    @Override
+    public boolean isSettingMaterializedViewProperties() {
+        return settingMaterializedViewProperties;
     }
 
     @Override

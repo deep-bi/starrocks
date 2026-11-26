@@ -33,7 +33,7 @@ Each check prints one `PASS` or `FAIL` line. The run ends with a summary per sui
 | `lost-metadata` | 3 FEs on this host | 31 | 4 minutes |
 | `drop-guards` | 1 FE on this host | 30 | half a minute |
 | `replica-drift` | 3 FEs on this host | 24 | 4 minutes |
-| `docker` | Official image: 1 FE, 2 compute nodes, MinIO | 92 | 5 minutes |
+| `docker` | Official image: 1 FE, 2 compute nodes, MinIO | 97 | 5 minutes |
 
 The times are from one run on one machine, with both Docker images already pulled.
 
@@ -45,7 +45,7 @@ The times are from one run on one machine, with both Docker images already pulle
 
 `replica-drift` leaves StarMgr with a replica number the FE never stored, as an FE that dies in the middle of `ALTER WAREHOUSE` does. It then checks that the leader corrects StarMgr, also after a leader change, and that followers change nothing. `lib/StarMgr.java` makes that state by talking to StarMgr directly.
 
-`docker` is the only suite with running compute nodes. It checks where queries, `INSERT` and Stream Load run, what happens when a node goes down, and the `USAGE` gate. The gate checks include a `REVOKE` that arrives on an open connection, and one that arrives while a statement runs. They also check task runs after their creator loses `USAGE`: materialized views go on refreshing, as on a stock FE, and the runs of a scheduled task are refused. It also compiles the extension and runs its unit tests inside the image, against the image's own jars.
+`docker` is the only suite with running compute nodes. It checks where queries, `INSERT` and Stream Load run, what happens when a node goes down, and the `USAGE` gate. The gate checks include a `REVOKE` that arrives on an open connection, and one that arrives while a statement runs. They also check task runs after their creator loses `USAGE`: materialized views go on refreshing, as on a stock FE, and the runs of a scheduled task are refused. Moving a view to another warehouse with `ALTER MATERIALIZED VIEW` needs `USAGE` on it, as `CREATE` does. It also compiles the extension and runs its unit tests inside the image, against the image's own jars.
 
 ## Requirements
 

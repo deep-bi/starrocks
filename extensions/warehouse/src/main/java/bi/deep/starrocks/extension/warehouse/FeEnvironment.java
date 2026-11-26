@@ -141,13 +141,21 @@ interface FeEnvironment {
      */
     boolean isMaterializedViewRefresh();
 
+    /**
+     * ALTER MATERIALIZED VIEW ... SET (...) looks up the warehouse its {@code warehouse} property names, on the
+     * thread of the session that runs it. Call it only when {@link #hasUserSession()} is true.
+     *
+     * @return true when the session on the calling thread runs ALTER MATERIALIZED VIEW ... SET (...)
+     */
+    boolean isSettingMaterializedViewProperties();
+
     /** Identity of the bound session. Call only after {@link #hasUserSession()} returns true. */
     Object currentSession();
 
     /**
-     * A stock FE checks USAGE where a statement names a warehouse, and never for the refresh of a materialized
-     * view. The gate leaves refreshes alone too, so a REVOKE from the view's creator does not stop them. Every
-     * other session with a user is checked, a run of a task included.
+     * A stock FE never checks USAGE for the refresh of a materialized view. The gate leaves refreshes alone too,
+     * so a REVOKE from the view's creator does not stop them. Every other session with a user is checked, a run
+     * of a task included.
      *
      * @return true when USAGE on the warehouse must be checked for the work on the calling thread
      */

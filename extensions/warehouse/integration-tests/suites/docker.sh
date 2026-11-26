@@ -21,6 +21,7 @@
 #     the switch that turns the gate off
 #   - task runs: refreshes of materialized views go on after their creator loses USAGE, as on a stock FE, and
 #     runs of a scheduled task are refused
+#   - ALTER MATERIALIZED VIEW that moves a view to another warehouse needs USAGE on it, as CREATE does
 #   - alter, drop, re-create
 #   - build and unit tests inside the image, against the image's own jars
 # Evidence for routing is the research node's own counters: nothing but work on research ever reaches it.
@@ -58,6 +59,10 @@ refreshed() {
 # last_refresh <view>: state and error message of the last refresh of poc.<view>
 last_refresh() {
   val "SELECT concat(LAST_REFRESH_STATE, ' ', ifnull(LAST_REFRESH_ERROR_MESSAGE, '')) FROM information_schema.materialized_views WHERE TABLE_SCHEMA = 'poc' AND TABLE_NAME = '$1'"
+}
+# mv_warehouse <view>: the warehouse poc.<view> refreshes on
+mv_warehouse() {
+  val "SELECT WAREHOUSE FROM information_schema.materialized_views WHERE TABLE_SCHEMA = 'poc' AND TABLE_NAME = '$1'"
 }
 # tick_run <FE time>: waits up to 60 s for a run of task tick that was created after that time and has finished.
 # Prints its state and error message.
@@ -243,6 +248,19 @@ refreshed mv_manual && ok "mv_manual is up to date" || bad "mv_manual is out of 
 grew "that refresh ran on the research node" "$L" "$(metric 22 load)" any
 # No task has run in the suite yet, so an access-denied line of a task-run thread could only come from a refresh.
 expect "no refresh logged an access-denied error" "0" "$(d exec whext-fe bash -c 'grep "Access denied" /data/deploy/starrocks/fe/log/fe.log | grep -c "^[0-9-]* [0-9:.Z]* [A-Z]* (starrocks-taskrun-pool-"')"
+# ALTER MATERIALIZED VIEW ... SET ('warehouse' = ...) names a warehouse, as CREATE does. The stock FE checks USAGE
+# for CREATE only. The extension checks it for ALTER too, for the user who runs the ALTER. creator now holds ALTER
+# on mv_manual and no USAGE on research. default_warehouse needs no USAGE.
+q -e "GRANT ALTER ON MATERIALIZED VIEW poc.mv_manual TO USER creator;" >/dev/null
+refute "creator, without USAGE on research, moves mv_manual to default_warehouse" "ERROR" \
+  "$(as creator "ALTER MATERIALIZED VIEW poc.mv_manual SET ('warehouse' = 'default_warehouse');")"
+expect "moving it back to research is refused for USAGE on research" "the USAGE privilege(s) on WAREHOUSE research" \
+  "$(as creator "ALTER MATERIALIZED VIEW poc.mv_manual SET ('warehouse' = 'research');")"
+expect "the refused ALTER left mv_manual on default_warehouse" "default_warehouse" "$(mv_warehouse mv_manual)"
+q -e "GRANT USAGE ON WAREHOUSE research TO USER creator;" >/dev/null
+refute "with USAGE, the same ALTER succeeds" "ERROR" \
+  "$(as creator "ALTER MATERIALIZED VIEW poc.mv_manual SET ('warehouse' = 'research');")"
+expect "mv_manual is on research again" "research" "$(mv_warehouse mv_manual)"
 # DROP WAREHOUSE research at the end of the suite is refused while a view refreshes on it.
 q -e "DROP MATERIALIZED VIEW poc.mv_auto; DROP MATERIALIZED VIEW poc.mv_manual;" >/dev/null
 

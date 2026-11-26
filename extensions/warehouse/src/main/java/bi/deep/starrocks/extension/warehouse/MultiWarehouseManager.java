@@ -291,6 +291,27 @@ public class MultiWarehouseManager extends WarehouseManager {
     }
 
     /**
+     * ALTER MATERIALIZED VIEW ... SET ('warehouse' = ...) moves the refreshes of a view to the warehouse it names.
+     * A stock FE checks USAGE on that property for CREATE MATERIALIZED VIEW, but for the ALTER it checks only ALTER
+     * on the view. The ALTER looks the warehouse up here by name, on the thread of the user who runs it and before
+     * it changes anything, so that user is checked here.
+     *
+     * <p>The FE looks warehouses up by name for many other statements and loads, and for the journal replay of the
+     * ALTER. Those lookups are not checked: the gate checks USAGE where compute is acquired.
+     *
+     * @throws RuntimeException the FE's own error for a name it does not know, as the stock method does, and its
+     *                          access-denied error when the user who runs the ALTER does not hold USAGE
+     */
+    @Override
+    public Warehouse getWarehouse(String warehouseName) {
+        Warehouse warehouse = super.getWarehouse(warehouseName);
+        if (env.shouldCheckUsage(warehouse.getId()) && env.isSettingMaterializedViewProperties()) {
+            env.requireUsage(warehouse.getName());
+        }
+        return warehouse;
+    }
+
+    /**
      * @return the warehouse the calling session needs USAGE on, or null when there is nothing to check: the
      *         default warehouse, the check switched off, a thread without a user session, the refresh of a
      *         materialized view, or an id the manager does not know, which is left to the FE's own code to report

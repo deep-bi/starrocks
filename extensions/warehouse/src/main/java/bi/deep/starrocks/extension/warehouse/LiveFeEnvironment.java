@@ -34,10 +34,13 @@ import com.starrocks.metric.MetricRepo;
 import com.starrocks.persist.WALApplier;
 import com.starrocks.qe.ConnectContext;
 import com.starrocks.qe.QueryDetail;
+import com.starrocks.qe.StmtExecutor;
 import com.starrocks.server.GlobalStateMgr;
 import com.starrocks.server.RunMode;
 import com.starrocks.server.WarehouseManager;
 import com.starrocks.sql.analyzer.Authorizer;
+import com.starrocks.sql.ast.AlterMaterializedViewStmt;
+import com.starrocks.sql.ast.ModifyTablePropertiesClause;
 import com.starrocks.system.ComputeNode;
 import com.starrocks.warehouse.cngroup.ComputeResource;
 import com.starrocks.warehouse.cngroup.LazyComputeResource;
@@ -241,6 +244,17 @@ final class LiveFeEnvironment implements FeEnvironment {
     @Override
     public boolean isMaterializedViewRefresh() {
         return ConnectContext.get().getQuerySource() == QueryDetail.QuerySource.MV;
+    }
+
+    /**
+     * The FE puts the statement on the session's executor before it runs it, on the leader also for a statement
+     * a follower forwarded. ALTER MATERIALIZED VIEW ... SET (...) is parsed into a {@link ModifyTablePropertiesClause}.
+     */
+    @Override
+    public boolean isSettingMaterializedViewProperties() {
+        StmtExecutor executor = ConnectContext.get().getExecutor();
+        return executor != null && executor.getParsedStmt() instanceof AlterMaterializedViewStmt statement
+                && statement.getAlterTableClause() instanceof ModifyTablePropertiesClause;
     }
 
     @Override

@@ -33,7 +33,7 @@ The extension reads the following three settings from `fe.conf` at startup. They
 |------------------------------------------|---------|-------------------------------------------------------------------------------------------------------------------------------------|
 | `enable_warehouse_extension`             | `false` | Allows `CREATE WAREHOUSE`. `false` does not switch existing warehouses off: they keep working and can still be altered and dropped. |
 | `warehouse_extension_skip_version_check` | `false` | Starts the FE even if the jar was built for another FE version.                                                                     |
-| `warehouse_extension_check_usage`        | `true`  | Checks `USAGE` on a user warehouse for the queries and loads of a user session. See Access control.                                 |
+| `warehouse_extension_check_usage`        | `true`  | Checks `USAGE` on a user warehouse for the queries, loads and `ALTER MATERIALIZED VIEW` of a user session. See Access control.      |
 
 A value other than `true` or `false` stops the FE at start.
 
@@ -88,6 +88,9 @@ whichever way the warehouse was chosen.
 - the `SET_VAR` hint, on a query or on `INSERT`
 - the `warehouse` header of a Stream Load
 - the default warehouse set on the user (`session.warehouse`)
+
+`ALTER MATERIALIZED VIEW <name> SET ('warehouse' = '<warehouse>')` needs `USAGE` on the warehouse it names, as
+`CREATE MATERIALIZED VIEW` does.
 
 Without the privilege, a statement fails with the access-denied error 5203. A Stream Load fails with `Access denied` in
 its response.
