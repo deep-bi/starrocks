@@ -33,6 +33,7 @@ import com.starrocks.metric.Metric;
 import com.starrocks.metric.MetricRepo;
 import com.starrocks.persist.WALApplier;
 import com.starrocks.qe.ConnectContext;
+import com.starrocks.qe.QueryDetail;
 import com.starrocks.server.GlobalStateMgr;
 import com.starrocks.server.RunMode;
 import com.starrocks.server.WarehouseManager;
@@ -231,6 +232,15 @@ final class LiveFeEnvironment implements FeEnvironment {
     public boolean hasUserSession() {
         ConnectContext context = ConnectContext.get();
         return context != null && context.getCurrentUserIdentity() != null;
+    }
+
+    /**
+     * The FE marks the session of a refresh itself: the refresh sets {@code QuerySource.MV} on its session before
+     * it plans anything, and nothing else sets that value. The run of a task is marked {@code TASK}.
+     */
+    @Override
+    public boolean isMaterializedViewRefresh() {
+        return ConnectContext.get().getQuerySource() == QueryDetail.QuerySource.MV;
     }
 
     @Override

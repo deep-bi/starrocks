@@ -29,6 +29,7 @@ import com.starrocks.persist.EditLog;
 import com.starrocks.persist.OperationType;
 import com.starrocks.persist.WALApplier;
 import com.starrocks.qe.ConnectContext;
+import com.starrocks.qe.QueryDetail;
 import com.starrocks.qe.QueryState;
 import com.starrocks.server.GlobalStateMgr;
 import com.starrocks.server.NodeMgr;
@@ -397,6 +398,32 @@ public class LiveFeEnvironmentTest {
         Assertions.assertFalse(live.hasUserSession(), "no session on the thread: background work");
         Assertions.assertFalse(live.hasUserSession(), "a session nobody has logged in to");
         Assertions.assertTrue(live.hasUserSession());
+    }
+
+    /**
+     * The FE marks the session of a materialized view refresh. A stock FE never checks USAGE for a refresh, so
+     * the gate does not either. Every other session with a user is checked: a run of a task, an internal
+     * statement of a session, and a statement of the user's own.
+     */
+    @Test
+    public void onlyTheRefreshOfAMaterializedViewIsLeftUnchecked(@Mocked ConnectContext context) {
+        WarehouseExtensionSettings.install(WarehouseExtensionSettings.defaults());
+        new Expectations() {
+            {
+                ConnectContext.get();
+                result = context;
+                context.getCurrentUserIdentity();
+                result = new UserIdentity("creator", "%");
+                context.getQuerySource();
+                returns(QueryDetail.QuerySource.MV, QueryDetail.QuerySource.TASK, QueryDetail.QuerySource.INTERNAL,
+                        QueryDetail.QuerySource.EXTERNAL);
+            }
+        };
+
+        Assertions.assertFalse(live.shouldCheckUsage(10001L), "the refresh of a materialized view");
+        Assertions.assertTrue(live.shouldCheckUsage(10001L), "a run of a task");
+        Assertions.assertTrue(live.shouldCheckUsage(10001L), "an internal statement of a session");
+        Assertions.assertTrue(live.shouldCheckUsage(10001L), "a statement of the user's own");
     }
 
     /**

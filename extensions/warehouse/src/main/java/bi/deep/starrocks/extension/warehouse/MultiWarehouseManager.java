@@ -229,8 +229,10 @@ public class MultiWarehouseManager extends WarehouseManager {
      * and warehouse. The next statement checks USAGE again.
      *
      * <p>Requests on the default warehouse go straight to the FE's own code: every user may use it, as in a
-     * stock FE. The FE also handles requests without a user session directly. Background and compaction
-     * select their resources independently of the caller's USAGE, even on a user's thread.
+     * stock FE. The FE also handles requests without a user session directly, and those of a materialized view
+     * refresh: the refresh runs with the identity of the view's creator, but a stock FE never checks USAGE for
+     * it. A run of a task is checked against the task's creator. Background and compaction select their
+     * resources independently of the caller's USAGE, even on a user's thread.
      *
      * <p>A Stream Load with Merge Commit is the exception. The FE keeps one Merge Commit job per table and set
      * of load parameters, and the job holds the compute nodes. Only the request that creates the job comes
@@ -259,8 +261,8 @@ public class MultiWarehouseManager extends WarehouseManager {
      * connection that is already open would go on running after its USAGE was revoked, until it reconnected.
      *
      * <p>The check covers resources acquired through the calling session, including a retry's replacement
-     * resource before it is materialized. Background work and internal load sessions that receive a stored
-     * resource use the FE's own availability check.
+     * resource before it is materialized. Background work, the refresh of a materialized view, and internal
+     * load sessions that receive a stored resource use the FE's own availability check.
      *
      * <p>A statement is checked once per warehouse, including when a retry replaces the resource. The FE asks again in the
      * same statement, also after the statement has its result: it builds the profile of an INSERT after the
@@ -290,8 +292,8 @@ public class MultiWarehouseManager extends WarehouseManager {
 
     /**
      * @return the warehouse the calling session needs USAGE on, or null when there is nothing to check: the
-     *         default warehouse, the check switched off, a thread without a user session, or an id the manager
-     *         does not know, which is left to the FE's own code to report
+     *         default warehouse, the check switched off, a thread without a user session, the refresh of a
+     *         materialized view, or an id the manager does not know, which is left to the FE's own code to report
      */
     private Warehouse gated(long warehouseId) {
         return env.shouldCheckUsage(warehouseId) ? getWarehouseAllowNull(warehouseId) : null;

@@ -133,12 +133,28 @@ interface FeEnvironment {
      */
     boolean hasUserSession();
 
+    /**
+     * A refresh of a materialized view runs in a session of its own, with the identity of the user who created
+     * the view. Call it only when {@link #hasUserSession()} is true.
+     *
+     * @return true when the session on the calling thread refreshes a materialized view
+     */
+    boolean isMaterializedViewRefresh();
+
     /** Identity of the bound session. Call only after {@link #hasUserSession()} returns true. */
     Object currentSession();
 
+    /**
+     * A stock FE checks USAGE where a statement names a warehouse, and never for the refresh of a materialized
+     * view. The gate leaves refreshes alone too, so a REVOKE from the view's creator does not stop them. Every
+     * other session with a user is checked, a run of a task included.
+     *
+     * @return true when USAGE on the warehouse must be checked for the work on the calling thread
+     */
     default boolean shouldCheckUsage(long warehouseId) {
         return warehouseId != WarehouseManager.DEFAULT_WAREHOUSE_ID
-                && WarehouseExtensionSettings.current().isCheckUsage() && hasUserSession();
+                && WarehouseExtensionSettings.current().isCheckUsage() && hasUserSession()
+                && !isMaterializedViewRefresh();
     }
 
     /**

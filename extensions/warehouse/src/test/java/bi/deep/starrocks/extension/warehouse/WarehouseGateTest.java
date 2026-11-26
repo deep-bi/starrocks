@@ -21,6 +21,7 @@ import com.starrocks.common.ErrorReportException;
 import com.starrocks.common.util.UUIDUtil;
 import com.starrocks.lake.StarOSAgent;
 import com.starrocks.qe.ConnectContext;
+import com.starrocks.qe.QueryDetail;
 import com.starrocks.qe.SessionVariable;
 import com.starrocks.server.GlobalStateMgr;
 import com.starrocks.server.RunMode;
@@ -791,6 +792,92 @@ public class WarehouseGateTest {
             ErrorReportException denied = Assertions.assertThrows(ErrorReportException.class, session::getCurrentComputeResource);
             Assertions.assertEquals(ErrorCode.ERR_ACCESS_DENIED, denied.getErrorCode());
         }
+    }
+
+    /**
+     * A refresh of a materialized view runs in a session of its own, with the identity of the user who created
+     * the view, and the FE marks that session as a refresh. A stock FE never checks USAGE for a refresh, so
+     * neither half of the gate does: a REVOKE from the view's creator must not stop the view's refreshes.
+     */
+    @Test
+    public void aRefreshOfAMaterializedViewIsNotChecked(@Mocked GlobalStateMgr state, @Mocked Authorizer authorizer)
+            throws Exception {
+        ConnectContext refresh = taskRunSession(state, QueryDetail.QuerySource.MV);
+        new Expectations() {
+            {
+                Authorizer.checkWarehouseAction(refresh, "research", PrivilegeType.USAGE);
+                result = new AccessDeniedException();
+                minTimes = 0;
+            }
+        };
+
+        try (var ignored = refresh.bindScope()) {
+            ComputeResource acquired = refresh.getCurrentComputeResource();
+            Assertions.assertEquals(research, ((LazyComputeResource) acquired).get().getWarehouseId());
+            // A later statement reuses the resource, and the second half of the gate is asked about it.
+            refresh.setQueryId(UUID.randomUUID());
+            refresh.setExecutionId(UUIDUtil.toTUniqueId(refresh.getQueryId()));
+            Assertions.assertSame(acquired, refresh.getCurrentComputeResource());
+        }
+        Assertions.assertEquals(Collections.singletonList(research), provider.served);
+        new Verifications() {
+            {
+                Authorizer.checkWarehouseAction((ConnectContext) any, anyString, (PrivilegeType) any);
+                times = 0;
+            }
+        };
+    }
+
+    /**
+     * Every other task run stays checked against the user who created the task. A task runs on the warehouse
+     * its submitter's session had, and nothing else checks that warehouse when the task runs.
+     */
+    @Test
+    public void aRunOfATaskIsStillChecked(@Mocked GlobalStateMgr state, @Mocked Authorizer authorizer)
+            throws Exception {
+        ConnectContext run = taskRunSession(state, QueryDetail.QuerySource.TASK);
+        new Expectations() {
+            {
+                Authorizer.checkWarehouseAction(run, "research", PrivilegeType.USAGE);
+                result = new AccessDeniedException();
+            }
+        };
+
+        try (var ignored = run.bindScope()) {
+            ErrorReportException denied = Assertions.assertThrows(ErrorReportException.class,
+                    () -> ((LazyComputeResource) run.getCurrentComputeResource()).get());
+            Assertions.assertEquals(ErrorCode.ERR_ACCESS_DENIED, denied.getErrorCode());
+        }
+        Assertions.assertTrue(provider.served.isEmpty());
+    }
+
+    /**
+     * A session as the FE builds it for a task run: the identity of the user who created the view or the task,
+     * the warehouse research, and the query source the FE sets for that type of run. Its manager is a replica
+     * of this test's, reached through the live environment.
+     */
+    private ConnectContext taskRunSession(GlobalStateMgr state, QueryDetail.QuerySource source) {
+        MultiWarehouseManager sessionManager = new MultiWarehouseManager(FeEnvironment.live(), provider);
+        fe.replayInto(sessionManager);
+        SessionVariable variables = new SessionVariable();
+        variables.setWarehouseName("research");
+        new Expectations() {
+            {
+                GlobalStateMgr.getCurrentState();
+                result = state;
+                state.getVariableMgr().newSessionVariable();
+                result = variables;
+                state.getWarehouseMgr();
+                result = sessionManager;
+            }
+        };
+
+        ConnectContext session = new ConnectContext();
+        session.setCurrentUserIdentity(new UserIdentity("creator", "%"));
+        session.setQueryId(UUID.randomUUID());
+        session.setExecutionId(UUIDUtil.toTUniqueId(session.getQueryId()));
+        session.setQuerySource(source);
+        return session;
     }
 
     /**

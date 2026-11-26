@@ -19,9 +19,11 @@
 #   - checkpoint and FE restart with live nodes
 #   - privileges and the USAGE gate, a REVOKE on an open connection, a REVOKE while a statement runs, and
 #     the switch that turns the gate off
+#   - task runs: refreshes of materialized views go on after their creator loses USAGE, as on a stock FE, and
+#     runs of a scheduled task are refused
 #   - alter, drop, re-create
 #   - build and unit tests inside the image, against the image's own jars
-# Evidence for routing is the research node's own counters: nothing but research sessions ever reaches it.
+# Evidence for routing is the research node's own counters: nothing but work on research ever reaches it.
 IT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 . "$IT_DIR/lib/docker.sh"
 
@@ -38,6 +40,36 @@ grew() { # grew <name> <before> <after> <expected delta or "any">
   else bad "$1 (wanted +$4)" "before=$2 after=$3"; fi; }
 sl() { d exec whext-fe bash /tmp/streamload.sh "$@" | tr -d '\n' | tr -s ' '; }
 state_of() { q -e "SHOW WAREHOUSES" | awk -F'|' -v w="$1" '{gsub(/ /,"",$3); gsub(/ /,"",$4); gsub(/ /,"",$5)} $3==w {print $4" nodes="$5}'; }
+# val <statement>: the first column of the first row, run as root, as plain text
+val() { d exec -i whext-fe mysql -h127.0.0.1 -P9030 -uroot -N -B -e "$1" 2>&1 | head -1; }
+# refreshed <view>: waits up to 60 s until the materialized view poc.<view> holds the current sum of poc.t
+refreshed() {
+  local n view
+  for n in $(seq 1 30); do
+    view=$(val "SELECT s FROM poc.$1")
+    case "$view" in
+      ''|*[!0-9]*) ;;
+      *) [ "$view" = "$(val 'SELECT sum(id) FROM poc.t')" ] && return 0 ;;
+    esac
+    sleep 2
+  done
+  return 1
+}
+# last_refresh <view>: state and error message of the last refresh of poc.<view>
+last_refresh() {
+  val "SELECT concat(LAST_REFRESH_STATE, ' ', ifnull(LAST_REFRESH_ERROR_MESSAGE, '')) FROM information_schema.materialized_views WHERE TABLE_SCHEMA = 'poc' AND TABLE_NAME = '$1'"
+}
+# tick_run <FE time>: waits up to 60 s for a run of task tick that was created after that time and has finished.
+# Prints its state and error message.
+tick_run() {
+  local n out
+  for n in $(seq 1 30); do
+    out=$(val "SELECT concat(STATE, ' ', ifnull(ERROR_MESSAGE, '')) FROM information_schema.task_runs WHERE TASK_NAME = 'tick' AND CREATE_TIME > '$1' AND STATE IN ('SUCCESS', 'FAILED') ORDER BY CREATE_TIME LIMIT 1")
+    [ -n "$out" ] && break
+    sleep 2
+  done
+  echo "$out"
+}
 
 trap docker_cleanup EXIT
 
@@ -184,6 +216,51 @@ refute "revoke while running: the statement after the SELECT did not run" "| aft
 expect "revoke while running: the profiles of both slow statements were built" "2" "$(q -N -e 'SHOW PROFILELIST' | grep -c 'SELECT 9106\|slow select')"
 q -e "REVOKE USAGE ON WAREHOUSE research FROM USER loader;" >/dev/null
 
+section "task runs: view refreshes as on a stock FE, task runs checked"
+# A task run carries the identity of the user who created the materialized view or the task. A stock FE checks
+# USAGE where a statement names a warehouse, but not for the refresh of a view: a REVOKE from the view's
+# creator does not stop its refreshes. The gate leaves refreshes alone too. Runs of a task stay checked
+# against the task's creator: a task runs on the warehouse its submitter's session had, and the stock FE checks
+# that neither at SUBMIT TASK nor when the task runs. User creator holds USAGE on research while it creates a
+# view or a task, and loses it before the runs that count.
+q -e "CREATE USER creator; GRANT SELECT ON TABLE poc.t TO USER creator; GRANT CREATE MATERIALIZED VIEW ON DATABASE poc TO USER creator; GRANT USAGE ON WAREHOUSE research TO USER creator;" >/dev/null
+q -e "CREATE TABLE poc.ticks (ran_at DATETIME, note STRING) DUPLICATE KEY(ran_at) DISTRIBUTED BY HASH(ran_at) BUCKETS 1; GRANT INSERT ON TABLE poc.ticks TO USER creator;" >/dev/null
+out=$(as creator "CREATE MATERIALIZED VIEW poc.mv_auto REFRESH ASYNC PROPERTIES ('warehouse' = 'research') AS SELECT count(id) AS n, sum(id) AS s FROM poc.t; CREATE MATERIALIZED VIEW poc.mv_manual REFRESH MANUAL PROPERTIES ('warehouse' = 'research') AS SELECT count(id) AS n, sum(id) AS s FROM poc.t;")
+refute "with USAGE, creator creates two materialized views that refresh on research" "ERROR" "$out"
+refreshed mv_auto && refreshed mv_manual && ok "the refresh that CREATE starts filled both views" \
+  || bad "the first refresh did not fill both views" "mv_auto: $(last_refresh mv_auto); mv_manual: $(last_refresh mv_manual)"
+q -e "REVOKE USAGE ON WAREHOUSE research FROM USER creator;" >/dev/null
+# mv_auto refreshes by itself when its base table changes. The INSERT runs on default_warehouse.
+L=$(metric 22 load)
+q -e "INSERT INTO poc.t VALUES (9400, 'base table change after the REVOKE');" >/dev/null
+refreshed mv_auto && ok "after REVOKE, a change of the base table still refreshes mv_auto" \
+  || bad "after REVOKE, mv_auto was not refreshed" "$(last_refresh mv_auto)"
+grew "that refresh ran on the research node" "$L" "$(metric 22 load)" any
+L=$(metric 22 load)
+out=$(q -e "REFRESH MATERIALIZED VIEW poc.mv_manual WITH SYNC MODE;")
+refute "after REVOKE, REFRESH MATERIALIZED VIEW ... WITH SYNC MODE of mv_manual succeeds" "ERROR" "$out"
+refreshed mv_manual && ok "mv_manual is up to date" || bad "mv_manual is out of date" "$(last_refresh mv_manual)"
+grew "that refresh ran on the research node" "$L" "$(metric 22 load)" any
+# No task has run in the suite yet, so an access-denied line of a task-run thread could only come from a refresh.
+expect "no refresh logged an access-denied error" "0" "$(d exec whext-fe bash -c 'grep "Access denied" /data/deploy/starrocks/fe/log/fe.log | grep -c "^[0-9-]* [0-9:.Z]* [A-Z]* (starrocks-taskrun-pool-"')"
+# DROP WAREHOUSE research at the end of the suite is refused while a view refreshes on it.
+q -e "DROP MATERIALIZED VIEW poc.mv_auto; DROP MATERIALIZED VIEW poc.mv_manual;" >/dev/null
+
+# A task runs on the warehouse of the session that submitted it. SUBMIT TASK refuses a warehouse property.
+q -e "GRANT USAGE ON WAREHOUSE research TO USER creator;" >/dev/null
+T=$(val "SELECT now()")
+out=$(as creator "SET warehouse = 'research'; SUBMIT TASK poc.tick SCHEDULE EVERY (INTERVAL 10 SECOND) AS INSERT INTO poc.ticks SELECT now(), 'tick';")
+refute "with USAGE, creator submits a task that runs on research every 10 seconds" "ERROR" "$out"
+expect "a run before the REVOKE succeeds" "SUCCESS" "$(tick_run "$T")"
+q -e "REVOKE USAGE ON WAREHOUSE research FROM USER creator;" >/dev/null
+T=$(val "SELECT now()")
+out=$(tick_run "$T")
+expect "after REVOKE, the next run is refused" "FAILED" "$out"
+expect "it is refused for USAGE on research" "the USAGE privilege(s) on WAREHOUSE research" "$out"
+q -e "DROP TASK poc.tick;" >/dev/null
+# Only refreshes are left alone. A statement of creator's own session is still checked.
+expect "creator's own INSERT with the hint is still refused" "ERROR 5203" "$(as creator "INSERT /*+ SET_VAR(warehouse='research') */ INTO poc.ticks VALUES (now(), 'session');")"
+
 section "the switch that turns the check off, and what the check costs"
 d cp -q "$IT_DIR/docker/timeq.sh" whext-fe:/tmp/timeq.sh
 d exec whext-fe bash /tmp/timeq.sh >/dev/null
@@ -200,8 +277,9 @@ d exec whext-fe sed -i '/warehouse_extension_check_usage/d' /data/deploy/starroc
 fe_restart
 expect "switch back on: INSERT with the hint is refused again" "ERROR 5203" "$(as loader "INSERT /*+ SET_VAR(warehouse='research') */ INTO poc.t VALUES (9104, 'x');")"
 info "microseconds per query on research (300 queries as root, 2 runs each): check on $ON1 / $ON2, check off $OFF1 / $OFF2"
-# Only log header lines count, and only those from threads that do not serve a user request.
-expect "background work raised no access-denied error" "0" "$(d exec whext-fe bash -c 'grep "Access denied" /data/deploy/starrocks/fe/log/fe.log | grep "^[0-9-]* [0-9:.Z]* [A-Z]* (" | grep -vc "(starrocks-mysql-nio-pool-\|(starrocks-http-\|(nioEventLoopGroup" ')"
+# Only log header lines count, and only those from threads that do not serve a user request. Task runs are left
+# out: a task runs with the identity of its creator, and the task-runs section has one refused on purpose.
+expect "background work raised no access-denied error" "0" "$(d exec whext-fe bash -c 'grep "Access denied" /data/deploy/starrocks/fe/log/fe.log | grep "^[0-9-]* [0-9:.Z]* [A-Z]* (" | grep -vc "(starrocks-mysql-nio-pool-\|(starrocks-http-\|(nioEventLoopGroup\|(starrocks-taskrun-pool-" ')"
 
 section "alter, drop, re-create"
 expect "ALTER replica_number on a live warehouse" "replica_number=2" "$(q -e "ALTER WAREHOUSE research SET ('replica_number' = '2'); SHOW WAREHOUSES;")"
@@ -224,7 +302,9 @@ elif ! collect_testlibs "$SUITE_DIR/testlibs"; then
   skip "build inside the image: JUnit or JMockit jars not found in ~/.m2 or the Gradle cache"
 else
   d rm -f whext-build >/dev/null 2>&1
-  d run -d --name whext-build --memory 3g -e STARROCKS_HOME=/work/test-home --entrypoint sleep "$IMAGE" infinity >/dev/null
+  # The tests get the environment that pom.xml gives them in the Maven build.
+  d run -d --name whext-build --memory 3g -e STARROCKS_HOME=/work/test-home -e WAREHOUSE_EXT_TEST_ENABLED=true \
+    --entrypoint sleep "$IMAGE" infinity >/dev/null
   d exec whext-build mkdir -p /work/test-home/conf
   d cp -q "$PROJECT_DIR/src" whext-build:/work/src
   d cp -q "$SUITE_DIR/testlibs" whext-build:/work/testlibs

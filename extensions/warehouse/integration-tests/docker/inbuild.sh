@@ -40,8 +40,9 @@ $JAVA/javac -nowarn -cp "out/main:$FELIB/*:testlibs/*" -d out/test @out/test.lis
 echo "test classes compiled: $(find out/test -name '*.class' | wc -l)"
 
 rc=0
-for src in src/test/java/bi/deep/starrocks/extension/warehouse/*Test.java; do
-  cls=bi.deep.starrocks.extension.warehouse.$(basename "$src" .java)
+# Every test class, whatever its package: a test that needs package access to FE code lives in the FE's package.
+for src in $(cd src/test/java && find . -name '*Test.java' | sort); do
+  cls=$(echo "${src#./}" | sed 's#\.java$##; s#/#.#g')
   $JAVA/java -Xmx2g -javaagent:testlibs/jmockit-1.49.4.jar -cp "out/test:out/main:$FELIB/*:testlibs/*" RunTests "$cls" 2>/dev/null | grep -E '^(RESULT|FAIL)' || rc=1
 done
 exit $rc

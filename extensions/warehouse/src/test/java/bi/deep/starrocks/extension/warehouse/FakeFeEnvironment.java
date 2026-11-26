@@ -263,6 +263,12 @@ class FakeFeEnvironment implements FeEnvironment {
         return sessionUser != null;
     }
 
+    /** Sessions of the fake are users' own. The refresh of a materialized view is tested with the live environment. */
+    @Override
+    public boolean isMaterializedViewRefresh() {
+        return false;
+    }
+
     @Override
     public Object currentSession() {
         return session;
