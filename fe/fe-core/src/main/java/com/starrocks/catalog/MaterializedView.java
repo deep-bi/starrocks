@@ -65,6 +65,7 @@ import com.starrocks.persist.gson.GsonPostProcessable;
 import com.starrocks.persist.gson.GsonPreProcessable;
 import com.starrocks.persist.gson.GsonUtils;
 import com.starrocks.qe.ConnectContext;
+import com.starrocks.qe.SessionVariable;
 import com.starrocks.qe.SqlModeHelper;
 import com.starrocks.scheduler.TableWithPartitions;
 import com.starrocks.scheduler.Task;
@@ -2976,36 +2977,43 @@ public class MaterializedView extends OlapTable implements GsonPreProcessable, G
      */
     public synchronized ParseNode getDefineQueryParseNode() {
         if (this.defineQueryParseNode == null) {
-            Database db = GlobalStateMgr.getCurrentState().getLocalMetastore().getDb(dbId);
-            if (db == null) {
+            SessionVariable.withStoredMvDecimalSemantics(() -> {
+                parseDefineQuery();
                 return null;
+            });
+        }
+        return this.defineQueryParseNode;
+    }
+
+    private void parseDefineQuery() {
+        Database db = GlobalStateMgr.getCurrentState().getLocalMetastore().getDb(dbId);
+        if (db == null) {
+            return;
+        }
+        ConnectContext connectContext = ConnectContext.buildInner();
+        if (!Strings.isNullOrEmpty(originalViewDefineSql)) {
+            try {
+                String currentDBName = Strings.isNullOrEmpty(originalDBName) ? db.getOriginName() : originalDBName;
+                connectContext.setDatabase(currentDBName);
+                this.defineQueryParseNode = MvUtils.getQueryAst(originalViewDefineSql, connectContext);
+                clearHeavyObjectFromParseNode(this.defineQueryParseNode);
+            } catch (Exception e) {
+                // ignore
+                LOG.warn("parse original view define sql failed:", e);
             }
-            ConnectContext connectContext = ConnectContext.buildInner();
-            if (!Strings.isNullOrEmpty(originalViewDefineSql)) {
+        }
+        if (this.defineQueryParseNode == null) {
+            if (!Strings.isNullOrEmpty(viewDefineSql)) {
                 try {
-                    String currentDBName = Strings.isNullOrEmpty(originalDBName) ? db.getOriginName() : originalDBName;
-                    connectContext.setDatabase(currentDBName);
-                    this.defineQueryParseNode = MvUtils.getQueryAst(originalViewDefineSql, connectContext);
+                    connectContext.setDatabase(db.getOriginName());
+                    this.defineQueryParseNode = MvUtils.getQueryAst(viewDefineSql, connectContext);
                     clearHeavyObjectFromParseNode(this.defineQueryParseNode);
                 } catch (Exception e) {
                     // ignore
-                    LOG.warn("parse original view define sql failed:", e);
-                }
-            }
-            if (this.defineQueryParseNode == null) {
-                if (!Strings.isNullOrEmpty(viewDefineSql)) {
-                    try {
-                        connectContext.setDatabase(db.getOriginName());
-                        this.defineQueryParseNode = MvUtils.getQueryAst(viewDefineSql, connectContext);
-                        clearHeavyObjectFromParseNode(this.defineQueryParseNode);
-                    } catch (Exception e) {
-                        // ignore
-                        LOG.warn("parse view define sql failed:", e);
-                    }
+                    LOG.warn("parse view define sql failed:", e);
                 }
             }
         }
-        return this.defineQueryParseNode;
     }
 
     //To avoid mv hold the heavy object.

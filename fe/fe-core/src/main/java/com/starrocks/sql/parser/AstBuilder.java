@@ -7544,7 +7544,7 @@ public class AstBuilder extends StarRocksBaseVisitor<ParseNode> {
                     }
                     return child;
                 } else {
-                    return new ArithmeticExpr(ArithmeticExpr.Operator.MULTIPLY, new IntLiteral(-1), child, pos);
+                    return ArithmeticExpr.unaryMinus(child, pos);
                 }
             case StarRocksLexer.PLUS_SYMBOL:
                 return child;

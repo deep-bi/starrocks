@@ -224,6 +224,7 @@ public class DecimalV3FunctionAnalyzer {
     }
 
     public static AggregateFunction rectifyAggregationFunction(AggregateFunction fn, Type argType, Type returnType) {
+        Type input = argType;
         if (argType.isDecimalV2() || argType.isDecimalV3()) {
             if (fn.functionName().equals(FunctionSet.COUNT) || fn.functionName().equals(FunctionSet.COUNT_IF)) {
                 // count & count_if function return type always bigint
@@ -265,6 +266,13 @@ public class DecimalV3FunctionAnalyzer {
             }
         }
 
+        // ImplicitCastRule coerces inputs to this signature before DecimalAggregateRewriter widens them.
+        // Preserve the input scale so SUM and AVG round only the final result.
+        if (input.isDecimalV3() && !input.isDecimal256() && !fn.isUdf() &&
+                (FunctionSet.SUM.equals(fn.functionName()) || FunctionSet.AVG.equals(fn.functionName())) &&
+                ConnectContext.getSessionVariableOrDefault().isDecimalOverflowReduceScale()) {
+            argType = input;
+        }
         Type[] decimalTypes = new Type[fn.getNumArgs()];
         Arrays.fill(decimalTypes, argType);
         Type[] args = replaceArgDecimalType(fn.getArgs(), decimalTypes);

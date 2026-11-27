@@ -41,6 +41,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.List;
+import java.util.function.BiPredicate;
 
 /**
  * Map of expression substitutions: lhs[i] gets substituted with rhs[i].
@@ -56,9 +57,15 @@ public final class ExprSubstitutionMap {
     private boolean checkAnalyzed_ = true;
     private List<Expr> lhs_; // left-hand side
     private List<Expr> rhs_; // right-hand side
+    private BiPredicate<Expr, Expr> matcher = Expr::equals;
 
     public ExprSubstitutionMap() {
         this(Lists.<Expr>newArrayList(), Lists.<Expr>newArrayList());
+    }
+
+    public ExprSubstitutionMap(boolean checkAnalyzed, BiPredicate<Expr, Expr> matcher) {
+        this(checkAnalyzed);
+        this.matcher = matcher;
     }
 
     // Only used to convert show statement to select statement
@@ -88,11 +95,18 @@ public final class ExprSubstitutionMap {
      */
     public Expr get(Expr lhsExpr) {
         for (int i = 0; i < lhs_.size(); ++i) {
-            if (lhsExpr.equals(lhs_.get(i))) {
+            if (matches(lhsExpr, lhs_.get(i))) {
                 return rhs_.get(i);
             }
         }
         return null;
+    }
+
+    /**
+     * Entries use {@link Expr#equals(Object)} unless the caller supplies a matcher.
+     */
+    public boolean matches(Expr expr, Expr lhsExpr) {
+        return matcher.test(expr, lhsExpr);
     }
 
     /**
@@ -166,6 +180,8 @@ public final class ExprSubstitutionMap {
 
     @Override
     public ExprSubstitutionMap clone() {
-        return new ExprSubstitutionMap(Expr.cloneList(lhs_), Expr.cloneList(rhs_));
+        ExprSubstitutionMap copy = new ExprSubstitutionMap(Expr.cloneList(lhs_), Expr.cloneList(rhs_));
+        copy.matcher = matcher;
+        return copy;
     }
 }

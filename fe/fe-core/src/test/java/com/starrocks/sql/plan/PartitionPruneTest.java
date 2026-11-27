@@ -310,6 +310,19 @@ public class PartitionPruneTest extends PlanTestBase {
     }
 
     @Test
+    public void testDatePartitionPruningWithDecimalReduceScale() throws Exception {
+        var session = connectContext.getSessionVariable();
+        boolean previous = session.isDecimalOverflowReduceScale();
+        try {
+            session.setDecimalOverflowReduceScale(true);
+            testAssertContains("select * from t_gen_col2 where c1 = '2024-02-02'", "partitions=2/6");
+            testRemovePredicate("select * from t_gen_col where c1 = '2024-01-01' and c2 > 100", "true");
+        } finally {
+            session.setDecimalOverflowReduceScale(previous);
+        }
+    }
+
+    @Test
     public void testGeneratedColumnPrune_RemovePredicate2() throws Exception {
         testAssertContains("select * from t_gen_col2 where c1 >= '2024-02-02' ", "partitions=4/6");
         testAssertContains("select * from t_gen_col2 where c1 = '2024-02-02' ", "partitions=2/6");

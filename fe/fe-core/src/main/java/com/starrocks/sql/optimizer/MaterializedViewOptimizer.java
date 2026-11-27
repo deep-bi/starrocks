@@ -19,6 +19,7 @@ import com.starrocks.catalog.MaterializedView;
 import com.starrocks.catalog.MvPlanContext;
 import com.starrocks.common.Pair;
 import com.starrocks.qe.ConnectContext;
+import com.starrocks.qe.SessionVariable;
 import com.starrocks.sql.analyzer.AnalyzerUtils;
 import com.starrocks.sql.ast.StatementBase;
 import com.starrocks.sql.optimizer.base.ColumnRefFactory;
@@ -39,7 +40,8 @@ public class MaterializedViewOptimizer {
                                   boolean isCheckNonDeterministicFunction) {
         // bind scope force to ensure thread local is set correctly by using connectContext
         try (var guard = connectContext.bindScope()) {
-            return optimizeImpl(mv, connectContext, inlineView, isCheckNonDeterministicFunction);
+            return SessionVariable.withStoredMvDecimalSemantics(() ->
+                    optimizeImpl(mv, connectContext, inlineView, isCheckNonDeterministicFunction));
         }
     }
 

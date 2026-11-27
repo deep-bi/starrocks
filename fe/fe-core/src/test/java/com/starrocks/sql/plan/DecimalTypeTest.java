@@ -14,12 +14,32 @@
 
 package com.starrocks.sql.plan;
 
+import com.starrocks.alter.RollupJobV2;
+import com.starrocks.analysis.ArithmeticExpr;
+import com.starrocks.analysis.Expr;
+import com.starrocks.catalog.OlapTable;
+import com.starrocks.catalog.View;
 import com.starrocks.common.Config;
+import com.starrocks.common.FeConstants;
+import com.starrocks.qe.SessionVariable;
+import com.starrocks.server.GlobalStateMgr;
+import com.starrocks.sql.analyzer.SemanticException;
+import com.starrocks.sql.ast.AlterViewStmt;
+import com.starrocks.sql.ast.PivotRelation;
+import com.starrocks.sql.ast.SelectRelation;
+import com.starrocks.sql.parser.SqlParser;
+import com.starrocks.thrift.TExplainLevel;
+import com.starrocks.thrift.TExpr;
+import com.starrocks.utframe.UtFrameUtils;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
 public class DecimalTypeTest extends PlanTestBase {
+    private static final String SELECT_WITH_BOTH_FLAGS =
+            "SELECT /*+ SET_VAR(decimal_overflow_reduce_scale=true, decimal_overflow_to_double=true) */ ";
+    private static final String DECIMAL_AMOUNT = "CAST(c_0_0 AS DECIMAL(38,18))";
+
     @BeforeAll
     public static void beforeClass() throws Exception {
         PlanTestBase.beforeClass();
@@ -311,5 +331,200 @@ public class DecimalTypeTest extends PlanTestBase {
                 " GROUP BY t1a;\n ";
         String plan = getFragmentPlan(sql);
         assertContains(plan, "<slot 11> : 6: t1f * 1.0\n");
+    }
+
+    @Test
+    public void testWideDecimalArithmeticPlanAndTypes() throws Exception {
+        String columns = "cast(c_0_0 as decimal(38,18))";
+        String expression = columns + " * " + columns + " from tab0";
+        String optIn = "select /*+ SET_VAR(decimal_overflow_reduce_scale=true) */ ";
+        String on = getVerboseExplain(optIn + expression);
+        assertContains(on, "DECIMAL256");
+        Assertions.assertEquals(18, getExecPlan(optIn + expression).getOutputExprs().get(0).getType().getDecimalDigits());
+        String off = getVerboseExplain("select " + expression);
+        assertNotContains(off, "DECIMAL256");
+        Assertions.assertEquals(36, getExecPlan("select " + expression).getOutputExprs().get(0).getType().getDecimalDigits());
+    }
+
+    @Test
+    public void testOnlyCappedDecimalAddSubtractWidens() throws Exception {
+        String enabled = "SELECT /*+ SET_VAR(decimal_overflow_reduce_scale=true) */ ";
+        for (String op : new String[] {" + ", " - "}) {
+            String priceAndTax = "CAST(c_0_0 AS DECIMAL(18,2))" + op + "CAST(c_0_1 AS DECIMAL(18,2)) FROM tab0";
+            assertNotContains(getFragmentPlan(enabled + priceAndTax), "DECIMAL256");
+
+            // Max integer digits (23) + max fractional digits (14) + carry (1) fits exactly.
+            String rhs = op + "CAST(c_0_1 AS DECIMAL(28,14)) FROM tab0";
+            String fits = "CAST(c_0_0 AS DECIMAL(28,5))" + rhs;
+            String capped = "CAST(c_0_0 AS DECIMAL(29,5))" + rhs;
+            assertNotContains(getFragmentPlan(enabled + fits), "DECIMAL256");
+            assertContains(getFragmentPlan(enabled + capped), "DECIMAL256");
+            assertNotContains(getFragmentPlan("SELECT " + capped), "DECIMAL256");
+        }
+    }
+
+    @Test
+    public void testBigIntDecimalAddSubtractDeclaredPrecision() throws Exception {
+        String enabled = "SELECT /*+ SET_VAR(decimal_overflow_reduce_scale=true, sql_mode=ONLY_FULL_GROUP_BY) */ ";
+        String strict = "SELECT /*+ SET_VAR(decimal_overflow_reduce_scale=true, sql_mode=ERROR_IF_OVERFLOW) */ ";
+        String maxBigInt = "CAST('9223372036854775807' AS BIGINT)";
+        String maxDecimal = "CAST('999999999999999999' AS DECIMAL(18,0))";
+        String minDecimal = "CAST('-999999999999999999' AS DECIMAL(18,0))";
+        // BIGINT has 19 integer digits, but arithmetic type inference treats it as DECIMAL(18,0).
+        String overflowingSum = maxBigInt + " + " + maxDecimal;
+        String fittingSum = "CAST('9000000000000000000' AS BIGINT) + " + maxDecimal;
+        assertContains(getFragmentPlan(enabled + overflowingSum), "<slot 2> : NULL");
+        assertContains(getFragmentPlan(strict + overflowingSum), "AS DECIMAL128(38,19)");
+        assertContains(getFragmentPlan(enabled + minDecimal + " - " + maxBigInt), "<slot 2> : NULL");
+
+        for (String mode : new String[] {enabled, strict}) {
+            assertContains(getFragmentPlan(mode + fittingSum), "<slot 2> : 9999999999999999999");
+            ExecPlan columnSum = getExecPlan(mode + "v1 + CAST(v2 AS DECIMAL(18,0)) FROM t0");
+            Expr output = columnSum.getOutputExprs().get(0);
+            Assertions.assertEquals(19, output.getType().getPrecision());
+            Assertions.assertEquals(0, output.getType().getDecimalDigits());
+            assertContains(columnSum.getExplainString(TExplainLevel.NORMAL), "AS DECIMAL128(38,19)");
+        }
+
+        assertNotContains(getFragmentPlan(enabled + "v1 + CAST(v2 AS DECIMAL(17,0)) FROM t0"), "DECIMAL256");
+    }
+
+    @Test
+    public void testExactDecimalAdditionPrunesGeneratedPartition() {
+        String expression = "CAST(price + 1 AS INT)";
+        String cappedAdd = "CAST(amount + 1 AS INT)";
+        String cappedSub = "CAST(amount - 1 AS INT)";
+        String negation = "CAST(-amount AS BIGINT)";
+        starRocksAssert.withTable("CREATE TABLE decimal_add_partition (price DECIMAL(10,2), amount DECIMAL(38,2), " +
+                "p INT AS " + expression + ", p_add INT AS " + cappedAdd + ", p_sub INT AS " + cappedSub +
+                ", p_neg BIGINT AS " + negation + ") DUPLICATE KEY(price) PARTITION BY (p, p_add, p_sub, p_neg) " +
+                "DISTRIBUTED BY HASH(price) BUCKETS 1 PROPERTIES('replication_num'='1')", () -> {
+                    starRocksAssert.ddl("ALTER TABLE decimal_add_partition ADD PARTITION p2 " +
+                            "VALUES IN (('2','2','0','-1'))");
+                    starRocksAssert.ddl("ALTER TABLE decimal_add_partition ADD PARTITION p7 " +
+                            "VALUES IN (('7','7','5','-6'))");
+                    String filter = "price FROM decimal_add_partition WHERE ";
+                    String enabled = "SELECT /*+ SET_VAR(decimal_overflow_reduce_scale=true) */ ";
+                    String disabledRewrite = "SELECT /*+ SET_VAR(decimal_overflow_reduce_scale=true, " +
+                            "disable_generated_column_rewrite=true) */ ";
+                    boolean previous = FeConstants.runningUnitTest;
+                    try {
+                        FeConstants.runningUnitTest = true;
+                        String query = filter + expression + " > 5";
+                        assertContains(getFragmentPlan("SELECT " + query), "partitions=1/2");
+                        assertContains(getFragmentPlan(enabled + query), "partitions=1/2");
+                        assertContains(getFragmentPlan(disabledRewrite + query), "partitions=2/2");
+                        String unaryFilter = filter + negation + " = -6";
+                        assertContains(getFragmentPlan("SELECT " + unaryFilter), "partitions=1/2");
+                        String toDouble = "SELECT /*+ SET_VAR(decimal_overflow_to_double=true) */ ";
+                        Assertions.assertEquals(getFragmentPlan(toDouble + unaryFilter),
+                                getFragmentPlan(SELECT_WITH_BOTH_FLAGS + unaryFilter));
+                        for (String capped : new String[] {cappedAdd, cappedSub}) {
+                            String cappedFilter = filter + capped + " > 3";
+                            assertContains(getFragmentPlan("SELECT " + cappedFilter), "partitions=1/2");
+                            assertContains(getFragmentPlan(enabled + cappedFilter), "partitions=2/2", "DECIMAL256");
+                        }
+                    } finally {
+                        FeConstants.runningUnitTest = previous;
+                    }
+                });
+    }
+
+    @Test
+    public void testUnaryMinusWithBothDecimalFlags() throws Exception {
+        String query = SELECT_WITH_BOTH_FLAGS + "-" + DECIMAL_AMOUNT + " FROM tab0";
+        Assertions.assertTrue(getExecPlan(query).getOutputExprs().get(0).getType().isDouble());
+    }
+
+    @Test
+    public void testCreateViewPreservesDecimalUnaryMinus() throws Exception {
+        starRocksAssert.withView("CREATE VIEW decimal_negation_created (neg) AS SELECT -" +
+                        DECIMAL_AMOUNT + " AS original_name FROM tab0",
+                () -> Assertions.assertTrue(getExecPlan(SELECT_WITH_BOTH_FLAGS + "neg FROM decimal_negation_created")
+                        .getOutputExprs().get(0).getType().isDouble()));
+    }
+
+    @Test
+    public void testAlterViewPreservesDecimalUnaryMinus() throws Exception {
+        String product = "-1 * " + DECIMAL_AMOUNT + " AS neg FROM tab0";
+        String readView = SELECT_WITH_BOTH_FLAGS + "neg FROM decimal_negation_altered";
+        assertDecimalFlagConflict(SELECT_WITH_BOTH_FLAGS + product);
+        starRocksAssert.withView("CREATE VIEW decimal_negation_altered AS SELECT " + product, () -> {
+            assertDecimalFlagConflict(readView);
+            alterDecimalNegationView("-" + DECIMAL_AMOUNT + " AS neg FROM tab0");
+            Assertions.assertTrue(getExecPlan(readView).getOutputExprs().get(0).getType().isDouble());
+            alterDecimalNegationView(product);
+            assertDecimalFlagConflict(readView);
+        });
+    }
+
+    private void alterDecimalNegationView(String selectListAndFrom) throws Exception {
+        AlterViewStmt stmt = (AlterViewStmt) UtFrameUtils.parseStmtWithNewParser(
+                "ALTER VIEW decimal_negation_altered AS SELECT " + selectListAndFrom, connectContext);
+        GlobalStateMgr.getCurrentState().getLocalMetastore().alterView(connectContext, stmt);
+    }
+
+    private void assertDecimalFlagConflict(String query) {
+        SemanticException error = Assertions.assertThrows(SemanticException.class, () -> getExecPlan(query));
+        assertContains(error.getMessage(), "decimal_overflow_reduce_scale and decimal_overflow_to_double " +
+                "cannot both be enabled for this multiplication");
+    }
+
+    @Test
+    public void testDecimalUnaryMinusInViewPivot() throws Exception {
+        String pivot = "SELECT * FROM (SELECT c_0_1 AS id, " + DECIMAL_AMOUNT +
+                " AS amount, 1 AS bucket FROM tab0) p PIVOT (SUM(-amount) AS neg FOR bucket IN (1 AS one))";
+        starRocksAssert.withView("CREATE VIEW decimal_negation_pivot AS " + pivot,
+                () -> Assertions.assertTrue(getExecPlan(SELECT_WITH_BOTH_FLAGS + "one FROM decimal_negation_pivot")
+                        .getOutputExprs().get(0).getType().isDouble()));
+    }
+
+    @Test
+    public void testPivotPreservesGroupingInsideUnaryMinus() throws Exception {
+        String sql = "CREATE VIEW decimal_pivot_grouping AS SELECT * " +
+                "FROM (SELECT c_0_0 AS amount, c_0_0 AS k1, c_0_0 AS k2, 1 AS bucket FROM tab0) p " +
+                "PIVOT (SUM(-(amount - (k1 - k2))) FOR bucket IN (1 AS one))";
+        starRocksAssert.withView(sql, () -> {
+            View view = (View) starRocksAssert.getTable("test", "decimal_pivot_grouping");
+            SelectRelation select = (SelectRelation) view.getQueryStatement().getQueryRelation();
+            PivotRelation pivot = (PivotRelation) select.getRelation();
+            Expr argument = pivot.getAggregateFunctions().get(0).getFunctionCallExpr().getChild(0);
+            ArithmeticExpr negation = Assertions.assertInstanceOf(ArithmeticExpr.class, argument);
+            Assertions.assertTrue(negation.isUnaryMinus());
+            ArithmeticExpr outer = Assertions.assertInstanceOf(ArithmeticExpr.class, negation.getChild(1));
+            Assertions.assertEquals(ArithmeticExpr.Operator.SUBTRACT, outer.getOp());
+            ArithmeticExpr inner = Assertions.assertInstanceOf(ArithmeticExpr.class, outer.getChild(1));
+            Assertions.assertEquals(ArithmeticExpr.Operator.SUBTRACT, inner.getOp());
+        });
+    }
+
+    @Test
+    public void testSynchronousRollupBackfillUsesStoredPredicate() throws Exception {
+        OlapTable table = getOlapTable("tab1");
+        SessionVariable variables = connectContext.getSessionVariable();
+        boolean original = variables.isDecimalOverflowReduceScale();
+        String filter = "c_1_6 / c_1_6 > 10";
+        try {
+            variables.setDecimalOverflowReduceScale(false);
+            Expr predicate = SqlParser.parseExpression(filter, variables);
+            TExpr legacy = RollupJobV2.analyzeAndCreateRollupJobV2Params(
+                    table, table.getBaseSchema(), predicate, "test").getWhereExpr().treeToThrift();
+            variables.setDecimalOverflowReduceScale(true);
+            Expr reloaded = SqlParser.parseExpression(filter, variables);
+            TExpr actual = RollupJobV2.analyzeAndCreateRollupJobV2Params(
+                    table, table.getBaseSchema(), reloaded, "test").getWhereExpr().treeToThrift();
+            Assertions.assertEquals(legacy, actual);
+        } finally {
+            variables.setDecimalOverflowReduceScale(original);
+        }
+    }
+
+    @Test
+    public void testReducedScaleConstantQuotientAndOverflow() throws Exception {
+        String prefix = "select /*+ SET_VAR(decimal_overflow_reduce_scale=true, sql_mode=ONLY_FULL_GROUP_BY) */ ";
+        String value = "cast('60000000000000000000' as decimal(38,18))";
+        assertContains(getFragmentPlan(prefix + value + " + " + value), "NULL");
+        assertContains(getFragmentPlan(prefix + "cast('1000' as decimal(38,18)) / cast('50.25' as decimal(38,18))"),
+                "19.900497512437810945");
     }
 }

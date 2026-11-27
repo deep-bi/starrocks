@@ -6,6 +6,7 @@ import com.starrocks.common.AnalysisException;
 import com.starrocks.qe.ConnectContext;
 import com.starrocks.sql.analyzer.ExpressionAnalyzer;
 import com.starrocks.sql.analyzer.SemanticException;
+import com.starrocks.sql.ast.SystemVariable;
 import com.starrocks.utframe.UtFrameUtils;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
@@ -119,6 +120,46 @@ public class ArithmeticExprTest {
             Assertions.assertEquals(tr.returnType, expectReturnType);
             Assertions.assertEquals(tr.lhsTargetType, expectLhsType);
             Assertions.assertEquals(tr.rhsTargetType, expectRhsType);
+        }
+    }
+
+    @Test
+    public void testDecimalOverflowReduceScale() throws Exception {
+        ConnectContext session = new ConnectContext();
+        try (ConnectContext.ScopeGuard ignored = session.bindScope()) {
+            ScalarType value = dec(128, 38, 18);
+            ScalarType highScale = dec(128, 38, 30);
+            ArithmeticExpr.Operator multiply = ArithmeticExpr.Operator.MULTIPLY;
+            String reduceScale = "decimal_overflow_reduce_scale";
+            session.getGlobalStateMgr().getVariableMgr().setSystemVariable(session.getSessionVariable(),
+                    new SystemVariable(reduceScale, new StringLiteral("true")), true);
+            // Function signature inference is independent of the session scale-reduction setting.
+            Assertions.assertEquals(dec(128, 38, 36),
+                    ArithmeticExpr.getReturnTypeOfDecimal(multiply, value, value).returnType);
+
+            Assertions.assertEquals(value,
+                    ArithmeticExpr.getReturnTypeOfDecimal(multiply, value, value, true).returnType);
+            Assertions.assertEquals(highScale,
+                    ArithmeticExpr.getReturnTypeOfDecimal(multiply, value, highScale, true).returnType);
+            Assertions.assertEquals(dec(128, 38, 12), ArithmeticExpr.getReturnTypeOfDecimal(
+                    multiply, dec(128, 38, 8), dec(128, 38, 8), true).returnType);
+            Assertions.assertEquals(dec(128, 38, 5), ArithmeticExpr.getReturnTypeOfDecimal(
+                    multiply, dec(128, 38, 2), dec(128, 38, 3), true).returnType);
+            Assertions.assertEquals(highScale, ArithmeticExpr.getReturnTypeOfDecimal(
+                    ArithmeticExpr.Operator.DIVIDE, highScale, highScale, true).returnType);
+
+            session.getSessionVariable().setDecimalOverflowToDouble(true);
+            for (ScalarType rhs : new ScalarType[] {value, highScale}) {
+                SemanticException error = Assertions.assertThrows(SemanticException.class,
+                        () -> ArithmeticExpr.getReturnTypeOfDecimal(multiply, value, rhs, true));
+                Assertions.assertTrue(error.getMessage().contains(reduceScale));
+                Assertions.assertTrue(error.getMessage().contains("decimal_overflow_to_double"));
+            }
+            ScalarType exact = dec(64, 18, 8);
+            Assertions.assertEquals(dec(128, 36, 16),
+                    ArithmeticExpr.getReturnTypeOfDecimal(multiply, exact, exact, true).returnType);
+            Assertions.assertEquals(value, ArithmeticExpr.getReturnTypeOfDecimal(
+                    ArithmeticExpr.Operator.ADD, value, value, true).returnType);
         }
     }
 

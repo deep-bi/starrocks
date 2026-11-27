@@ -414,7 +414,10 @@ public class QueryTransformer {
         List<LogicalWindowOperator> logicalWindowOperators =
                 WindowTransformer.reorderWindowOperator(windowOperators, columnRefFactory, subOpt);
         for (LogicalWindowOperator logicalWindowOperator : logicalWindowOperators) {
-            subOpt = subOpt.withNewRoot(logicalWindowOperator);
+            subOpt = session.getSessionVariable().isDecimalOverflowReduceScale()
+                    ? DecimalAggregateRewriter.rewrite(subOpt, logicalWindowOperator, logicalWindowOperator.getWindowCall(),
+                            subOpt.getExpressionMapping(), columnRefFactory)
+                    : subOpt.withNewRoot(logicalWindowOperator);
         }
 
         return subOpt;
@@ -684,9 +687,13 @@ public class QueryTransformer {
             subOpt = new OptExprBuilder(repeatOperator, Lists.newArrayList(subOpt), groupingTranslations);
         }
 
-        return new OptExprBuilder(
-                new LogicalAggregationOperator(AggType.GLOBAL, groupByColumnRefs, aggregationsMap),
-                Lists.newArrayList(subOpt), groupingTranslations);
+        LogicalAggregationOperator aggregation =
+                new LogicalAggregationOperator(AggType.GLOBAL, groupByColumnRefs, aggregationsMap);
+        if (session.getSessionVariable().isDecimalOverflowReduceScale()) {
+            return DecimalAggregateRewriter.rewrite(subOpt, aggregation, aggregationsMap, groupingTranslations,
+                    columnRefFactory);
+        }
+        return new OptExprBuilder(aggregation, Lists.newArrayList(subOpt), groupingTranslations);
     }
 
     private Expr replaceExprBottomUp(Expr root, Expr pattern, Expr replace) {

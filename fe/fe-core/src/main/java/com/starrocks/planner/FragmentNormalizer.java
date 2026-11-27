@@ -344,6 +344,11 @@ public class FragmentNormalizer {
             // are evaluated against RuntimeState::timezone, so two sessions that only differ in time_zone
             // must not reuse each other's per-tablet results.
             digest.update(getNormalizedTimeZone().getBytes(StandardCharsets.UTF_8));
+            byte decimalArithmetic = execPlan.getConnectContext().getSessionVariable().getDecimalArithmeticCacheKey();
+            if (decimalArithmetic != 0) {
+                // Decimal arithmetic with identical plan types can produce a different value, NULL, or an error.
+                digest.update(decimalArithmetic);
+            }
 
             List<SlotId> slotIds = cachePointNode.getOutputSlotIds(execPlan.getDescTbl());
             List<Integer> remappedSlotIds = remapSlotIds(slotIds);

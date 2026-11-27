@@ -34,6 +34,7 @@
 
 package com.starrocks.analysis;
 
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
@@ -45,6 +46,7 @@ import com.starrocks.catalog.ScalarType;
 import com.starrocks.catalog.Type;
 import com.starrocks.common.AnalysisException;
 import com.starrocks.qe.ConnectContext;
+import com.starrocks.sql.analyzer.ExecutableSql;
 import com.starrocks.sql.analyzer.SemanticException;
 import com.starrocks.sql.ast.AstVisitor;
 import com.starrocks.sql.parser.NodePosition;
@@ -82,6 +84,22 @@ public class ArithmeticExpr extends Expr {
             .add(Operator.INT_DIVIDE.name)
             .build();
     private final Operator op;
+    private boolean unaryMinus;
+
+    public boolean allowsDecimalScaleReduction() {
+        return !isStoredExpression() && !unaryMinus;
+    }
+
+    public boolean isUnaryMinus() {
+        return unaryMinus;
+    }
+
+    // Negation uses multiplication internally, but it has no two-operand scale to reduce.
+    public static ArithmeticExpr unaryMinus(Expr child, NodePosition pos) {
+        ArithmeticExpr expr = new ArithmeticExpr(Operator.MULTIPLY, new IntLiteral(-1), child, pos);
+        expr.unaryMinus = true;
+        return expr;
+    }
 
     public enum OperatorPosition {
         BINARY_INFIX,
@@ -111,6 +129,7 @@ public class ArithmeticExpr extends Expr {
     protected ArithmeticExpr(ArithmeticExpr other) {
         super(other);
         this.op = other.op;
+        this.unaryMinus = other.unaryMinus;
     }
 
     public static void initBuiltins(FunctionSet functionSet) {
@@ -185,9 +204,10 @@ public class ArithmeticExpr extends Expr {
     // cast float32 into decimal64(18,6).
     // cast float64 into decimal128(38,9).
     // other types, throw an error to indicates an explicit cast is required
-    private static Type nonDecimalToDecimal(Type type) {
-        Preconditions.checkState(!type.isDecimalV3(), "Type of rhs may not be DecimalV3");
-        if (type.isLargeIntType()) {
+    private static ScalarType decimalOperandType(Type type) {
+        if (type.isDecimalV3()) {
+            return (ScalarType) type;
+        } else if (type.isLargeIntType()) {
             return Type.DECIMAL128_INT;
         } else if (type.isBigint()) {
             return Type.DECIMAL64_INT;
@@ -204,28 +224,38 @@ public class ArithmeticExpr extends Expr {
         }
     }
 
-    // For decimal addition, to avoid overflow, we adopt this scaling strategy:
-    // as much as possible to ensure correctness
-    // result precision is maximum integer part width + maximum fractional part width + 1
-    // This can be fully guaranteed correctness in case of sufficient precision
+    // Precision needed for either sign, including the carry digit, before applying the type limit.
+    private static int getAddSubPrecision(ScalarType lhs, ScalarType rhs) {
+        int integerDigits = Math.max(lhs.getPrecision() - lhs.getScalarScale(), rhs.getPrecision() - rhs.getScalarScale());
+        return integerDigits + Math.max(lhs.getScalarScale(), rhs.getScalarScale()) + 1;
+    }
+
+    public static boolean canOverflowAddSub(ArithmeticExpr expr) {
+        // The resolved function arguments already have the result precision. Use the original operands.
+        Type left = expr.getChild(0).getType();
+        Type right = expr.getChild(1).getType();
+        if (left.isBigint() || right.isBigint()) {
+            // BIGINT is promoted as DECIMAL(18,0), but its extrema can overflow a 19-digit sum
+            // or difference with a decimal that has 18 integer digits.
+            Type decimal = left.isBigint() ? right : left;
+            if (decimal.getPrecision() - decimal.getDecimalDigits() == 18) {
+                return true;
+            }
+        }
+        return expr.getType().getPrecision() == 38 &&
+                getAddSubPrecision(decimalOperandType(left), decimalOperandType(right)) > 38;
+    }
+
     public static void getAddSubReturnTypeOfDecimal(TypeTriple triple, ScalarType lhsType, ScalarType rhsType) {
-        final int lhsPrecision = lhsType.getPrecision();
-        final int rhsPrecision = rhsType.getPrecision();
         final int lhsScale = lhsType.getScalarScale();
         final int rhsScale = rhsType.getScalarScale();
-
         int maxRetPrecision = 38;
         // TODO(stephen): support auto scale up decimal precision
         if (triple.lhsTargetType.isDecimal256() || triple.rhsTargetType.isDecimal256()) {
             maxRetPrecision = 76;
         }
-        // decimal(p1, s1) + decimal(p2, s2)
-        // result type = decimal(max(p1 - s1, p2 - s2) + max(s1, s2) + 1, max(s1, s2))
-        int maxIntLength = Math.max(lhsPrecision - lhsScale, rhsPrecision - rhsScale);
-        int retPrecision = maxIntLength + Math.max(lhsScale, rhsScale) + 1;
+        int retPrecision = Math.min(getAddSubPrecision(lhsType, rhsType), maxRetPrecision);
         int retScale = Math.max(lhsScale, rhsScale);
-        // precision
-        retPrecision = Math.min(retPrecision, maxRetPrecision);
         PrimitiveType decimalType = PrimitiveType.getDecimalPrimitiveType(retPrecision);
         decimalType = PrimitiveType.getWiderDecimalV3Type(decimalType, lhsType.getPrimitiveType());
         decimalType = PrimitiveType.getWiderDecimalV3Type(decimalType, rhsType.getPrimitiveType());
@@ -237,6 +267,19 @@ public class ArithmeticExpr extends Expr {
 
     public static TypeTriple getReturnTypeOfDecimal(Operator op, ScalarType lhsType, ScalarType rhsType)
             throws SemanticException {
+        return getReturnTypeOfDecimal(op, lhsType, rhsType, false);
+    }
+
+    public static final class DecimalOverflowModeConflictException extends SemanticException {
+        private DecimalOverflowModeConflictException() {
+            super("decimal_overflow_reduce_scale and decimal_overflow_to_double " +
+                    "cannot both be enabled for this multiplication");
+        }
+    }
+
+    @VisibleForTesting
+    public static TypeTriple getReturnTypeOfDecimal(Operator op, ScalarType lhsType, ScalarType rhsType,
+                                                    boolean reduceScale) {
         Preconditions.checkState(lhsType.isDecimalV3() && rhsType.isDecimalV3(),
                 "Types of lhs and rhs must be DecimalV3");
         final PrimitiveType lhsPtype = lhsType.getPrimitiveType();
@@ -293,9 +336,16 @@ public class ArithmeticExpr extends Expr {
                     result.lhsTargetType = ScalarType.createDecimalV3Type(commonPtype, lhsPrecision, lhsScale);
                     result.rhsTargetType = ScalarType.createDecimalV3Type(commonPtype, rhsPrecision, rhsScale);
                     return result;
-                } else if (returnScale <= maxDecimalPrecision) {
-                    ConnectContext connectContext = ConnectContext.get();
-                    if (connectContext != null && connectContext.getSessionVariable().isDecimalOverflowToDouble()) {
+                }
+                boolean overflowToDouble = ConnectContext.getSessionVariableOrDefault().isDecimalOverflowToDouble();
+                if (reduceScale && defaultMaxDecimalType == PrimitiveType.DECIMAL128) {
+                    if (overflowToDouble) {
+                        throw new DecimalOverflowModeConflictException();
+                    }
+                    returnScale = Math.min(returnScale, Math.max(12, Math.max(lhsScale, rhsScale)));
+                }
+                if (returnScale <= maxDecimalPrecision) {
+                    if (overflowToDouble) {
                         // Convert to double when precision overflow and session variable is enabled
                         result.returnType = Type.DOUBLE;
                         result.lhsTargetType = Type.DOUBLE;
@@ -343,7 +393,8 @@ public class ArithmeticExpr extends Expr {
                 result.lhsTargetType = ScalarType.createDecimalV3Type(widerType, maxPrecision, lhsScale);
                 result.rhsTargetType = ScalarType.createDecimalV3Type(widerType, maxPrecision, rhsScale);
                 int adjustedScale = returnScale + rhsScale;
-                if (adjustedScale > maxPrecision) {
+                if (adjustedScale > maxPrecision && !(reduceScale && op == Operator.DIVIDE &&
+                        widerType == PrimitiveType.DECIMAL128)) {
                     throw new SemanticException(
                             String.format(
                                     "Dividend fails to adjust scale to %d that exceeds maximum value(%d)",
@@ -370,19 +421,9 @@ public class ArithmeticExpr extends Expr {
     }
 
     private TypeTriple rewriteDecimalDecimalOperation() throws AnalysisException {
-        final Type lhsOriginType = getChild(0).type;
-        final Type rhsOriginType = getChild(1).type;
-
-        Type lhsTargetType = lhsOriginType;
-        Type rhsTargetType = rhsOriginType;
-
-        if (!lhsTargetType.isDecimalV3()) {
-            lhsTargetType = nonDecimalToDecimal(lhsTargetType);
-        }
-        if (!rhsTargetType.isDecimalV3()) {
-            rhsTargetType = nonDecimalToDecimal(rhsTargetType);
-        }
-        return getReturnTypeOfDecimal(op, (ScalarType) lhsTargetType, (ScalarType) rhsTargetType);
+        return getReturnTypeOfDecimal(op, decimalOperandType(getChild(0).type), decimalOperandType(getChild(1).type),
+                allowsDecimalScaleReduction() &&
+                        ConnectContext.getSessionVariableOrDefault().isDecimalOverflowReduceScale());
     }
 
     private TypeTriple rewriteDecimalFloatingPointOperation() throws AnalysisException {
@@ -436,6 +477,10 @@ public class ArithmeticExpr extends Expr {
 
     @Override
     public String toSqlImpl() {
+        String unaryMinusSql = ExecutableSql.formatUnaryMinus(this);
+        if (unaryMinusSql != null) {
+            return unaryMinusSql;
+        }
         if (children.size() == 1) {
             return op.toString() + " " + getChild(0).toSql();
         } else {

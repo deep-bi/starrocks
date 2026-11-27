@@ -1,0 +1,52 @@
+-- name: test_decimal_overflow_reduce_scale_sync_predicate @native
+SET sql_mode = '';
+-- result:
+-- !result
+CREATE TABLE t(k INT,a DECIMAL(38,18),b DECIMAL(38,18),n INT) DUPLICATE KEY(k)
+DISTRIBUTED BY HASH(k) BUCKETS 1 PROPERTIES ('replication_num'='1');
+-- result:
+-- !result
+INSERT INTO t VALUES (0,50,2,100),(3,1000,50.25,3);
+-- result:
+-- !result
+SET decimal_overflow_reduce_scale = true;
+-- result:
+-- !result
+CREATE MATERIALIZED VIEW filt AS SELECT k,SUM(n) FROM t WHERE a/b > 10 GROUP BY k;
+-- result:
+-- !result
+function: wait_materialized_view_finish()
+-- result:
+None
+-- !result
+INSERT INTO t VALUES (1,1000,50.25,7),(4,50,2,40);
+-- result:
+-- !result
+SET decimal_overflow_reduce_scale = false;
+-- result:
+-- !result
+INSERT INTO t VALUES (2,1000,50.25,9),(5,50,2,50);
+-- result:
+-- !result
+function: print_hit_materialized_view("SELECT k,SUM(n) FROM t WHERE a/b > 10 GROUP BY k", "filt")
+-- result:
+True
+-- !result
+SELECT k,SUM(n) FROM t WHERE a/b > 10 GROUP BY k ORDER BY k;
+-- result:
+0	100
+4	40
+5	50
+-- !result
+SET enable_materialized_view_rewrite = false;
+-- result:
+-- !result
+SET enable_sync_materialized_view_rewrite = false;
+-- result:
+-- !result
+SELECT k,SUM(n) FROM t WHERE a/b > 10 GROUP BY k ORDER BY k;
+-- result:
+0	100
+4	40
+5	50
+-- !result

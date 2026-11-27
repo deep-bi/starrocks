@@ -21,8 +21,10 @@ import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
 import com.google.common.collect.Range;
 import com.google.common.collect.Sets;
+import com.starrocks.analysis.ArithmeticExpr;
 import com.starrocks.analysis.Expr;
 import com.starrocks.analysis.ExprSubstitutionMap;
+import com.starrocks.analysis.FunctionCallExpr;
 import com.starrocks.analysis.LiteralExpr;
 import com.starrocks.analysis.NullLiteral;
 import com.starrocks.analysis.SlotRef;
@@ -36,7 +38,9 @@ import com.starrocks.catalog.Partition;
 import com.starrocks.catalog.PartitionInfo;
 import com.starrocks.catalog.PartitionKey;
 import com.starrocks.catalog.RangePartitionInfo;
+import com.starrocks.catalog.SqlFunction;
 import com.starrocks.catalog.Table;
+import com.starrocks.catalog.Type;
 import com.starrocks.catalog.system.information.InfoSchemaDb;
 import com.starrocks.catalog.system.information.PartitionsMetaSystemTable;
 import com.starrocks.common.Pair;
@@ -44,10 +48,12 @@ import com.starrocks.planner.PartitionColumnFilter;
 import com.starrocks.planner.PartitionPruner;
 import com.starrocks.planner.RangePartitionPruner;
 import com.starrocks.qe.ConnectContext;
+import com.starrocks.qe.SessionVariable;
 import com.starrocks.qe.SimpleExecutor;
 import com.starrocks.qe.SqlModeHelper;
 import com.starrocks.server.GlobalStateMgr;
 import com.starrocks.sql.analyzer.AnalyzeState;
+import com.starrocks.sql.analyzer.ExecutableSql;
 import com.starrocks.sql.analyzer.ExpressionAnalyzer;
 import com.starrocks.sql.analyzer.Field;
 import com.starrocks.sql.analyzer.MaterializedViewAnalyzer;
@@ -71,6 +77,7 @@ import com.starrocks.sql.optimizer.operator.scalar.ScalarOperator;
 import com.starrocks.sql.optimizer.operator.scalar.ScalarOperatorVisitor;
 import com.starrocks.sql.optimizer.rewrite.ReplaceColumnRefRewriter;
 import com.starrocks.sql.optimizer.rewrite.ScalarOperatorRewriter;
+import com.starrocks.sql.optimizer.transformer.DecimalArithmeticLowering;
 import com.starrocks.sql.optimizer.transformer.ExpressionMapping;
 import com.starrocks.sql.optimizer.transformer.SqlToScalarOperatorTranslator;
 import com.starrocks.sql.parser.SqlParser;
@@ -94,6 +101,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.function.Consumer;
 import java.util.function.Function;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
 import static com.starrocks.sql.ast.PartitionValue.STARROCKS_DEFAULT_PARTITION_VALUE;
@@ -204,7 +212,7 @@ public class PartitionSelector {
             partitionByExprMap = MaterializedViewAnalyzer.getMVPartitionByExprToAdjustMap(tableName,
                     (MaterializedView) olapTable);
         }
-        whereExpr = MaterializedViewAnalyzer.adjustWhereExprIfNeeded(partitionByExprMap, whereExpr, scope, context);
+        Expr predicate = MaterializedViewAnalyzer.adjustWhereExprIfNeeded(partitionByExprMap, whereExpr, scope, context);
 
         ColumnRefFactory columnRefFactory = new ColumnRefFactory();
         Map<Column, ColumnRefOperator> columnRefOperatorMap = Maps.newHashMap();
@@ -229,6 +237,8 @@ public class PartitionSelector {
         // expr to column index map
         Map<Expr, Integer> exprToColumnIdxes = Maps.newHashMap();
         Map<ScalarOperator, ColumnRefOperator> gcExprToColRefMap = Maps.newHashMap();
+        boolean queryDecimalArithmetic = partitionInfo.isListPartition() &&
+                context.getSessionVariable().isDecimalOverflowReduceScale() && usesDecimalOverflowMode(predicate);
         for (Column column : olapTable.getBaseSchema()) {
             if (!partitionColNames.contains(column.getName())) {
                 continue;
@@ -236,8 +246,11 @@ public class PartitionSelector {
             SlotRef slotRef = new SlotRef(tableName, column.getName());
             slotRef.setType(column.getType());
             Expr gcExpr = column.getGeneratedColumnExpr(olapTable.getIdToColumn());
-            if (gcExpr == null) {
+            // Query-side arithmetic can force a metadata lookup even when the stored expression folds on the FE.
+            if (gcExpr == null || queryDecimalArithmetic) {
                 exprToColumnIdxes.put(slotRef, partitionColIdxMap.get(column));
+            }
+            if (gcExpr == null) {
                 continue;
             }
             exprToColumnIdxes.put(gcExpr, partitionColIdxMap.get(column));
@@ -251,7 +264,7 @@ public class PartitionSelector {
         // substitute generated column expr if whereExpr is a mv which contains iceberg transform expr.
         // translate whereExpr to scalarOperator and replace whereExpr's generatedColumnExpr to partition slotRef.
         ScalarOperator scalarOperator =
-                SqlToScalarOperatorTranslator.translate(whereExpr, expressionMapping, Lists.newArrayList(),
+                SqlToScalarOperatorTranslator.translate(predicate, expressionMapping, Lists.newArrayList(),
                         columnRefFactory, context, null, null, null, false);
 
         List<String> partitionDefinedQueries = partitionCols.stream()
@@ -260,7 +273,7 @@ public class PartitionSelector {
         String partitionExpressions = Joiner.on("/").join(partitionDefinedQueries);
         if (scalarOperator == null) {
             throw new SemanticException(String.format("Failed to parse the partition condition:%s, please use " +
-                            "table's partition expressions directly: %s", whereExpr.toSql(), partitionExpressions));
+                            "table's partition expressions directly: %s", predicate.toSql(), partitionExpressions));
         }
         // validate scalar operator
         validateRetentionConditionPredicate(olapTable, scalarOperator);
@@ -280,7 +293,7 @@ public class PartitionSelector {
         scalarOperator.getColumnRefs(usedPartitionColumnRefs);
         if (CollectionUtils.isEmpty(usedPartitionColumnRefs)) {
             throw new SemanticException(String.format("No partition columns are used in the partition condition: %s, " +
-                    "please use table's partition expressions directly: %s" + whereExpr.toSql(), partitionExpressions));
+                    "please use table's partition expressions directly: %s" + predicate.toSql(), partitionExpressions));
         }
         // check if all used columns are partition columns
         for (ColumnRefOperator colRef : usedPartitionColumnRefs) {
@@ -298,13 +311,17 @@ public class PartitionSelector {
                     columnRefOperatorMap, isDropPartitionCondition, inputCells);
         } else if (partitionInfo.isListPartition()) {
             ListPartitionInfo listPartitionInfo = (ListPartitionInfo) partitionInfo;
-            selectedPartitionIds = getListPartitionIdsByExpr(tableName.getDb(), olapTable, listPartitionInfo,
-                    whereExpr, scalarOperator, exprToColumnIdxes, isDropPartitionCondition, inputCells);
+            Function<Expr, ScalarOperator> resolve = queryDecimalArithmetic
+                    ? expr -> SqlToScalarOperatorTranslator.translate(expr, expressionMapping, columnRefFactory) : null;
+            selectedPartitionIds = getListPartitionIdsByExpr(olapTable, listPartitionInfo, scalarOperator,
+                    isDropPartitionCondition, inputCells,
+                    internal -> configurePartitionQuery(internal, context, predicate, queryDecimalArithmetic),
+                    () -> buildPartitionSelectQuery(tableName.getDb(), olapTable, predicate, exprToColumnIdxes, resolve));
         } else {
             throw new SemanticException("Unsupported partition type: " + partitionInfo.getType());
         }
         if (selectedPartitionIds == null) {
-            throw new SemanticException("Failed to get partitions with partition condition: " + whereExpr.toSql());
+            throw new SemanticException("Failed to get partitions with partition condition: " + predicate.toSql());
         }
         return selectedPartitionIds;
     }
@@ -610,13 +627,10 @@ public class PartitionSelector {
         }
     }
 
-    private static List<Long> getListPartitionIdsByExpr(String dbName, OlapTable olapTable,
-                                                        ListPartitionInfo listPartitionInfo,
-                                                        Expr whereExpr,
-                                                        ScalarOperator scalarOperator,
-                                                        Map<Expr, Integer> exprToColumnIdxes,
-                                                        boolean isDropPartitionCondition,
-                                                        Map<Long, PCell> inputCells) {
+    private static List<Long> getListPartitionIdsByExpr(OlapTable olapTable, ListPartitionInfo listPartitionInfo,
+                                                        ScalarOperator scalarOperator, boolean isDropPartitionCondition,
+                                                        Map<Long, PCell> inputCells, Consumer<ConnectContext> configureQuery,
+                                                        Supplier<String> buildQuery) {
 
         List<Long> result = null;
         // try to prune partitions by FE's constant evaluation ability
@@ -633,7 +647,7 @@ public class PartitionSelector {
 
         String sql = "";
         try {
-            sql = buildPartitionSelectQuery(dbName, olapTable, whereExpr, exprToColumnIdxes);
+            sql = buildQuery.get();
         } catch (Exception e) {
             LOG.warn("Failed to build partition select query: " + e.getMessage());
             throw new SemanticException("Build partition query from information_schema.partition_meta failed: "
@@ -645,7 +659,7 @@ public class PartitionSelector {
 
         try {
             // TODO: support to prune extra inputCells.
-            return getPartitionsByQuerying(olapTable, listPartitionInfo, sql);
+            return getPartitionsByQuerying(olapTable, listPartitionInfo, sql, configureQuery);
         } catch (Exception e) {
             LOG.warn("Get partitions from information_schema.partition_meta querying failed: " + e.getMessage());
             throw new SemanticException("Get partitions from information_schema.partition_meta querying failed:\n " + sql);
@@ -856,7 +870,8 @@ public class PartitionSelector {
     private static String buildPartitionSelectQuery(String dbName,
                                                     OlapTable olapTable,
                                                     Expr whereExpr,
-                                                    Map<Expr, Integer> exprToColumnIdxes) {
+                                                    Map<Expr, Integer> exprToColumnIdxes,
+                                                    Function<Expr, ScalarOperator> resolve) {
         Database infoSchemaDb = GlobalStateMgr.getCurrentState().getLocalMetastore().getDb(InfoSchemaDb.DATABASE_NAME);
         if (infoSchemaDb == null) {
             return null;
@@ -865,17 +880,56 @@ public class PartitionSelector {
         if (partitionsMetaTbl == null) {
             return null;
         }
-        ExprSubstitutionMap aliasMap = new ExprSubstitutionMap(false);
+        // Stored and query arithmetic can have identical syntax but different scalar operators.
+        ExprSubstitutionMap aliasMap = resolve == null ? new ExprSubstitutionMap(false) :
+                new ExprSubstitutionMap(false, (query, stored) -> query.equals(stored) &&
+                        (query instanceof SlotRef || resolve.apply(query).equals(resolve.apply(stored))));
         List<Column> partitionCols = olapTable.getPartitionColumns();
         for (Map.Entry<Expr, Integer> e : exprToColumnIdxes.entrySet()) {
             Expr alias = buildJsonQuery(partitionCols, e.getValue());
             aliasMap.put(e.getKey(), alias);
         }
         Expr newExpr = whereExpr.substitute(aliasMap);
-        String newWhereSql = newExpr.toSql();
+        String newWhereSql = resolve == null ? newExpr.toSql() : ExecutableSql.formatPreservingUnaryMinus(newExpr, true);
         String sql = String.format(PARTITIONS_META_TEMPLATE, dbName, olapTable.getName(), newWhereSql);
         LOG.info("Get partition ids by sql: {}", sql);
         return sql;
+    }
+
+    // SQL function bodies are analyzed separately from the arguments in the predicate tree.
+    private static boolean usesDecimalOverflowMode(Expr predicate) {
+        return predicate.contains(node -> {
+            if (node instanceof FunctionCallExpr call && call.getFn() instanceof SqlFunction udf) {
+                return usesDecimalOverflowMode(udf.getAnalyzeExpr());
+            }
+            if (!(node instanceof ArithmeticExpr arithmetic)) {
+                return false;
+            }
+            // Reprinting decimal negation as multiplication would subject it to the overflow flags.
+            if (arithmetic.isUnaryMinus()) {
+                Type operand = arithmetic.getChild(1).getType();
+                return operand.isDecimalV3() && !operand.isDecimal256() &&
+                        operand.getPrecision() + Type.DECIMAL32_INT.getPrecision() > 38;
+            }
+            return arithmetic.getType().isDecimalV3() &&
+                    DecimalArithmeticLowering.isEligible(arithmetic, arithmetic.getFn());
+        });
+    }
+
+    private static void configurePartitionQuery(ConnectContext internal, ConnectContext caller,
+                                                Expr predicate, boolean queryDecimalArithmetic) {
+        SessionVariable source = caller.getSessionVariable();
+        SessionVariable target = internal.getSessionVariable();
+        target.setDecimalOverflowReduceScale(source.isDecimalOverflowReduceScale());
+        if (queryDecimalArithmetic) {
+            target.setDecimalOverflowToDouble(source.isDecimalOverflowToDouble());
+            long mask = SqlModeHelper.MODE_ERROR_IF_OVERFLOW | SqlModeHelper.MODE_ERROR_FOR_DIVISION_BY_ZERO;
+            target.setSqlMode((target.getSqlMode() & ~mask) | (source.getSqlMode() & mask));
+            // A query-side SQL function can survive substitution when its stored arithmetic differs.
+            if (predicate.contains(node -> node instanceof FunctionCallExpr call && call.getFn() instanceof SqlFunction)) {
+                internal.setDatabase(caller.getDatabase());
+            }
+        }
     }
 
     /**
@@ -883,8 +937,8 @@ public class PartitionSelector {
      */
     private static List<Long> getPartitionsByQuerying(OlapTable olapTable,
                                                       ListPartitionInfo listPartitionInfo,
-                                                      String sql) {
-        List<TResultBatch> batch = SimpleExecutor.getRepoExecutor().executeDQL(sql);
+                                                      String sql, Consumer<ConnectContext> configureQuery) {
+        List<TResultBatch> batch = SimpleExecutor.getRepoExecutor().executeDQL(sql, configureQuery);
         List<String> partitionNames = deserializeLookupResult(batch);
         // multi items in the single partition is not supported yet since `JSON_QUERY_TEMPLATE` is constructed the first element.
         Set<Long> excludedPartitionIds = Sets.newHashSet();

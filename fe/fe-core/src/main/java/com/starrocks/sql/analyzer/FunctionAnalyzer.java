@@ -19,6 +19,7 @@ import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
 import com.google.common.collect.Sets;
 import com.google.re2j.Pattern;
+import com.starrocks.analysis.ArithmeticExpr;
 import com.starrocks.analysis.CastExpr;
 import com.starrocks.analysis.Expr;
 import com.starrocks.analysis.FunctionCallExpr;
@@ -827,12 +828,17 @@ public class FunctionAnalyzer {
             }
 
             expr = SqlParser.parseExpression(fn.getSql(), context.getSessionVariable());
+            if (node.isStoredExpression()) {
+                expr.markStoredExpression();
+            }
             ExpressionAnalyzer.analyzeExpressionResolveSlot(expr, context, slotRef -> {
                 if (!argsMap.containsKey(slotRef.getColumnName())) {
                     throw new SemanticException("Cannot find argument %s in function args", slotRef.getColumnName());
                 }
                 slotRef.setType(argsMap.get(slotRef.getColumnName()));
             });
+        } catch (ArithmeticExpr.DecimalOverflowModeConflictException e) {
+            throw e;
         } catch (Exception e) {
             throw new SemanticException("Failed to parse view definition: " + fn.getSql());
         }
