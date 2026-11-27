@@ -14,17 +14,26 @@
 
 package com.starrocks.analysis;
 
+import com.starrocks.catalog.PrimitiveType;
+import com.starrocks.catalog.ScalarType;
 import com.starrocks.common.AnalysisException;
 import com.starrocks.qe.ConnectContext;
 import com.starrocks.qe.PrepareStmtContext;
+import com.starrocks.qe.SessionVariable;
+import com.starrocks.qe.SqlModeHelper;
 import com.starrocks.qe.StmtExecutor;
+import com.starrocks.sql.PrepareStmtPlanner;
+import com.starrocks.sql.analyzer.Analyzer;
+import com.starrocks.sql.analyzer.SemanticException;
 import com.starrocks.sql.ast.ExecuteStmt;
 import com.starrocks.sql.ast.PrepareStmt;
 import com.starrocks.sql.ast.QueryStatement;
 import com.starrocks.sql.ast.SelectRelation;
 import com.starrocks.sql.ast.StatementBase;
+import com.starrocks.sql.ast.SystemVariable;
 import com.starrocks.sql.common.StarRocksPlannerException;
 import com.starrocks.sql.parser.SqlParser;
+import com.starrocks.sql.plan.ExecPlan;
 import com.starrocks.utframe.StarRocksAssert;
 import com.starrocks.utframe.UtFrameUtils;
 import org.junit.jupiter.api.Assertions;
@@ -32,6 +41,7 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
 import java.util.HashSet;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -97,6 +107,47 @@ public class PreparedStmtTest{
         ctx.putPreparedStmt("stmt", new PrepareStmtContext(prepareStmt, ctx, null));
         Assertions.assertEquals(true, ctx.isQueryStmt(new ExecuteStmt("stmt", null)));
         Assertions.assertEquals(false, ctx.isQueryStmt(new ExecuteStmt("stmt1", null)));
+    }
+
+    @Test
+    public void testDecimalModeReplansPreparedPointQuery() throws Exception {
+        SessionVariable original = ctx.getSessionVariable();
+        ctx.setSessionVariable((SessionVariable) original.clone());
+        String name = "decimal_point";
+        try {
+            String big = "cast('60000000000000000000' as decimal(38,18))";
+            PrepareStmt prepare = (PrepareStmt) UtFrameUtils.parseStmtWithNewParser("prepare " + name +
+                    " from select cast(c1 as decimal(38,18)) * cast(c2 as decimal(38,18)), " +
+                    big + "+" + big + " from demo.prepare_stmt where c0 = ?", ctx);
+            ExecuteStmt execute = new ExecuteStmt(name, List.of(new StringLiteral("key")));
+            QueryStatement query = (QueryStatement) prepare.assignValues(execute.getParamsExpr());
+            Analyzer.analyze(query, ctx);
+            Assertions.assertTrue(query.isPointQuery());
+            PrepareStmtContext cached = new PrepareStmtContext(prepare, ctx, null);
+            ctx.putPreparedStmt(name, cached);
+            ExecPlan legacy = PrepareStmtPlanner.plan(execute, query, ctx);
+            Assertions.assertTrue(cached.isCached());
+            assertEquals(ScalarType.createDecimalV3Type(PrimitiveType.DECIMAL128, 38, 36),
+                    legacy.getOutputExprs().get(0).getType());
+
+            SessionVariable session = ctx.getSessionVariable();
+            ctx.getGlobalStateMgr().getVariableMgr().setSystemVariable(session,
+                    new SystemVariable("decimal_overflow_reduce_scale", new StringLiteral("true")), true);
+            ExecPlan reduced = PrepareStmtPlanner.plan(execute, query, ctx);
+            assertEquals(ScalarType.createDecimalV3Type(PrimitiveType.DECIMAL128, 38, 18),
+                    reduced.getOutputExprs().get(0).getType());
+
+            session.setSqlMode(session.getSqlMode() | SqlModeHelper.MODE_ERROR_IF_OVERFLOW);
+            ExecPlan strict = PrepareStmtPlanner.plan(execute, query, ctx);
+            Assertions.assertNotSame(reduced, strict);
+            session.setDecimalOverflowToDouble(true);
+            SemanticException conflict = assertThrows(SemanticException.class,
+                    () -> PrepareStmtPlanner.plan(execute, query, ctx));
+            Assertions.assertTrue(conflict.getMessage().contains(SessionVariable.DECIMAL_OVERFLOW_TO_DOUBLE));
+        } finally {
+            ctx.removePreparedStmt(name);
+            ctx.setSessionVariable(original);
+        }
     }
 
     @Test

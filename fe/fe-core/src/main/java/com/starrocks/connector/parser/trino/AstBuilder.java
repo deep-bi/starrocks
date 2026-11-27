@@ -1104,7 +1104,7 @@ public class AstBuilder extends AstVisitor<ParseNode, ParseTreeContext> {
     protected ParseNode visitArithmeticUnary(ArithmeticUnaryExpression node, ParseTreeContext context) {
         Expr child = (Expr) visit(node.getValue(), context);
         if (node.getSign() == ArithmeticUnaryExpression.Sign.MINUS) {
-            return new ArithmeticExpr(ArithmeticExpr.Operator.MULTIPLY, new IntLiteral(-1), child);
+            return ArithmeticExpr.unaryMinus(child, NodePosition.ZERO);
         } else  {
             return child;
         }

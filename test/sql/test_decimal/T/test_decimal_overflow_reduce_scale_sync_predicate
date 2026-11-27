@@ -1,0 +1,16 @@
+-- name: test_decimal_overflow_reduce_scale_sync_predicate @native
+SET sql_mode = '';
+CREATE TABLE t(k INT,a DECIMAL(38,18),b DECIMAL(38,18),n INT) DUPLICATE KEY(k)
+DISTRIBUTED BY HASH(k) BUCKETS 1 PROPERTIES ('replication_num'='1');
+INSERT INTO t VALUES (0,50,2,100),(3,1000,50.25,3);
+SET decimal_overflow_reduce_scale = true;
+CREATE MATERIALIZED VIEW filt AS SELECT k,SUM(n) FROM t WHERE a/b > 10 GROUP BY k;
+function: wait_materialized_view_finish()
+INSERT INTO t VALUES (1,1000,50.25,7),(4,50,2,40);
+SET decimal_overflow_reduce_scale = false;
+INSERT INTO t VALUES (2,1000,50.25,9),(5,50,2,50);
+function: print_hit_materialized_view("SELECT k,SUM(n) FROM t WHERE a/b > 10 GROUP BY k", "filt")
+SELECT k,SUM(n) FROM t WHERE a/b > 10 GROUP BY k ORDER BY k;
+SET enable_materialized_view_rewrite = false;
+SET enable_sync_materialized_view_rewrite = false;
+SELECT k,SUM(n) FROM t WHERE a/b > 10 GROUP BY k ORDER BY k;

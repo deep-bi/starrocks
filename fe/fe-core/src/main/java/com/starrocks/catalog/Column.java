@@ -56,6 +56,7 @@ import com.starrocks.qe.ConnectContext;
 import com.starrocks.sql.analyzer.AstToSQLBuilder;
 import com.starrocks.sql.ast.ColumnDef;
 import com.starrocks.sql.ast.IndexDef;
+import com.starrocks.sql.common.MetaUtils;
 import com.starrocks.thrift.TAggStateDesc;
 import com.starrocks.thrift.TColumn;
 import org.apache.commons.lang.StringEscapeUtils;
@@ -568,6 +569,9 @@ public class Column implements Writable, GsonPreProcessable, GsonPostProcessable
 
     public void setDefineExpr(Expr expr) {
         defineExpr = expr;
+        if (expr != null) {
+            expr.markStoredExpression();
+        }
     }
 
     public Expr getGeneratedColumnExpr(Map<ColumnId, Column> idToColumn) {
@@ -576,16 +580,12 @@ public class Column implements Writable, GsonPreProcessable, GsonPostProcessable
         }
         Expr expr = generatedColumnExpr.convertToColumnNameExpr(idToColumn).clone();
         expr.setType(type);
+        expr.markStoredExpression();
         return expr;
     }
 
     public Expr getGeneratedColumnExpr(List<Column> schema) {
-        if (generatedColumnExpr == null) {
-            return null;
-        }
-        Expr res = generatedColumnExpr.convertToColumnNameExpr(schema).clone();
-        res.setType(type);
-        return res;
+        return generatedColumnExpr == null ? null : getGeneratedColumnExpr(MetaUtils.buildIdToColumn(schema));
     }
 
     public void setGeneratedColumnExpr(ColumnIdExpr expr) {

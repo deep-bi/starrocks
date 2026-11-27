@@ -33,6 +33,7 @@ import org.junit.jupiter.api.Test;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
+import java.util.Set;
 
 public class DropPartitionWithExprListTest extends MVTestBase {
     private static String T1;
@@ -143,6 +144,57 @@ public class DropPartitionWithExprListTest extends MVTestBase {
             addListPartition(tableName, "p3", "beijing", "2024-01-02");
             addListPartition(tableName, "p4", "guangdong", "2024-01-02");
         }
+    }
+
+    private static final String RETAIN_SECOND_DAY =
+            "ALTER TABLE t5 SET (\"partition_retention_condition\" = \"dt >= '2024-01-02'\")";
+
+    private void withDatePartitions(boolean reduceScale, StarRocksAssert.ExceptionConsumer<OlapTable> test) {
+        starRocksAssert.withTable(T5, name -> {
+            withTablePartitions((String) name);
+            OlapTable table = (OlapTable) starRocksAssert.getTable("test", (String) name);
+            var session = connectContext.getSessionVariable();
+            boolean previous = session.isDecimalOverflowReduceScale();
+            try {
+                session.setDecimalOverflowReduceScale(reduceScale);
+                test.accept(table);
+            } finally {
+                session.setDecimalOverflowReduceScale(previous);
+            }
+        });
+    }
+
+    @Test
+    public void testDatePartitionDropWithDecimalReduceScale() {
+        withDatePartitions(true, table -> {
+            starRocksAssert.alterTable("ALTER TABLE t5 DROP PARTITIONS WHERE date_trunc('day', dt) = '2024-01-01'");
+            Assertions.assertEquals(Set.of("p3", "p4"), table.getVisiblePartitionNames());
+        });
+    }
+
+    @Test
+    public void testDatePartitionRetentionWithDecimalReduceScale() {
+        withDatePartitions(true, table -> {
+            starRocksAssert.alterTable(RETAIN_SECOND_DAY);
+            Assertions.assertEquals("dt >= '2024-01-02'", table.getTableProperty().getPartitionRetentionCondition());
+        });
+    }
+
+    @Test
+    public void testDatePartitionTtlWithGlobalDecimalReduceScale() {
+        withDatePartitions(false, table -> {
+            starRocksAssert.alterTable(RETAIN_SECOND_DAY);
+            var state = GlobalStateMgr.getCurrentState();
+            var defaults = state.getVariableMgr().getDefaultSessionVariable();
+            boolean previous = defaults.isDecimalOverflowReduceScale();
+            try {
+                defaults.setDecimalOverflowReduceScale(true);
+                state.getDynamicPartitionScheduler().runOnceForTest();
+                Assertions.assertEquals(Set.of("p3", "p4"), table.getVisiblePartitionNames());
+            } finally {
+                defaults.setDecimalOverflowReduceScale(previous);
+            }
+        });
     }
 
     private void withTablePartitionsV2(String tableName) {

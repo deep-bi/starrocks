@@ -19,6 +19,7 @@ import com.starrocks.alter.AlterJobMgr;
 import com.starrocks.catalog.Column;
 import com.starrocks.catalog.Database;
 import com.starrocks.catalog.MaterializedView;
+import com.starrocks.catalog.MvPlanContext;
 import com.starrocks.catalog.PartitionInfo;
 import com.starrocks.catalog.Table;
 import com.starrocks.catalog.Type;
@@ -26,14 +27,21 @@ import com.starrocks.common.Config;
 import com.starrocks.common.DdlException;
 import com.starrocks.common.Pair;
 import com.starrocks.common.util.PropertyAnalyzer;
+import com.starrocks.qe.SessionVariable;
 import com.starrocks.qe.ShowExecutor;
 import com.starrocks.qe.ShowResultSet;
 import com.starrocks.server.GlobalStateMgr;
 import com.starrocks.sql.ast.CreateMaterializedViewStatement;
+import com.starrocks.sql.ast.CreateMaterializedViewStmt;
+import com.starrocks.sql.ast.QueryStatement;
 import com.starrocks.sql.ast.ShowStmt;
+import com.starrocks.sql.optimizer.CachingMvPlanContextBuilder;
+import com.starrocks.sql.optimizer.MvPlanContextBuilder;
+import com.starrocks.sql.optimizer.rule.transformation.materialization.MvUtils;
 import com.starrocks.sql.plan.ConnectorPlanTestBase;
 import com.starrocks.utframe.StarRocksAssert;
 import com.starrocks.utframe.UtFrameUtils;
+import org.apache.commons.lang3.reflect.FieldUtils;
 import org.apache.hadoop.util.Lists;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Assertions;
@@ -87,6 +95,118 @@ public class MaterializedViewAnalyzerTest {
     @AfterAll
     public static void afterClass() {
         ConnectorPlanTestBase.dropAllCatalogs();
+    }
+
+    @Test
+    public void testSyncMvUsesStorageArithmeticWhenResolvingColumnDefinitions() {
+        SessionVariable variables = starRocksAssert.getCtx().getSessionVariable();
+        boolean reduceScale = variables.isDecimalOverflowReduceScale();
+        boolean toDouble = variables.isDecimalOverflowToDouble();
+        try {
+            variables.setDecimalOverflowReduceScale(true);
+            variables.setDecimalOverflowToDouble(true);
+            CreateMaterializedViewStmt statement = (CreateMaterializedViewStmt) analyzeSuccess(
+                    "CREATE MATERIALIZED VIEW mv_decimal_product AS SELECT v1, " +
+                            "CAST(v2 AS DECIMAL(38,18)) * CAST(v3 AS DECIMAL(38,18)) AS p FROM t0");
+            Assertions.assertEquals(Type.DOUBLE, statement.getMVColumnItemList().get(1).getDefineExpr().getType());
+            Assertions.assertTrue(variables.isDecimalOverflowReduceScale());
+        } finally {
+            variables.setDecimalOverflowReduceScale(reduceScale);
+            variables.setDecimalOverflowToDouble(toDouble);
+        }
+    }
+
+    @Test
+    public void testDecimalArithmeticInMvDefinitionPlans() throws Exception {
+        SessionVariable defaults = GlobalStateMgr.getCurrentState().getVariableMgr().getDefaultSessionVariable();
+        SessionVariable session = starRocksAssert.getCtx().getSessionVariable();
+        boolean globalReduceScale = defaults.isDecimalOverflowReduceScale();
+        boolean sessionReduceScale = session.isDecimalOverflowReduceScale();
+        boolean sessionToDouble = session.isDecimalOverflowToDouble();
+        try (var ignored = starRocksAssert.getCtx().bindScope()) {
+            session.setDecimalOverflowReduceScale(false);
+            session.setDecimalOverflowToDouble(false);
+            starRocksAssert.withMaterializedView("CREATE MATERIALIZED VIEW mv_decimal_plan " +
+                    "DISTRIBUTED BY HASH(v1) REFRESH DEFERRED MANUAL AS SELECT v1, " +
+                    "CAST(v2 AS DECIMAL(38,18)) * CAST(v3 AS DECIMAL(38,18)) AS product FROM t0", mvName -> {
+                        MaterializedView mv = (MaterializedView) starRocksAssert.getTable("test", (String) mvName);
+                        CachingMvPlanContextBuilder cache = CachingMvPlanContextBuilder.getInstance();
+                        defaults.setDecimalOverflowReduceScale(true);
+                        cache.evictMaterializedViewCache(mv);
+                        // The cache loader runs separately and inherits the global default.
+                        List<MvPlanContext> cached = cache.getOrLoadPlanContext(mv,
+                                session.getOptimizerExecuteTimeout());
+                        Assertions.assertEquals(1, cached.size());
+                        Assertions.assertEquals(mv.getColumn("product").getType(),
+                                cached.get(0).getOutputColumns().get(1).getType());
+
+                        // An uncached load must preserve both the caller's flags and stock DOUBLE planning.
+                        session.setDecimalOverflowReduceScale(true);
+                        session.setDecimalOverflowToDouble(true);
+                        List<MvPlanContext> direct = MvPlanContextBuilder.getPlanContext(mv, true);
+                        Assertions.assertEquals(Type.DOUBLE, direct.get(0).getOutputColumns().get(1).getType());
+                        Assertions.assertTrue(session.isDecimalOverflowReduceScale());
+                        Assertions.assertTrue(session.isDecimalOverflowToDouble());
+                    });
+        } finally {
+            defaults.setDecimalOverflowReduceScale(globalReduceScale);
+            session.setDecimalOverflowReduceScale(sessionReduceScale);
+            session.setDecimalOverflowToDouble(sessionToDouble);
+        }
+    }
+
+    @Test
+    public void testDecimalArithmeticInMvDefinitionAst() throws Exception {
+        SessionVariable session = starRocksAssert.getCtx().getSessionVariable();
+        boolean reduceScale = session.isDecimalOverflowReduceScale();
+        boolean toDouble = session.isDecimalOverflowToDouble();
+        try (var ignored = starRocksAssert.getCtx().bindScope()) {
+            session.setDecimalOverflowReduceScale(false);
+            session.setDecimalOverflowToDouble(true);
+            starRocksAssert.withMaterializedView("CREATE MATERIALIZED VIEW mv_decimal_ast " +
+                    "DISTRIBUTED BY HASH(v1) REFRESH DEFERRED MANUAL AS SELECT v1, " +
+                    "CAST(v2 AS DECIMAL(38,18)) * CAST(v3 AS DECIMAL(38,18)) AS product FROM t0", mvName -> {
+                        MaterializedView mv = (MaterializedView) starRocksAssert.getTable("test", (String) mvName);
+                        session.setDecimalOverflowReduceScale(true);
+                        FieldUtils.writeField(mv, "defineQueryParseNode", null, true);
+                        QueryStatement definition = (QueryStatement) mv.getDefineQueryParseNode();
+                        Assertions.assertNotNull(definition);
+                        Assertions.assertEquals(Type.DOUBLE,
+                                definition.getQueryRelation().getOutputExpression().get(1).getType());
+                        Assertions.assertTrue(session.isDecimalOverflowReduceScale());
+                        Assertions.assertTrue(session.isDecimalOverflowToDouble());
+                    });
+        } finally {
+            session.setDecimalOverflowReduceScale(reduceScale);
+            session.setDecimalOverflowToDouble(toDouble);
+        }
+    }
+
+    @Test
+    public void testDecimalNegationInMvTextMatchKeys() throws Exception {
+        SessionVariable session = starRocksAssert.getCtx().getSessionVariable();
+        boolean reduceScale = session.isDecimalOverflowReduceScale();
+        try (var ignored = starRocksAssert.getCtx().bindScope()) {
+            session.setDecimalOverflowReduceScale(false);
+            String query = "SELECT v1, -CAST(v2 AS DECIMAL(38,18)) AS amount FROM t0";
+            CachingMvPlanContextBuilder.AstKey readerKey = new CachingMvPlanContextBuilder.AstKey(
+                    MvUtils.getQueryAst(query, starRocksAssert.getCtx()));
+            starRocksAssert.withMaterializedView("CREATE MATERIALIZED VIEW mv_decimal_key " +
+                    "DISTRIBUTED BY HASH(v1) REFRESH DEFERRED MANUAL AS " + query, mvName -> {
+                        MaterializedView mv = (MaterializedView) starRocksAssert.getTable("test", (String) mvName);
+                        CachingMvPlanContextBuilder cache = CachingMvPlanContextBuilder.getInstance();
+                        cache.cacheMaterializedView(mv);
+                        Assertions.assertTrue(cache.getMvsByAst(readerKey).contains(mv));
+                        session.setDecimalOverflowReduceScale(true);
+                        FieldUtils.writeField(mv, "defineQueryParseNode", null, true);
+                        cache.cacheMaterializedView(mv);
+                        Assertions.assertTrue(cache.getMvsByAst(readerKey).contains(mv),
+                                "A flag-off reader must still match the rebuilt definition");
+                        Assertions.assertTrue(session.isDecimalOverflowReduceScale());
+                    });
+        } finally {
+            session.setDecimalOverflowReduceScale(reduceScale);
+        }
     }
 
     @Test

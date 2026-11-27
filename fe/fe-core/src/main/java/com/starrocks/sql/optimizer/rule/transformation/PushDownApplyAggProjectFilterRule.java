@@ -27,6 +27,7 @@ import com.starrocks.sql.optimizer.operator.logical.LogicalApplyOperator;
 import com.starrocks.sql.optimizer.operator.logical.LogicalFilterOperator;
 import com.starrocks.sql.optimizer.operator.logical.LogicalProjectOperator;
 import com.starrocks.sql.optimizer.operator.pattern.Pattern;
+import com.starrocks.sql.optimizer.operator.scalar.CastOperator;
 import com.starrocks.sql.optimizer.operator.scalar.ColumnRefOperator;
 import com.starrocks.sql.optimizer.operator.scalar.ScalarOperator;
 import com.starrocks.sql.optimizer.rule.RuleType;
@@ -71,14 +72,26 @@ public class PushDownApplyAggProjectFilterRule extends TransformationRule {
         super(RuleType.TF_PUSH_DOWN_APPLY_AGG, Pattern.create(OperatorType.LOGICAL_APPLY).addChildren(
                 Pattern.create(OperatorType.PATTERN_LEAF),
                 Pattern.create(OperatorType.LOGICAL_AGGR).addChildren(
-                        Pattern.create(OperatorType.LOGICAL_PROJECT).addChildren(
-                                Pattern.create(OperatorType.LOGICAL_FILTER, OperatorType.PATTERN_LEAF)))));
+                        Pattern.create(OperatorType.LOGICAL_PROJECT, OperatorType.PATTERN_LEAF))));
     }
 
     @Override
     public boolean check(OptExpression input, OptimizerContext context) {
-        // must be correlation subquery
-        if (!SubqueryUtils.containsCorrelationSubquery(input)) {
+        OptExpression project = input.inputAt(1).inputAt(0);
+        OptExpression child = project.inputAt(0);
+        if (child.getOp() instanceof LogicalProjectOperator) {
+            // A wide decimal aggregate has one extra project above the original aggregate arguments.
+            // Keep both projects so shared inputs, including volatile expressions, are still evaluated once.
+            if (!context.getSessionVariable().isDecimalOverflowReduceScale() ||
+                    project.getOp().hasLimit() || child.getOp().hasLimit() ||
+                    !((LogicalProjectOperator) project.getOp()).getColumnRefMap().values().stream()
+                            .anyMatch(value -> value instanceof CastOperator && value.getType().isDecimal256())) {
+                return false;
+            }
+            child = child.inputAt(0);
+        }
+
+        if (!(child.getOp() instanceof LogicalFilterOperator) || !SubqueryUtils.containsCorrelationSubquery(input)) {
             return false;
         }
 
@@ -94,6 +107,11 @@ public class PushDownApplyAggProjectFilterRule extends TransformationRule {
     public List<OptExpression> transform(OptExpression input, OptimizerContext context) {
         OptExpression aggOptExpression = input.getInputs().get(1);
         OptExpression projectExpression = aggOptExpression.getInputs().get(0);
+        LogicalProjectOperator wideProject = null;
+        if (projectExpression.inputAt(0).getOp() instanceof LogicalProjectOperator) {
+            wideProject = (LogicalProjectOperator) projectExpression.getOp();
+            projectExpression = projectExpression.inputAt(0);
+        }
         OptExpression filterExpression = projectExpression.getInputs().get(0);
 
         LogicalApplyOperator apply = (LogicalApplyOperator) input.getOp();
@@ -113,6 +131,13 @@ public class PushDownApplyAggProjectFilterRule extends TransformationRule {
 
         OptExpression newProjectOptExpression =
                 OptExpression.create(new LogicalProjectOperator(newProjectMap), filterExpression.getInputs());
+
+        if (wideProject != null) {
+            Map<ColumnRefOperator, ScalarOperator> wideColumns = Maps.newHashMap(wideProject.getColumnRefMap());
+            filterInput.forEach(column -> wideColumns.putIfAbsent(column, column));
+            newProjectOptExpression = OptExpression.create(new LogicalProjectOperator(wideColumns),
+                    newProjectOptExpression);
+        }
 
         OptExpression newFilterOptExpression =
                 OptExpression.create(new LogicalFilterOperator(lfo.getPredicate()), newProjectOptExpression);

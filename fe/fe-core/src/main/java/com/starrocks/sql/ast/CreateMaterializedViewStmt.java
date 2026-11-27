@@ -286,6 +286,13 @@ public class CreateMaterializedViewStmt extends DdlStmt {
     }
 
     public void analyze(ConnectContext context) {
+        SessionVariable.withStoredMvDecimalSemantics(() -> {
+            analyzeDefinition(context);
+            return null;
+        });
+    }
+
+    private void analyzeDefinition(ConnectContext context) {
         QueryStatement queryStatement = getQueryStatement();
 
         long originSelectLimit = context.getSessionVariable().getSqlSelectLimit();

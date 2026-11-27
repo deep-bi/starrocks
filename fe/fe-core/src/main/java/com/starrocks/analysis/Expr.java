@@ -187,6 +187,8 @@ public abstract class Expr extends TreeNode<Expr> implements ParseNode, Cloneabl
     // Ignore nulls.
     private boolean ignoreNulls = false;
 
+    private boolean storedExpression;
+
     // Cached value of IsConstant(), set during analyze() and valid if isAnalyzed_ is true.
     private boolean isConstant_;
 
@@ -239,6 +241,7 @@ public abstract class Expr extends TreeNode<Expr> implements ParseNode, Cloneabl
         numDistinctValues = other.numDistinctValues;
         opcode = other.opcode;
         isConstant_ = other.isConstant_;
+        storedExpression = other.storedExpression;
         fn = other.fn;
         printSqlInParens = other.printSqlInParens;
         children = Expr.cloneList(other.children);
@@ -249,6 +252,16 @@ public abstract class Expr extends TreeNode<Expr> implements ParseNode, Cloneabl
     @SuppressWarnings("unchecked")
     public <T> T cast() {
         return (T) this;
+    }
+
+    /** Storage-maintained definitions retain legacy arithmetic across writer sessions and SQL function expansion. */
+    public void markStoredExpression() {
+        storedExpression = true;
+        getChildren().forEach(Expr::markStoredExpression);
+    }
+
+    public boolean isStoredExpression() {
+        return storedExpression;
     }
 
     public boolean isAnalyzed() {
@@ -818,7 +831,7 @@ public abstract class Expr extends TreeNode<Expr> implements ParseNode, Cloneabl
     public Expr substitute(ExprSubstitutionMap sMap) {
         Preconditions.checkNotNull(sMap);
         for (int i = 0; i < sMap.getLhs().size(); ++i) {
-            if (this.equals(sMap.getLhs().get(i))) {
+            if (sMap.matches(this, sMap.getLhs().get(i))) {
                 Expr result = sMap.getRhs().get(i).clone(null);
                 if (id != null) {
                     result.id = id;

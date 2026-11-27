@@ -15,6 +15,7 @@
 package com.starrocks.sql.analyzer;
 
 import com.google.common.base.Joiner;
+import com.starrocks.analysis.ArithmeticExpr;
 import com.starrocks.analysis.Expr;
 import com.starrocks.analysis.Parameter;
 import com.starrocks.analysis.ParseNode;
@@ -24,6 +25,7 @@ import com.starrocks.catalog.Table;
 import com.starrocks.catalog.Type;
 import com.starrocks.common.util.ParseUtil;
 import com.starrocks.common.util.SqlCredentialRedactor;
+import com.starrocks.qe.ConnectContext;
 import com.starrocks.sql.ast.ArrayExpr;
 import com.starrocks.sql.ast.CTERelation;
 import com.starrocks.sql.ast.FieldReference;
@@ -98,6 +100,17 @@ public class AstToSQLBuilder {
             super(hideCredential);
             this.simple = simple;
             this.withoutTbl = withoutTbl;
+        }
+
+        @Override
+        public String visitArithmeticExpr(ArithmeticExpr node, Void context) {
+            if (node.isUnaryMinus() && node.getChild(1).getType().isDecimalV3() &&
+                    ConnectContext.getSessionVariableOrDefault().isDecimalOverflowReduceScale()) {
+                // Print decimal negation as -(x) so reparsing it in this session preserves unary minus.
+                // With the flag off, keep the existing spelling used for materialized-view rewrite keys.
+                return "-(" + visit(node.getChild(1)) + ")";
+            }
+            return super.visitArithmeticExpr(node, context);
         }
 
         private String buildColumnName(TableName tableName, String fieldName, String columnName) {

@@ -1,0 +1,48 @@
+-- name: test_decimal_overflow_reduce_scale_partition_selection @native
+SET sql_mode = '';
+SET decimal_overflow_reduce_scale = false;
+CREATE TABLE partitioned (
+    k INT,
+    g BIGINT AS COALESCE(CAST(CAST(k AS DECIMAL(38,18)) / CAST(50.25 AS DECIMAL(38,18)) AS BIGINT), -1)
+) DUPLICATE KEY(k) PARTITION BY (k, g)
+DISTRIBUTED BY HASH(k) BUCKETS 1 PROPERTIES ('replication_num'='1');
+INSERT INTO partitioned (k) VALUES (0), (1000);
+SET decimal_overflow_reduce_scale = true;
+SELECT k, g, COALESCE(CAST(CAST(k AS DECIMAL(38,18)) / CAST(50.25 AS DECIMAL(38,18)) AS BIGINT), -1) AS computed
+FROM partitioned ORDER BY k;
+-- CRC32 forces the partitions_meta fallback to evaluate the session arithmetic.
+ALTER TABLE partitioned DROP PARTITIONS WHERE
+    crc32(CAST(COALESCE(CAST(CAST(k AS DECIMAL(38,18)) / CAST(50.25 AS DECIMAL(38,18)) AS BIGINT), -1) AS VARCHAR))
+    IN (crc32('-1'), crc32('0'));
+SELECT k FROM partitioned ORDER BY k;
+SET decimal_overflow_reduce_scale = false;
+ALTER TABLE partitioned DROP PARTITIONS WHERE
+    crc32(CAST(COALESCE(CAST(CAST(k AS DECIMAL(38,18)) / CAST(50.25 AS DECIMAL(38,18)) AS BIGINT), -1) AS VARCHAR)) = crc32('-1');
+SELECT count(*) FROM partitioned;
+-- The fallback must resolve nested SQL functions in the database of the calling session.
+CREATE FUNCTION base_rate(x DECIMAL(38,18)) RETURNS x / CAST(50.25 AS DECIMAL(38,18));
+CREATE FUNCTION outer_rate(x DECIMAL(38,18)) RETURNS base_rate(x);
+CREATE TABLE udf_partitioned (
+    k INT,
+    g BIGINT AS COALESCE(CAST(outer_rate(CAST(k AS DECIMAL(38,18))) AS BIGINT), -1)
+) DUPLICATE KEY(k) PARTITION BY (k, g)
+DISTRIBUTED BY HASH(k) BUCKETS 1 PROPERTIES ('replication_num'='1');
+INSERT INTO udf_partitioned (k) VALUES (0), (1000);
+SET decimal_overflow_reduce_scale = true;
+SELECT k, g, COALESCE(CAST(outer_rate(CAST(k AS DECIMAL(38,18))) AS BIGINT), -1) AS computed
+FROM udf_partitioned ORDER BY k;
+ALTER TABLE udf_partitioned DROP PARTITIONS WHERE
+    crc32(CAST(COALESCE(CAST(outer_rate(CAST(k AS DECIMAL(38,18))) AS BIGINT), -1) AS VARCHAR))
+    IN (crc32('-1'), crc32('0'));
+SELECT k FROM udf_partitioned ORDER BY k;
+-- The same predicate uses the stored key on the FE in stock mode. With scale reduction it must
+-- calculate the division from k in partitions_meta and also read g by its physical name.
+CREATE TABLE named_key (
+    k INT, g BIGINT AS CRC32(CAST(COALESCE(CAST(CAST(k AS DECIMAL(38,18)) / CAST(50.25 AS DECIMAL(38,18)) AS BIGINT), -1) AS VARCHAR))
+) DUPLICATE KEY(k) PARTITION BY (k, g)
+DISTRIBUTED BY HASH(k) BUCKETS 1 PROPERTIES ('replication_num'='1');
+INSERT INTO named_key (k) VALUES (0), (100), (1000);
+ALTER TABLE named_key DROP PARTITIONS WHERE
+    CRC32(CAST(COALESCE(CAST(CAST(k AS DECIMAL(38,18)) / CAST(50.25 AS DECIMAL(38,18)) AS BIGINT), -1) AS VARCHAR)) > 3000000000
+    AND g >= 0;
+SELECT k FROM named_key ORDER BY k;

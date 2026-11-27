@@ -75,6 +75,7 @@ import com.starrocks.common.util.TimeUtils;
 import com.starrocks.connector.iceberg.IcebergPartitionTransform;
 import com.starrocks.mv.analyzer.MVPartitionSlotRefResolver;
 import com.starrocks.qe.ConnectContext;
+import com.starrocks.qe.SessionVariable;
 import com.starrocks.qe.SqlModeHelper;
 import com.starrocks.server.GlobalStateMgr;
 import com.starrocks.server.RunMode;
@@ -168,7 +169,7 @@ public class MaterializedViewAnalyzer {
                     Table.TableType.HIVE_VIEW);
 
     public static void analyze(StatementBase stmt, ConnectContext session) {
-        new MaterializedViewAnalyzerVisitor().visit(stmt, session);
+        SessionVariable.withStoredMvDecimalSemantics(() -> new MaterializedViewAnalyzerVisitor().visit(stmt, session));
     }
 
     public static Set<BaseTableInfo> getBaseTableInfos(QueryStatement queryStatement) {
