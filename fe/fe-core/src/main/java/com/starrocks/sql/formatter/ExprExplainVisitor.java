@@ -219,6 +219,10 @@ public class ExprExplainVisitor implements AstVisitorExtendInterface<String, Voi
 
     @Override
     public String visitArithmeticExpr(ArithmeticExpr node, Void context) {
+        String unaryMinus = ExecutableSql.formatUnaryMinus(node);
+        if (unaryMinus != null) {
+            return unaryMinus;
+        }
         if (node.getChildren().size() == 1) {
             return node.getOp().toString() + " " + node.getChild(0).accept(this, context);
         } else {

@@ -673,6 +673,7 @@ public class OlapTableSink extends DataSink {
                                 outputExprs, connectContext);
 
                 whereClause = whereClause.accept(visitor, null);
+                whereClause.markStoredExpression();
                 whereClause = ExprUtils.analyzeAndCastFold(whereClause);
 
                 indexSchema.setWhere_clause(ExprToThrift.treeToThrift(whereClause));

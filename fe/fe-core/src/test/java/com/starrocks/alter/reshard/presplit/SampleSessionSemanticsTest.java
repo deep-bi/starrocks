@@ -40,6 +40,7 @@ public class SampleSessionSemanticsTest {
         session.setSqlMode(LOAD_SQL_MODE);
         session.setTimeZone("Asia/Shanghai");
         session.setCboEqBaseType("varchar");
+        session.setDecimalOverflowReduceScale(true);
         session.setDecimalOverflowToDouble(true);
         session.setLargeDecimalUnderlyingType("double");
         // No typed setter for these three; SET reaches them by name.
@@ -58,6 +59,7 @@ public class SampleSessionSemanticsTest {
         Assertions.assertEquals(Map.of(
                 SessionVariable.TIME_ZONE, "Asia/Shanghai",
                 SessionVariable.CBO_EQ_BASE_TYPE, "varchar",
+                SessionVariable.DECIMAL_OVERFLOW_REDUCE_SCALE, "true",
                 SessionVariable.DECIMAL_OVERFLOW_TO_DOUBLE, "true",
                 SessionVariable.LARGE_DECIMAL_UNDERLYING_TYPE, "double",
                 SessionVariable.CBO_DECIMAL_CAST_STRING_STRICT, "false",

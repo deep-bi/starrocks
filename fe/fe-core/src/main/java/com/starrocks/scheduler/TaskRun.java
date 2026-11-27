@@ -423,6 +423,11 @@ public class TaskRun implements Comparable<TaskRun> {
             taskRunContextProperties.put(PropertyAnalyzer.PROPERTIES_WAREHOUSE, currentWarehouse);
         }
 
+        // A warehouse switch replaces the session variables. Stored expressions always use legacy arithmetic.
+        if (task.getSource() == Constants.TaskSource.MV) {
+            runCtx.getSessionVariable().setDecimalOverflowReduceScale(false);
+        }
+
         LOG.info("[QueryId:{}] [ThreadLocal QueryId: {}] start to execute task run, task_id:{}, " +
                         "taskRunContextProperties:{}", runCtx.getQueryId(),
                 ConnectContext.get() == null ? "" : ConnectContext.get().getQueryId(), taskId, taskRunContextProperties);

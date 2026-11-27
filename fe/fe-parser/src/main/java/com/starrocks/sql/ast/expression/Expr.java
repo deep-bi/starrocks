@@ -48,6 +48,8 @@ public abstract class Expr extends TreeNode<Expr> implements ParseNode, Cloneabl
     // Ignore nulls.
     private boolean ignoreNulls = false;
 
+    private boolean storedExpression;
+
     // Cached value of IsConstant(), set during analyze() and valid if isAnalyzed_ is true.
     private boolean isConstant;
 
@@ -85,6 +87,7 @@ public abstract class Expr extends TreeNode<Expr> implements ParseNode, Cloneabl
         originType = other.originType;
         isAnalyzed = other.isAnalyzed;
         isConstant = other.isConstant;
+        storedExpression = other.storedExpression;
         printSqlInParens = other.printSqlInParens;
 
         ArrayList<Expr> result = new ArrayList<>();
@@ -100,6 +103,16 @@ public abstract class Expr extends TreeNode<Expr> implements ParseNode, Cloneabl
     @SuppressWarnings("unchecked")
     public <T> T cast() {
         return (T) this;
+    }
+
+    /** Storage-maintained definitions retain legacy arithmetic across writer sessions and SQL function expansion. */
+    public void markStoredExpression() {
+        storedExpression = true;
+        getChildren().forEach(Expr::markStoredExpression);
+    }
+
+    public boolean isStoredExpression() {
+        return storedExpression;
     }
 
     public boolean isAnalyzed() {

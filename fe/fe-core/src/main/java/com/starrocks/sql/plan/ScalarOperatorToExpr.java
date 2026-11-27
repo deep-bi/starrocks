@@ -92,6 +92,7 @@ import com.starrocks.sql.optimizer.operator.scalar.ScalarOperator;
 import com.starrocks.sql.optimizer.operator.scalar.ScalarOperatorVisitor;
 import com.starrocks.sql.optimizer.operator.scalar.SubfieldOperator;
 import com.starrocks.sql.optimizer.operator.scalar.SubqueryOperator;
+import com.starrocks.sql.optimizer.transformer.DecimalArithmeticLowering;
 import com.starrocks.sql.spm.SPMFunctions;
 import com.starrocks.type.ArrayType;
 import com.starrocks.type.BooleanType;
@@ -430,6 +431,9 @@ public class ScalarOperatorToExpr {
 
         @Override
         public Expr visitCall(CallOperator call, FormatterContext context) {
+            if (call.getFunction() instanceof DecimalArithmeticLowering decimal) {
+                return buildExpr.build(decimal.toStockExpression(call), context);
+            }
             String fnName = call.getFnName();
             Expr callExpr;
             if (!FeConstants.runningUnitTest && SPMFunctions.isSPMFunctions(call)) {

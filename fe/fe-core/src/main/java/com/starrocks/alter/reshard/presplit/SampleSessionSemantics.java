@@ -40,8 +40,8 @@ import java.util.Objects;
  *       sample; such a row yields NULL there instead;</li>
  *   <li>{@code time_zone}: how Parquet, ORC and Iceberg timestamps decode;</li>
  *   <li>{@code cbo_eq_base_type}: the type a string and an exact number are compared at;</li>
- *   <li>{@code decimal_overflow_to_double}, {@code large_decimal_underlying_type}: the result type of decimal
- *       arithmetic that outgrows its precision;</li>
+ *   <li>{@code decimal_overflow_reduce_scale}, {@code decimal_overflow_to_double}, {@code large_decimal_underlying_type}:
+ *       the result type and rounding of decimal arithmetic that outgrows its precision;</li>
  *   <li>{@code cbo_decimal_cast_string_strict}: how a decimal constant folds to a string;</li>
  *   <li>{@code lower_upper_support_utf8}: whether {@code lower} and {@code upper} map UTF-8;</li>
  *   <li>{@code orc_use_column_names}: whether a Hive ORC file is read by column name or by position.</li>
@@ -65,6 +65,7 @@ record SampleSessionSemantics(Long sqlMode, Map<String, String> variables) {
     private static final List<String> VARIABLES_BY_NAME = List.of(
             SessionVariable.TIME_ZONE,
             SessionVariable.CBO_EQ_BASE_TYPE,
+            SessionVariable.DECIMAL_OVERFLOW_REDUCE_SCALE,
             SessionVariable.DECIMAL_OVERFLOW_TO_DOUBLE,
             SessionVariable.LARGE_DECIMAL_UNDERLYING_TYPE,
             SessionVariable.CBO_DECIMAL_CAST_STRING_STRICT,

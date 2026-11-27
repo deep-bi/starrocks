@@ -33,6 +33,7 @@ import com.starrocks.sql.ast.CreateViewStmt;
 import com.starrocks.sql.ast.QueryRelation;
 import com.starrocks.sql.ast.StatementBase;
 import com.starrocks.sql.ast.TableRef;
+import com.starrocks.sql.formatter.ExecutableSql;
 import org.apache.commons.collections4.MapUtils;
 
 import java.util.HashSet;
@@ -83,7 +84,7 @@ public class ViewAnalyzer {
 
             // reserve the original view sql
 
-            String viewSql = AstToSQLBuilder.toSQLWithCredential(stmt.getQueryStatement());
+            String viewSql = ExecutableSql.formatPreservingUnaryMinus(stmt.getQueryStatement(), false);
             stmt.setInlineViewDef(viewSql);
             Preconditions.checkArgument(stmt.getOrigStmt() != null, "View's original statement is null");
             String originalViewDef = stmt.getOrigStmt().originStmt;
@@ -134,7 +135,7 @@ public class ViewAnalyzer {
             List<Column> viewColumns = analyzeViewColumns(alterViewClause.getQueryStatement().getQueryRelation(),
                     alterViewClause.getColWithComments());
             alterViewClause.setColumns(viewColumns);
-            String viewSql = AstToSQLBuilder.toSQL(alterViewClause.getQueryStatement());
+            String viewSql = ExecutableSql.formatPreservingUnaryMinus(alterViewClause.getQueryStatement(), true);
             alterViewClause.setInlineViewDef(viewSql);
             Preconditions.checkArgument(stmt.getOrigStmt() != null, "View's original statement is null");
             String originalViewDef = stmt.getOrigStmt().originStmt;

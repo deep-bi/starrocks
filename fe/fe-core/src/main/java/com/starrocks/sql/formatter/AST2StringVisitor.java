@@ -953,6 +953,10 @@ public class AST2StringVisitor implements AstVisitorExtendInterface<String, Void
 
     @Override
     public String visitArithmeticExpr(ArithmeticExpr node, Void context) {
+        String unaryMinus = ExecutableSql.formatUnaryMinus(node);
+        if (unaryMinus != null) {
+            return unaryMinus;
+        }
         StringBuilder sqlBuilder = new StringBuilder();
 
         if (node.getChildren().size() == 1) {

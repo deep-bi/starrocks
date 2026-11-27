@@ -464,8 +464,8 @@ public class CachingMvPlanContextBuilder {
         }
         long startTime = System.currentTimeMillis();
         try {
-            // cache by ast
-            List<AstKey> astKeys = getAstKeysOfMV(mv);
+            // Formatting a decimal negation into a text-match key also reads the session setting.
+            List<AstKey> astKeys = SessionVariable.withStoredMvDecimalSemantics(() -> getAstKeysOfMV(mv));
             if (CollectionUtils.isEmpty(astKeys)) {
                 return;
             }

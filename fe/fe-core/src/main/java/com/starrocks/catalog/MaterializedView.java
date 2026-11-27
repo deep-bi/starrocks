@@ -61,6 +61,7 @@ import com.starrocks.planner.DescriptorTable.ReferencedPartitionInfo;
 import com.starrocks.planner.SlotDescriptor;
 import com.starrocks.planner.SlotId;
 import com.starrocks.qe.ConnectContext;
+import com.starrocks.qe.SessionVariable;
 import com.starrocks.qe.SqlModeHelper;
 import com.starrocks.scheduler.Task;
 import com.starrocks.scheduler.TaskBuilder;
@@ -3304,6 +3305,10 @@ public class MaterializedView extends OlapTable implements GsonPreProcessable, G
     }
 
     public synchronized ParseNode initDefineQueryParseNode() {
+        return SessionVariable.withStoredMvDecimalSemantics(this::parseDefineQuery);
+    }
+
+    private ParseNode parseDefineQuery() {
         Database db = GlobalStateMgr.getCurrentState().getLocalMetastore().getDb(dbId);
         if (db == null) {
             return null;

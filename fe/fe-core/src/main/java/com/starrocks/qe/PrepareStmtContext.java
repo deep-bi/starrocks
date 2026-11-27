@@ -23,6 +23,8 @@ import com.starrocks.sql.ast.TableRelation;
 import com.starrocks.sql.plan.ExecPlan;
 
 public class PrepareStmtContext {
+    // A cached projection can carry a decimal result type or an already-folded value.
+    private byte decimalArithmeticCacheKey;
     private final PrepareStmt stmt;
     private final ConnectContext connectContext;
     private ExecPlan execPlan;
@@ -79,10 +81,14 @@ public class PrepareStmtContext {
 
     public void cachePlan(ExecPlan execPlan) {
         this.execPlan = execPlan;
+        this.decimalArithmeticCacheKey = connectContext.getSessionVariable().getDecimalArithmeticCacheKey();
         this.isCached = true;
     }
 
     public boolean needReAnalyze(QueryStatement stmt, ConnectContext session) {
+        if (decimalArithmeticCacheKey != session.getSessionVariable().getDecimalArithmeticCacheKey()) {
+            return true;
+        }
         SelectRelation selectRelation = (SelectRelation) (stmt.getQueryRelation());
         TableRelation tableRelation = (TableRelation) selectRelation.getRelation();
         QueryAnalyzer queryAnalyzer = new QueryAnalyzer(session);

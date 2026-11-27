@@ -51,6 +51,22 @@ public class ArithmeticExpr extends Expr {
             .build();
 
     private final Operator op;
+    private boolean unaryMinus;
+
+    public boolean allowsDecimalScaleReduction() {
+        return !isStoredExpression() && !unaryMinus;
+    }
+
+    public boolean isUnaryMinus() {
+        return unaryMinus;
+    }
+
+    // Negation uses multiplication internally, but it has no two-operand scale to reduce.
+    public static ArithmeticExpr unaryMinus(Expr child, NodePosition pos) {
+        ArithmeticExpr expr = new ArithmeticExpr(Operator.MULTIPLY, new IntLiteral(-1), child, pos);
+        expr.unaryMinus = true;
+        return expr;
+    }
 
     public enum OperatorPosition {
         BINARY_INFIX,
@@ -80,6 +96,7 @@ public class ArithmeticExpr extends Expr {
     protected ArithmeticExpr(ArithmeticExpr other) {
         super(other);
         this.op = other.op;
+        this.unaryMinus = other.unaryMinus;
     }
 
     public static boolean isArithmeticExpr(String functionName) {
