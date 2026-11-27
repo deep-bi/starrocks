@@ -32,6 +32,7 @@ set(WEB_SERVER_FILES
   utils.cpp
   ev_http_server.cpp
   http_client.cpp
+  be_peer_http.cpp
   action/health_action.cpp
   action/checksum_action.cpp
   action/greplog_action.cpp

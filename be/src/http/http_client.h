@@ -94,6 +94,10 @@ public:
         curl_easy_setopt(_curl, CURLOPT_SSL_VERIFYPEER, 0L);
         curl_easy_setopt(_curl, CURLOPT_SSL_VERIFYHOST, 0L);
     }
+
+    // Verify the server certificate and host name against the CA bundle in ca_file only, without
+    // libcurl's built-in CA path, and allow only https, also on redirects. Call after init().
+    Status use_ssl_ca_file(const std::string& ca_file);
     // used to get content length
     int64_t get_content_length() const {
         // CURLINFO_CONTENT_LENGTH_DOWNLOAD is deprecated since v7.55.0

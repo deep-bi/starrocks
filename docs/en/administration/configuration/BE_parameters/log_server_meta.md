@@ -195,14 +195,24 @@ This topic introduces the following types of BE configurations:
 - Description: The BE HTTP server port.
 - Introduced in: -
 
+### be_http_ssl_ca_cert_file
+
+- Default: An empty string
+- Type: String
+- Unit: -
+- Is mutable: No
+- Description: Path to a CA bundle (PEM file) that the BE uses to verify other BEs when it downloads from their `be_http_port` over HTTPS. Tablet clone and replication between BEs do this when `be_http_ssl_enable` is `true`, and this item is then required. The BE verifies the certificate chain against this file only, without the system CA store, and checks that the certificate names the host or IP address the source BE is registered with. With `be_http_ssl_enable` set to `true`, if this item is empty or the file cannot be read, the BE logs a warning at startup, and every clone and replication download fails with an error that names this item. For cross-cluster replication, the file on the target cluster's BEs must also include the CA of the source cluster.
+- Introduced in: 4.0.17-deepbi1
+
 ### be_http_ssl_enable
 
 - Default: false
 - Type: Boolean
 - Unit: -
 - Is mutable: No
-- Description: When this item is set to `true`, the BE HTTP server on `be_http_port` serves HTTPS only, with TLS 1.2 or later. It uses the certificate and private key specified by `ssl_certificate_path` and `ssl_private_key_path`. Plain HTTP connections to this port are refused, and the BE fails to start if the certificate or key cannot be loaded. This item is independent of `enable_https`, which applies to `brpc_port` only. Clients of `be_http_port` must use `https`, including Stream Load clients and metrics scrapers. Set the FE item `be_https_enabled` to `true` as well, so that the FE redirects Stream Load requests to `https`. Internal callers that build `http` URLs to this port do not switch to `https`: tablet clone and replication between BEs, and load error log links.
-- Introduced in: -
+- Description: When this item is set to `true`, the BE HTTP server on `be_http_port` serves HTTPS only, with TLS 1.2 or later. It uses the certificate and private key specified by `ssl_certificate_path` and `ssl_private_key_path`. Plain HTTP connections to this port are refused, and the BE fails to start if the certificate or key cannot be loaded. This item is independent of `enable_https`, which applies to `brpc_port` only. Clients of `be_http_port` must use `https`, including Stream Load clients and metrics scrapers. Set the FE item `be_https_enabled` to `true` as well, so that the FE redirects Stream Load requests to `https`. Tablet clone and replication between BEs also use `https` and verify the source BE against `be_http_ssl_ca_cert_file`, so each BE certificate must name the host or IP address the BE is registered with in the FE. Load error log links still use `http`. Cross-cluster replication requires the same `be_http_ssl_enable` value on both clusters.
+  This item is static, so during a rolling restart a BE on HTTPS and a BE on plain HTTP cannot clone from each other, in either direction. Restart all BEs together to switch. Otherwise, before the first restart, set the FE items `tablet_sched_disable_balance` and `tablet_sched_disable_colocate_balance` to `true` and do not decommission BEs. Replica repairs then wait until the last BE is switched. Set both FE items back to `false` afterwards.
+- Introduced in: 4.0.16-deepbi1
 
 ### be_port
 

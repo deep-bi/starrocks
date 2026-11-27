@@ -27,6 +27,7 @@
 #include "gutil/strings/split.h"
 #include "gutil/strings/stringpiece.h"
 #include "gutil/strings/substitute.h"
+#include "http/be_peer_http.h"
 #include "http/http_client.h"
 #include "runtime/client_cache.h"
 #include "service/backend_options.h"
@@ -52,7 +53,7 @@ static Status list_remote_files(const std::string& remote_url_prefix, std::vecto
     // Get remote dir file list
     string file_list_str;
     auto list_files_cb = [&remote_url_prefix, &file_list_str](HttpClient* client) {
-        RETURN_IF_ERROR(client->init(remote_url_prefix));
+        RETURN_IF_ERROR(be_peer_http::init_client(client, remote_url_prefix));
         client->set_timeout_ms(LIST_REMOTE_FILE_TIMEOUT * 1000);
         RETURN_IF_ERROR(client->execute(&file_list_str));
         return Status::OK();
@@ -94,7 +95,7 @@ static StatusOr<uint64_t> get_remote_file_size(const std::string& remote_file_ur
 
     uint64_t file_size = 0;
     auto get_file_size_cb = [&remote_file_url, &file_size](HttpClient* client) {
-        RETURN_IF_ERROR(client->init(remote_file_url));
+        RETURN_IF_ERROR(be_peer_http::init_client(client, remote_file_url));
         client->set_timeout_ms(GET_LENGTH_TIMEOUT * 1000);
         RETURN_IF_ERROR(client->head());
         file_size = client->get_content_length();
@@ -117,7 +118,7 @@ static Status download_remote_file(
             return Status::OK();
         }
 
-        RETURN_IF_ERROR(client->init(remote_file_url));
+        RETURN_IF_ERROR(be_peer_http::init_client(client, remote_file_url));
         client->set_timeout_ms(timeout_sec * 1000);
         RETURN_IF_ERROR(client->download([&](const void* data, size_t size) { return converter->append(data, size); },
                                          config::replication_min_speed_limit_kbps,
@@ -248,9 +249,10 @@ Status ReplicationUtils::download_remote_snapshot(
     return Status::OK();
 #else
 
+    RETURN_IF_ERROR(be_peer_http::check_tls_config());
     std::string remote_url_prefix = strings::Substitute(
-            "http://$0$1?token=$2&type=V2&file=$3/$4/$5/", get_host_port(host, http_port), HTTP_REQUEST_PREFIX,
-            remote_token, remote_snapshot_path, remote_tablet_id, remote_schema_hash);
+            "$0://$1$2?token=$3&type=V2&file=$4/$5/$6/", be_peer_http::scheme(), get_host_port(host, http_port),
+            HTTP_REQUEST_PREFIX, remote_token, remote_snapshot_path, remote_tablet_id, remote_schema_hash);
 
     std::vector<string> file_name_list;
     std::vector<int64_t> file_size_list;
@@ -301,8 +303,9 @@ Status ReplicationUtils::download_remote_snapshot(
     if (total_time_sec > 0) {
         copy_rate = (total_file_size / 1024. / 1024.) / total_time_sec;
     }
-    LOG(INFO) << "Copied tablet file count: " << file_name_list.size() << ", total bytes: " << total_file_size
-              << ", cost: " << total_time_sec << "s, rate: " << copy_rate << "MB/s";
+    LOG(INFO) << "Copied tablet file count: " << file_name_list.size() << " from " << be_peer_http::scheme() << "://"
+              << get_host_port(host, http_port) << ", total bytes: " << total_file_size << ", cost: " << total_time_sec
+              << "s, rate: " << copy_rate << "MB/s";
     return Status::OK();
 #endif
 }
@@ -322,14 +325,15 @@ StatusOr<std::string> ReplicationUtils::download_remote_snapshot_file(
     return file->read_all();
 #else
 
+    RETURN_IF_ERROR(be_peer_http::check_tls_config());
     std::string remote_file_url = strings::Substitute(
-            "http://$0$1?token=$2&type=V2&file=$3/$4/$5/$6", get_host_port(host, http_port), HTTP_REQUEST_PREFIX,
-            remote_token, remote_snapshot_path, remote_tablet_id, remote_schema_hash, file_name);
+            "$0://$1$2?token=$3&type=V2&file=$4/$5/$6/$7", be_peer_http::scheme(), get_host_port(host, http_port),
+            HTTP_REQUEST_PREFIX, remote_token, remote_snapshot_path, remote_tablet_id, remote_schema_hash, file_name);
 
     std::string file_content;
     file_content.reserve(4 * 1024 * 1024);
     auto download_cb = [&remote_file_url, timeout_sec, &file_content](HttpClient* client) {
-        RETURN_IF_ERROR(client->init(remote_file_url));
+        RETURN_IF_ERROR(be_peer_http::init_client(client, remote_file_url));
         client->set_timeout_ms(timeout_sec * 1000);
         file_content.clear();
         return client->execute(&file_content);

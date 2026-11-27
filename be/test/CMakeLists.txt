@@ -279,6 +279,7 @@ set(EXEC_FILES
         ./http/dump_tablet_metadata_action_test.cpp
         ./http/ev_http_server_test.cpp
         ./http/http_client_test.cpp
+        ./http/be_peer_http_test.cpp
         ./http/http_utils_test.cpp
         ./http/message_body_sink_test.cpp
         ./http/metrics_action_test.cpp

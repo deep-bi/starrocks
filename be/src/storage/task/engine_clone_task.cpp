@@ -52,6 +52,7 @@
 #include "gutil/strings/split.h"
 #include "gutil/strings/stringpiece.h"
 #include "gutil/strings/substitute.h"
+#include "http/be_peer_http.h"
 #include "http/http_client.h"
 #include "runtime/client_cache.h"
 #include "runtime/current_thread.h"
@@ -402,7 +403,13 @@ Status EngineCloneTask::_clone_copy(DataDir& data_dir, const string& local_data_
     if (_clone_req.__isset.timeout_s) {
         timeout_s = _clone_req.timeout_s;
     }
-    Status st;
+    // A missing CA file would fail every download, so report it once, before any snapshot is made.
+    Status st = be_peer_http::check_tls_config();
+    if (!st.ok()) {
+        LOG(WARNING) << "Cannot clone tablet " << _clone_req.tablet_id << ": " << st;
+        error_msgs->push_back(st.to_string());
+        return st;
+    }
     for (auto& src : _clone_req.src_backends) {
         // Make snapshot in remote olap engine
         int32_t snapshot_format = 0;
@@ -416,14 +423,15 @@ Status EngineCloneTask::_clone_copy(DataDir& data_dir, const string& local_data_
             continue;
         }
 
-        std::string download_url = strings::Substitute(
-                "http://$0$1?token=$2&type=V2&file=$3/$4/$5/", get_host_port(src.host, src.http_port),
-                HTTP_REQUEST_PREFIX, token, snapshot_path, _clone_req.tablet_id, _clone_req.schema_hash);
+        std::string download_url =
+                strings::Substitute("$0://$1$2?token=$3&type=V2&file=$4/$5/$6/", be_peer_http::scheme(),
+                                    get_host_port(src.host, src.http_port), HTTP_REQUEST_PREFIX, token, snapshot_path,
+                                    _clone_req.tablet_id, _clone_req.schema_hash);
 
         st = _download_files(&data_dir, download_url, local_path);
         (void)_release_snapshot(src.host, src.be_port, snapshot_path);
         if (!st.ok()) {
-            LOG(WARNING) << "Fail to download snapshot " << snapshot_path << " from "
+            LOG(WARNING) << "Fail to download snapshot " << snapshot_path << " from " << be_peer_http::scheme() << "://"
                          << get_host_port(src.host, src.http_port) << ", status: " << st
                          << ", tablet_id:" << _clone_req.tablet_id << ", schema_hash:" << _clone_req.schema_hash;
             error_msgs->push_back("download snapshot failed. backend_ip: " + src.host);
@@ -444,8 +452,8 @@ Status EngineCloneTask::_clone_copy(DataDir& data_dir, const string& local_data_
             error_msgs->push_back("convert rowset id failed. backend_ip: " + src.host);
             continue;
         }
-        LOG(INFO) << "Cloned snapshot " << snapshot_path << " from " << get_host_port(src.host, src.http_port) << " to "
-                  << local_data_path;
+        LOG(INFO) << "Cloned snapshot " << snapshot_path << " from " << be_peer_http::scheme() << "://"
+                  << get_host_port(src.host, src.http_port) << " to " << local_data_path;
         break;
     }
     return st;
@@ -540,7 +548,7 @@ Status EngineCloneTask::_download_files(DataDir* data_dir, const std::string& re
     // Get remote dir file list
     string file_list_str;
     auto list_files_cb = [&remote_url_prefix, &file_list_str](HttpClient* client) {
-        RETURN_IF_ERROR(client->init(remote_url_prefix));
+        RETURN_IF_ERROR(be_peer_http::init_client(client, remote_url_prefix));
         client->set_timeout_ms(LIST_REMOTE_FILE_TIMEOUT * 1000);
         RETURN_IF_ERROR(client->execute(&file_list_str));
         return Status::OK();
@@ -606,7 +614,7 @@ Status EngineCloneTask::_download_files(DataDir* data_dir, const std::string& re
             file_size = file_size_list[i];
         } else {
             auto get_file_size_cb = [&remote_file_url, &file_size](HttpClient* client) {
-                RETURN_IF_ERROR(client->init(remote_file_url));
+                RETURN_IF_ERROR(be_peer_http::init_client(client, remote_file_url));
                 client->set_timeout_ms(GET_LENGTH_TIMEOUT * 1000);
                 RETURN_IF_ERROR(client->head());
                 file_size = client->get_content_length();
@@ -632,7 +640,7 @@ Status EngineCloneTask::_download_files(DataDir* data_dir, const std::string& re
                 << " timeout=" << estimate_timeout;
 
         auto download_cb = [&remote_file_url, estimate_timeout, &local_file_path, file_size](HttpClient* client) {
-            RETURN_IF_ERROR(client->init(remote_file_url));
+            RETURN_IF_ERROR(be_peer_http::init_client(client, remote_file_url));
             client->set_timeout_ms(estimate_timeout * 1000);
             RETURN_IF_ERROR(client->download(local_file_path));
 
