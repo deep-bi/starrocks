@@ -273,6 +273,29 @@ Status HttpClient::execute(std::string* response) {
     return execute(callback);
 }
 
+Status HttpClient::use_ssl_ca_file(const std::string& ca_file) {
+    CURLcode code = curl_easy_setopt(_curl, CURLOPT_CAINFO, ca_file.c_str());
+    if (code == CURLE_OK) {
+        code = curl_easy_setopt(_curl, CURLOPT_CAPATH, static_cast<const char*>(nullptr));
+    }
+    if (code == CURLE_OK) {
+        code = curl_easy_setopt(_curl, CURLOPT_SSL_VERIFYPEER, 1L);
+    }
+    if (code == CURLE_OK) {
+        code = curl_easy_setopt(_curl, CURLOPT_SSL_VERIFYHOST, 2L);
+    }
+    if (code == CURLE_OK) {
+        code = curl_easy_setopt(_curl, CURLOPT_PROTOCOLS_STR, "https");
+    }
+    if (code == CURLE_OK) {
+        code = curl_easy_setopt(_curl, CURLOPT_REDIR_PROTOCOLS_STR, "https");
+    }
+    if (code != CURLE_OK) {
+        return Status::InternalError(std::string("fail to set TLS options: ") + _to_errmsg(code));
+    }
+    return Status::OK();
+}
+
 const char* HttpClient::_to_errmsg(CURLcode code) {
     if (_error_buf[0] == 0) {
         return curl_easy_strerror(code);

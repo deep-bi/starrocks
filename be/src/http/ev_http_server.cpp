@@ -50,6 +50,7 @@
 
 #include "common/config.h"
 #include "common/logging.h"
+#include "http/be_peer_http.h"
 #include "http/http_channel.h"
 #include "http/http_handler.h"
 #include "http/http_headers.h"
@@ -273,6 +274,11 @@ Status EvHttpServer::start() {
 
     if (config::be_http_ssl_enable) {
         RETURN_IF_ERROR(_init_ssl_ctx());
+        // Clone and replication download from other BEs over https and fail without a CA to verify them.
+        Status peer_tls = be_peer_http::check_tls_config();
+        if (!peer_tls.ok()) {
+            LOG(WARNING) << peer_tls.message() << ". Clone and replication from other BEs will fail.";
+        }
     }
 
     // bind to

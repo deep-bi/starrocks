@@ -475,6 +475,10 @@ CONF_Int32(be_http_num_workers, "48");
 // key from ssl_certificate_path and ssl_private_key_path. Independent of enable_https, which
 // only adds optional TLS to brpc_port.
 CONF_Bool(be_http_ssl_enable, "false");
+// CA bundle (PEM file) that this BE trusts when it downloads from other BEs over https, as clone and
+// replication do when be_http_ssl_enable is true. Required in that case. Peer certificates must name
+// each BE by the host it is registered with.
+CONF_String(be_http_ssl_ca_cert_file, "");
 // Period to update rate counters and sampling counters in ms.
 CONF_mInt32(periodic_counter_update_period_ms, "500");
 
