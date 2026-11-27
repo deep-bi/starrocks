@@ -30,6 +30,7 @@ import com.starrocks.sql.ast.expression.ArithmeticExpr;
 import com.starrocks.sql.ast.expression.Expr;
 import com.starrocks.sql.parser.SqlParser;
 import com.starrocks.thrift.TExpr;
+import com.starrocks.thrift.TExplainLevel;
 import com.starrocks.utframe.UtFrameUtils;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeAll;
@@ -366,12 +367,26 @@ public class DecimalTypeTest extends PlanTestBase {
     @Test
     public void testBigIntDecimalAddSubtractDeclaredPrecision() throws Exception {
         String enabled = "SELECT /*+ SET_VAR(decimal_overflow_reduce_scale=true, sql_mode=ONLY_FULL_GROUP_BY) */ ";
+        String strict = "SELECT /*+ SET_VAR(decimal_overflow_reduce_scale=true, sql_mode=ERROR_IF_OVERFLOW) */ ";
         String maxBigInt = "CAST('9223372036854775807' AS BIGINT)";
         String maxDecimal = "CAST('999999999999999999' AS DECIMAL(18,0))";
         String minDecimal = "CAST('-999999999999999999' AS DECIMAL(18,0))";
         // BIGINT has 19 integer digits, but arithmetic type inference treats it as DECIMAL(18,0).
-        assertContains(getFragmentPlan(enabled + maxBigInt + " + " + maxDecimal), "<slot 2> : NULL");
+        String overflowingSum = maxBigInt + " + " + maxDecimal;
+        String fittingSum = "CAST('9000000000000000000' AS BIGINT) + " + maxDecimal;
+        assertContains(getFragmentPlan(enabled + overflowingSum), "<slot 2> : NULL");
+        assertContains(getFragmentPlan(strict + overflowingSum), "AS DECIMAL128(38,19)");
         assertContains(getFragmentPlan(enabled + minDecimal + " - " + maxBigInt), "<slot 2> : NULL");
+
+        for (String mode : new String[] {enabled, strict}) {
+            assertContains(getFragmentPlan(mode + fittingSum), "<slot 2> : 9999999999999999999");
+            ExecPlan columnSum = getExecPlan(mode + "v1 + CAST(v2 AS DECIMAL(18,0)) FROM t0");
+            Expr output = columnSum.getOutputExprs().get(0);
+            Assertions.assertEquals(19, output.getType().getPrecision());
+            Assertions.assertEquals(0, output.getType().getDecimalDigits());
+            assertContains(columnSum.getExplainString(TExplainLevel.NORMAL), "AS DECIMAL128(38,19)");
+        }
+
         assertNotContains(getFragmentPlan(enabled + "v1 + CAST(v2 AS DECIMAL(17,0)) FROM t0"), "DECIMAL256");
     }
 

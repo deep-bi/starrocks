@@ -105,14 +105,22 @@ public final class DecimalArithmeticLowering extends ScalarFunction {
             wide = arithmetic(operation, wideType(scale), new CastOperator(wideType(leftScale), wide),
                     new CastOperator(wideType(rightScale), call.getChild(1)));
         }
-        // Stock decimal-to-decimal casts check the signed machine width. Its decimal parser checks
-        // the declared precision. Round numerically first, then parse the exact decimal text. This
-        // executes the input once, including volatile operands, and honors the BE's overflow mode.
+        // Round before checking precision so a carry from rounding counts toward the integer digits.
         ScalarType rounded = wideType(result.getScalarScale());
         if (!wide.getType().equals(rounded)) {
             wide = new CastOperator(rounded, wide);
         }
-        return new CastOperator(result, new CastOperator(VarcharType.VARCHAR, wide));
+        ScalarOperator value = new CastOperator(VarcharType.VARCHAR, wide);
+        int storagePrecision = PrimitiveType.getMaxPrecisionOfDecimal(result.getPrimitiveType());
+        if (result.getPrecision() < storagePrecision) {
+            // The stock parser checks storage precision. Reserve the unused digits as fractional
+            // places so it checks the declared integer range. The final cast removes only zeroes.
+            int checkedScale = result.getScalarScale() + (storagePrecision - result.getPrecision());
+            ScalarType checked = TypeFactory.createDecimalV3Type(result.getPrimitiveType(),
+                    storagePrecision, checkedScale);
+            value = new CastOperator(checked, value);
+        }
+        return new CastOperator(result, value);
     }
 
     public ScalarOperator fold(CallOperator call) {
