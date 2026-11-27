@@ -1143,19 +1143,19 @@ public class PaimonMetadataTest {
         spec1.put("year", "2020");
         spec1.put("month", "1");
         org.apache.paimon.partition.Partition db1PaimonPartition1 =
-                new org.apache.paimon.partition.Partition(spec1, 100L, 2048L, 2L, System.currentTimeMillis(), false);
+                new org.apache.paimon.partition.Partition(spec1, 100L, 2048L, 2L, System.currentTimeMillis(), 1, false);
 
         Map<String, String> spec2 = new LinkedHashMap<>();
         spec2.put("year", "2020");
         spec2.put("month", "1");
         org.apache.paimon.partition.Partition db2PaimonPartition1 =
-                new org.apache.paimon.partition.Partition(spec2, 100L, 2048L, 2L, System.currentTimeMillis(), false);
+                new org.apache.paimon.partition.Partition(spec2, 100L, 2048L, 2L, System.currentTimeMillis(), 1, false);
 
         Map<String, String> spec3 = new LinkedHashMap<>();
         spec3.put("year", "2022");
         spec3.put("month", "1");
         org.apache.paimon.partition.Partition db2PaimonPartition2 =
-                new org.apache.paimon.partition.Partition(spec3, 100L, 2048L, 2L, System.currentTimeMillis(), false);
+                new org.apache.paimon.partition.Partition(spec3, 100L, 2048L, 2L, System.currentTimeMillis(), 1, false);
 
         new Expectations() {
             {

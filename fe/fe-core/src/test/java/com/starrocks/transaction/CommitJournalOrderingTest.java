@@ -20,6 +20,7 @@ import com.starrocks.catalog.FakeGlobalStateMgr;
 import com.starrocks.catalog.GlobalStateMgrTestUtil;
 import com.starrocks.catalog.PhysicalPartition;
 import com.starrocks.common.Config;
+import com.starrocks.ha.FrontendNodeType;
 import com.starrocks.journal.SerializeException;
 import com.starrocks.metric.MetricRepo;
 import com.starrocks.persist.EditLog;
@@ -145,6 +146,8 @@ public class CommitJournalOrderingTest {
         new FakeTransactionIDGenerator();
         // MetricRepo.init reads GlobalStateMgr.getCurrentState(), so the state must exist first
         leader = GlobalStateMgrTestUtil.createTestState();
+        // only the leader may generate gtids
+        leader.setFrontendNodeType(FrontendNodeType.LEADER);
         Config.enable_metric_calculator = false;
         MetricRepo.init();
 
@@ -246,6 +249,7 @@ public class CommitJournalOrderingTest {
     private GlobalTransactionMgr restartFromJournal() throws Exception {
         List<TransactionState> journalEntries = journal.replayableEntries();
         GlobalStateMgr newLeader = GlobalStateMgrTestUtil.createTestState();
+        newLeader.setFrontendNodeType(FrontendNodeType.LEADER);
         GlobalTransactionMgr newTxnMgr = newLeader.getGlobalTransactionMgr();
         for (TransactionState entry : journalEntries) {
             newTxnMgr.replayUpsertTransactionState(entry);
